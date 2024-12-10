@@ -430,7 +430,7 @@ fn make_ipc_provider_proxy(settings: &Settings) -> anyhow::Result<IPCProviderPro
             .subnet_id
             .parent()
             .ok_or_else(|| anyhow!("subnet has no parent"))?,
-        config: SubnetConfig::Fevm(EVMSubnet {
+        config: SubnetConfig::Btc(EVMSubnet {
             provider_http: topdown_config
                 .parent_http_endpoint
                 .to_string()

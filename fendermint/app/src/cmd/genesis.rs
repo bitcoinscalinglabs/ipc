@@ -317,7 +317,7 @@ async fn new_genesis_from_parent(
                 .subnet_id
                 .parent()
                 .ok_or_else(|| anyhow!("subnet is not a child"))?,
-            config: SubnetConfig::Fevm(EVMSubnet {
+            config: SubnetConfig::Btc(EVMSubnet {
                 provider_http: args.parent_endpoint.clone(),
                 provider_timeout: None,
                 auth_token: args.parent_auth_token.clone(),

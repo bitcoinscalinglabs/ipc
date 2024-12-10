@@ -29,42 +29,49 @@ pub struct Subnet {
 pub enum SubnetConfig {
     #[serde(rename = "fevm")]
     Fevm(EVMSubnet),
+    Btc(EVMSubnet),
 }
 
 /// A helper enum to differentiate the different network types
 #[derive(PartialEq, Eq)]
 pub enum NetworkType {
     Fevm,
+    Btc,
 }
 
 impl Subnet {
     pub fn network_type(&self) -> NetworkType {
         match &self.config {
             SubnetConfig::Fevm(_) => NetworkType::Fevm,
+            SubnetConfig::Btc(_) => NetworkType::Fevm,
         }
     }
 
     pub fn auth_token(&self) -> Option<String> {
         match &self.config {
             SubnetConfig::Fevm(s) => s.auth_token.clone(),
+            SubnetConfig::Btc(s) => s.auth_token.clone(),
         }
     }
 
     pub fn rpc_http(&self) -> &Url {
         match &self.config {
             SubnetConfig::Fevm(s) => &s.provider_http,
+            SubnetConfig::Btc(s) => &s.provider_http,
         }
     }
 
     pub fn rpc_timeout(&self) -> Option<Duration> {
         match &self.config {
             SubnetConfig::Fevm(s) => s.provider_timeout,
+            SubnetConfig::Btc(s) => s.provider_timeout,
         }
     }
 
     pub fn gateway_addr(&self) -> Address {
         match &self.config {
             SubnetConfig::Fevm(s) => s.gateway_addr,
+            SubnetConfig::Btc(s) => s.gateway_addr,
         }
     }
 }
