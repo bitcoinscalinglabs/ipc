@@ -9,7 +9,6 @@ use fvm_shared::clock::ChainEpoch;
 use ipc_api::subnet_id::SubnetID;
 
 use super::subnet::SubnetManager;
-pub use manager::BtcSubnetManager;
 pub use manager::EthSubnetManager;
 
 use ipc_actors_abis::subnet_actor_checkpointing_facet;
