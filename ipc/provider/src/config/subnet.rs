@@ -1,3 +1,4 @@
+use std::str::FromStr;
 use std::time::Duration;
 
 // Copyright 2022-2024 Protocol Labs
@@ -29,7 +30,8 @@ pub struct Subnet {
 pub enum SubnetConfig {
     #[serde(rename = "fevm")]
     Fevm(EVMSubnet),
-    Btc(EVMSubnet),
+    #[serde(rename = "btc")]
+    Btc(BTCSubnet),
 }
 
 /// A helper enum to differentiate the different network types
@@ -43,7 +45,7 @@ impl Subnet {
     pub fn network_type(&self) -> NetworkType {
         match &self.config {
             SubnetConfig::Fevm(_) => NetworkType::Fevm,
-            SubnetConfig::Btc(_) => NetworkType::Fevm,
+            SubnetConfig::Btc(_) => NetworkType::Btc,
         }
     }
 
@@ -71,7 +73,10 @@ impl Subnet {
     pub fn gateway_addr(&self) -> Address {
         match &self.config {
             SubnetConfig::Fevm(s) => s.gateway_addr,
-            SubnetConfig::Btc(s) => s.gateway_addr,
+            SubnetConfig::Btc(_s) => {
+                // TODO(btc) placeholder
+                Address::from_str("0x0000000000000000000000000000000000000000").unwrap()
+            }
         }
     }
 }
@@ -83,6 +88,16 @@ pub struct FVMSubnet {
     #[serde(serialize_with = "serialize_address_to_str")]
     pub gateway_addr: Address,
     pub jsonrpc_api_http: Url,
+    pub auth_token: Option<String>,
+}
+
+/// The BTC subnet config parameters
+#[serde_as]
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct BTCSubnet {
+    pub provider_http: Url,
+    #[serde_as(as = "Option<DurationSeconds<u64>>")]
+    pub provider_timeout: Option<Duration>,
     pub auth_token: Option<String>,
 }
 

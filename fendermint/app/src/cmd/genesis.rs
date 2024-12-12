@@ -4,7 +4,7 @@
 use anyhow::{anyhow, Context};
 use fendermint_crypto::PublicKey;
 use fvm_shared::address::Address;
-use ipc_provider::config::subnet::{EVMSubnet, SubnetConfig};
+use ipc_provider::config::subnet::{BTCSubnet, SubnetConfig};
 use ipc_provider::IpcProvider;
 use std::path::PathBuf;
 
@@ -317,12 +317,11 @@ async fn new_genesis_from_parent(
                 .subnet_id
                 .parent()
                 .ok_or_else(|| anyhow!("subnet is not a child"))?,
-            config: SubnetConfig::Btc(EVMSubnet {
+            // TODO(btc) btc or fevm config
+            config: SubnetConfig::Btc(BTCSubnet {
                 provider_http: args.parent_endpoint.clone(),
                 provider_timeout: None,
                 auth_token: args.parent_auth_token.clone(),
-                registry_addr: args.parent_registry,
-                gateway_addr: args.parent_gateway,
             }),
         },
     )?;

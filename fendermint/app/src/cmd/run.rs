@@ -29,7 +29,7 @@ use fendermint_vm_topdown::{CachedFinalityProvider, IPCParentFinality, Toggle};
 use fvm_shared::address::{current_network, Address, Network};
 use ipc_ipld_resolver::{Event as ResolverEvent, VoteRecord};
 use ipc_observability::observe::register_metrics as register_default_metrics;
-use ipc_provider::config::subnet::{EVMSubnet, SubnetConfig};
+use ipc_provider::config::subnet::{BTCSubnet, SubnetConfig};
 use ipc_provider::IpcProvider;
 use libp2p::identity::secp256k1;
 use libp2p::identity::Keypair;
@@ -430,7 +430,8 @@ fn make_ipc_provider_proxy(settings: &Settings) -> anyhow::Result<IPCProviderPro
             .subnet_id
             .parent()
             .ok_or_else(|| anyhow!("subnet has no parent"))?,
-        config: SubnetConfig::Btc(EVMSubnet {
+        // TODO(btc) btc or fevm config
+        config: SubnetConfig::Btc(BTCSubnet {
             provider_http: topdown_config
                 .parent_http_endpoint
                 .to_string()
@@ -438,8 +439,6 @@ fn make_ipc_provider_proxy(settings: &Settings) -> anyhow::Result<IPCProviderPro
                 .unwrap(),
             provider_timeout: topdown_config.parent_http_timeout,
             auth_token: topdown_config.parent_http_auth_token.as_ref().cloned(),
-            registry_addr: topdown_config.parent_registry,
-            gateway_addr: topdown_config.parent_gateway,
         }),
     };
     info!("init ipc provider with subnet: {}", subnet.id);
