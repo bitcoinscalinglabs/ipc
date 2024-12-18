@@ -149,7 +149,7 @@ impl IpcProvider {
                 }
                 config::subnet::SubnetConfig::Btc(_) => {
                     tracing::info!("Creating connection with Bitcoin");
-                    let manager = BtcSubnetManager::new();
+                    let manager = BtcSubnetManager::new(subnet);
                     Some(Connection {
                         manager: Box::new(manager),
                         subnet: subnet.clone(),

@@ -4,8 +4,13 @@
 use std::collections::{BTreeMap, HashMap};
 
 use async_trait::async_trait;
+use ethers::providers::{Authorization, Http};
+use http::HeaderValue;
 use ipc_api::subnet::{Asset, AssetKind, PermissionMode};
+use reqwest::Client;
 
+use crate::config::subnet::SubnetConfig;
+use crate::config::Subnet;
 use crate::lotus::message::ipc::SubnetInfo;
 use crate::manager::subnet::{
     BottomUpCheckpointRelayer, GetBlockHashResult, SubnetGenesisInfo, TopDownFinalityQuery,
@@ -15,6 +20,7 @@ use crate::manager::subnet::{
 use crate::manager::SubnetManager;
 use anyhow::Result;
 
+use anyhow::anyhow;
 use fvm_shared::clock::ChainEpoch;
 use fvm_shared::{address::Address, econ::TokenAmount};
 use ipc_actors_abis::subnet_actor_activity_facet::ValidatorClaim;
@@ -29,8 +35,36 @@ use ipc_api::subnet_id::SubnetID;
 
 pub struct BtcSubnetManager;
 impl BtcSubnetManager {
-    pub fn new() -> Self {
-        Self {}
+    pub fn new(subnet: &Subnet) -> Result<Self> {
+        let url = subnet.rpc_http().clone();
+        let auth_token = subnet.auth_token();
+
+        let config = match &subnet.config {
+            SubnetConfig::Btc(config) => config,
+            _ => return Err(anyhow!("Unsupported subnet configuration")),
+        };
+
+        let mut client = Client::builder();
+
+        if let Some(auth_token) = auth_token {
+            let auth = Authorization::Bearer(auth_token);
+            let mut auth_value = HeaderValue::from_str(&auth.to_string())?;
+            auth_value.set_sensitive(true);
+
+            let mut headers = reqwest::header::HeaderMap::new();
+            headers.insert(reqwest::header::AUTHORIZATION, auth_value);
+
+            client = client.default_headers(headers);
+        }
+
+        if let Some(timeout) = subnet.rpc_timeout() {
+            client = client.timeout(timeout);
+        }
+
+        let client = client.build()?;
+
+        // TODO: implement a Bitcoin IPC provider interface
+        Ok(Self {})
     }
 }
 #[async_trait]
