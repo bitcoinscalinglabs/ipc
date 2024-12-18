@@ -4,7 +4,7 @@
 use anyhow::{anyhow, Context};
 use fendermint_crypto::PublicKey;
 use fvm_shared::address::Address;
-use ipc_provider::config::subnet::{BTCSubnet, SubnetConfig};
+use ipc_provider::config::subnet::{BTCSubnet, EVMSubnet, SubnetConfig};
 use ipc_provider::IpcProvider;
 use std::path::PathBuf;
 
