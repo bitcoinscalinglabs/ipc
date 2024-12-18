@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use async_trait::async_trait;
-use ethers::providers::{Authorization, Http};
+use ethers::providers::Authorization;
 use http::HeaderValue;
 use ipc_api::subnet::{Asset, AssetKind, PermissionMode};
 use reqwest::Client;
