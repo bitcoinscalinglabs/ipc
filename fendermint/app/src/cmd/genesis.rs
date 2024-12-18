@@ -310,6 +310,21 @@ async fn new_genesis_from_parent(
     args: &GenesisFromParentArgs,
 ) -> anyhow::Result<()> {
     // provider with the parent.
+    let config = match args.parent_network_type {
+        ParentNetworkType::Fevm => SubnetConfig::Fevm(EVMSubnet {
+            provider_http: args.parent_endpoint.clone(),
+            provider_timeout: None,
+            auth_token: args.parent_auth_token.clone(),
+            registry_addr: args.parent_registry,
+            gateway_addr: args.parent_gateway,
+        }),
+        ParentNetworkType::Bitcoin => SubnetConfig::Btc(BTCSubnet {
+            provider_http: args.parent_endpoint.clone(),
+            provider_timeout: None,
+            auth_token: args.parent_auth_token.clone(),
+        }),
+    };
+
     let parent_provider = IpcProvider::new_with_subnet(
         None,
         ipc_provider::config::Subnet {
@@ -317,12 +332,7 @@ async fn new_genesis_from_parent(
                 .subnet_id
                 .parent()
                 .ok_or_else(|| anyhow!("subnet is not a child"))?,
-            // TODO(btc) btc or fevm config
-            config: SubnetConfig::Btc(BTCSubnet {
-                provider_http: args.parent_endpoint.clone(),
-                provider_timeout: None,
-                auth_token: args.parent_auth_token.clone(),
-            }),
+            config,
         },
     )?;
 
