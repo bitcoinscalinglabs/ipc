@@ -6,9 +6,10 @@ use std::collections::{BTreeMap, HashMap};
 use async_trait::async_trait;
 use ethers::providers::Authorization;
 use http::HeaderValue;
-use ipc_api::subnet::{Asset, AssetKind, PermissionMode};
 use ipc_api::universal_subnet_id::UniversalSubnetId;
+use ipc_api::subnet::{Asset, AssetKind, BtcConstructParams, ConstructParams, PermissionMode};
 use reqwest::Client;
+use serde_json::{json, Value};
 
 use crate::config::subnet::SubnetConfig;
 use crate::config::Subnet;
@@ -31,16 +32,19 @@ use ipc_api::checkpoint::{
 };
 use ipc_api::cross::IpcEnvelope;
 use ipc_api::staking::{StakingChangeRequest, ValidatorInfo};
-use ipc_api::subnet::ConstructParams;
 use ipc_api::subnet_id::SubnetID;
 
-pub struct BtcSubnetManager;
+pub struct BtcSubnetManager {
+    client: Client,
+    rpc_url: String,
+}
+
 impl BtcSubnetManager {
     pub fn new(subnet: &Subnet) -> Result<Self> {
         let url = subnet.rpc_http().clone();
         let auth_token = subnet.auth_token();
 
-        let config = match &subnet.config {
+        match &subnet.config {
             SubnetConfig::Btc(config) => config,
             _ => return Err(anyhow!("Unsupported subnet configuration")),
         };
@@ -65,14 +69,82 @@ impl BtcSubnetManager {
         let client = client.build()?;
 
         // TODO: implement a Bitcoin IPC provider interface
-        Ok(Self {})
+        Ok(Self {
+            client,
+            rpc_url: url.to_string(),
+        })
     }
 }
 #[async_trait]
 impl SubnetManager for BtcSubnetManager {
     async fn create_subnet(&self, _from: Address, params: ConstructParams) -> Result<Address> {
+        let params: BtcConstructParams = match params {
+            ConstructParams::Eth(_) => return Err(anyhow!("Unsupported subnet configuration")),
+            ConstructParams::Btc(params) => params,
+        };
         tracing::info!("creating subnet on btc with params: {params:?}");
-        todo!()
+
+        let body = json!({
+            "jsonrpc": "2.0",
+            "method": "createsubnet",
+            "id": 1,
+            "params": {
+                "min_validator_stake":     params.min_validator_stake,
+                "min_validators":          params.min_validators,
+                "bottomup_check_period":   params.bottomup_check_period,
+                "active_validators_limit": params.active_validators_limit,
+                "min_cross_msg_fee":       params.min_cross_msg_fee,
+                "whitelist":               params.validator_whitelist,
+            }
+        });
+        tracing::info!("Request body: {body:?}");
+
+        let resp = self
+            .client
+            .post(self.rpc_url.clone())
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(anyhow!(
+                "Create Subnet request failed with status: {}",
+                resp.status()
+            ));
+        }
+
+        let data = resp.json::<Value>().await?;
+
+        if let Some(err_obj) = data.get("error") {
+            let code = err_obj
+                .get("code")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            let message = err_obj
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("Unknown error");
+            let error_data = err_obj
+                .get("data")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            return Err(anyhow!(
+                "JSON-RPC error: code={}, message={}, details={}",
+                code,
+                message,
+                error_data
+            ));
+        }
+
+        let subnet_id = data
+            .get("result")
+            .and_then(|r| r.get("subnet_id"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("Missing 'result.subnet_id' in JSON-RPC response"))?;
+
+        tracing::info!("New subnet created with ID: {subnet_id}");
+
+        todo!() // TODO: parse the address somehow
     }
 
     async fn join_subnet(

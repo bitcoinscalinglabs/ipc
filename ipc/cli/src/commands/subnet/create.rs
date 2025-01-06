@@ -9,8 +9,11 @@ use async_trait::async_trait;
 use clap::Args;
 use fvm_shared::clock::ChainEpoch;
 
-use ipc_api::subnet::{Asset, AssetKind, PermissionMode};
+use ipc_api::subnet::{
+    Asset, AssetKind, ConsensusType, ConstructParams, EthConstructParams, PermissionMode,
+};
 use ipc_api::subnet_id::SubnetID;
+use ipc_provider::config::subnet::NetworkType;
 
 use crate::commands::get_ipc_provider;
 use crate::commands::subnet::ZERO_ADDRESS;
@@ -34,6 +37,15 @@ impl CreateSubnet {
             None => None,
         };
 
+        let conn_to_parent = provider.get_connection(&parent)?;
+        let parent_subnet = conn_to_parent.subnet();
+
+        if parent_subnet.network_type() != NetworkType::Fevm {
+            return Err(anyhow::anyhow!(
+                "The type of the parent subnet in the config is not set correctly."
+            ));
+        }
+
         let supply_source = parse_supply_source(arguments)?;
         let collateral_source = parse_collateral_source(arguments)?;
 
@@ -48,25 +60,28 @@ impl CreateSubnet {
             .clone()
             .unwrap_or(ZERO_ADDRESS.to_string());
         let validator_rewarder = require_fil_addr_from_str(&raw_addr)?;
-        let addr = provider
-            .create_subnet(
-                from,
-                parent,
-                arguments.min_validators,
-                f64_to_token_amount(arguments.min_validator_stake)?,
-                arguments.bottomup_check_period,
-                arguments
-                    .active_validators_limit
-                    .unwrap_or(DEFAULT_ACTIVE_VALIDATORS),
-                f64_to_token_amount(arguments.min_cross_msg_fee)?,
-                arguments.permission_mode,
-                supply_source,
-                collateral_source,
-                validator_gater,
-                validator_rewarder,
-            )
-            .await?;
 
+        let construct_params = ConstructParams::Eth(EthConstructParams {
+            parent: parent.clone(),
+            ipc_gateway_addr: parent_subnet.gateway_addr(),
+            consensus: ConsensusType::Fendermint,
+            min_validators: arguments.min_validators,
+            min_validator_stake: f64_to_token_amount(arguments.min_validator_stake)?,
+            bottomup_check_period: arguments.bottomup_check_period,
+            active_validators_limit: arguments
+                .active_validators_limit
+                .unwrap_or(DEFAULT_ACTIVE_VALIDATORS),
+            min_cross_msg_fee: f64_to_token_amount(arguments.min_cross_msg_fee)?,
+            permission_mode: arguments.permission_mode,
+            supply_source,
+            collateral_source,
+            validator_gater,
+            validator_rewarder,
+        });
+
+        let addr = provider
+            .create_subnet(from, parent, construct_params)
+            .await?;
         Ok(addr.to_string())
     }
 }
