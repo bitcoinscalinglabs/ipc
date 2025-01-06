@@ -13,12 +13,8 @@ use ipc_api::checkpoint::consensus::ValidatorData;
 use ipc_api::checkpoint::{BottomUpCheckpointBundle, QuorumReachedEvent};
 use ipc_api::evm::payload_to_evm_address;
 use ipc_api::staking::{StakingChangeRequest, ValidatorInfo};
-use ipc_api::subnet::{Asset, PermissionMode};
-use ipc_api::{
-    cross::IpcEnvelope,
-    subnet::{ConsensusType, ConstructParams},
-    subnet_id::SubnetID,
-};
+use ipc_api::subnet::ConstructParams;
+use ipc_api::{cross::IpcEnvelope, subnet_id::SubnetID};
 use ipc_wallet::{
     EthKeyAddress, EvmKeyStore, KeyStore, KeyStoreConfig, PersistentKeyStore, Wallet,
 };
@@ -161,7 +157,7 @@ impl IpcProvider {
     }
 
     /// Get the connection of a subnet, or return an error.
-    fn get_connection(&self, subnet: &SubnetID) -> anyhow::Result<Connection> {
+    pub fn get_connection(&self, subnet: &SubnetID) -> anyhow::Result<Connection> {
         match self.connection(subnet) {
             None => Err(anyhow!(
                 "subnet not found: {subnet}; known subnets: {:?}",
@@ -259,49 +255,18 @@ impl IpcProvider {
 /// with the subnet configuration. This has been inherited by the daemon
 /// configuration and will be slowly deprecated.
 impl IpcProvider {
-    // FIXME: Once the arguments for subnet creation are stabilized,
-    // use a SubnetOpts struct to provide the creation arguments and
-    // remove this allow
-    #[allow(clippy::too_many_arguments)]
     pub async fn create_subnet(
         &mut self,
         from: Option<Address>,
         parent: SubnetID,
-        min_validators: u64,
-        min_validator_stake: TokenAmount,
-        bottomup_check_period: ChainEpoch,
-        active_validators_limit: u16,
-        min_cross_msg_fee: TokenAmount,
-        permission_mode: PermissionMode,
-        supply_source: Asset,
-        collateral_source: Asset,
-        validator_gater: Address,
-        validator_rewarder: Address,
+        params: ConstructParams,
     ) -> anyhow::Result<Address> {
         let conn = self.get_connection(&parent)?;
 
-        let subnet_config = conn.subnet();
-        let sender = self.check_sender(subnet_config, from)?;
+        let subnet = conn.subnet();
+        let sender = self.check_sender(subnet, from)?;
 
-        let constructor_params = ConstructParams {
-            parent,
-            ipc_gateway_addr: subnet_config.gateway_addr(),
-            consensus: ConsensusType::Fendermint,
-            min_validators,
-            min_validator_stake,
-            bottomup_check_period,
-            active_validators_limit,
-            min_cross_msg_fee,
-            permission_mode,
-            supply_source,
-            collateral_source,
-            validator_gater,
-            validator_rewarder,
-        };
-
-        conn.manager()
-            .create_subnet(sender, constructor_params)
-            .await
+        conn.manager().create_subnet(sender, params).await
     }
 
     pub async fn join_subnet(

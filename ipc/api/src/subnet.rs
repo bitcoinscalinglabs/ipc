@@ -74,8 +74,13 @@ pub enum AssetKind {
     ERC20,
 }
 
+pub enum ConstructParams {
+    Eth(EthConstructParams),
+    Btc(BtcConstructParams),
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ConstructParams {
+pub struct EthConstructParams {
     pub parent: SubnetID,
     pub ipc_gateway_addr: Address,
     pub consensus: ConsensusType,
@@ -89,6 +94,16 @@ pub struct ConstructParams {
     pub collateral_source: Asset,
     pub validator_gater: Address,
     pub validator_rewarder: Address,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BtcConstructParams {
+    pub parent: SubnetID,
+    pub min_validator_stake: u64,
+    pub min_validators: u64,
+    pub bottomup_check_period: ChainEpoch,
+    pub active_validators_limit: u16,
+    pub min_cross_msg_fee: u64,
+    pub validator_whitelist: Vec<String>,
 }
 
 /// Consensus types supported by hierarchical consensus

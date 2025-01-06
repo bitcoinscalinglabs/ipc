@@ -19,7 +19,7 @@ use reqwest::header::HeaderValue;
 use reqwest::Client;
 use std::net::{IpAddr, SocketAddr};
 
-use ipc_api::subnet::{Asset, AssetKind, PermissionMode};
+use ipc_api::subnet::{Asset, AssetKind, ConstructParams, PermissionMode};
 use ipc_api::{eth_to_fil_amount, ethers_address_to_fil_address};
 
 use crate::config::subnet::SubnetConfig;
@@ -53,7 +53,7 @@ use ipc_api::checkpoint::{
 use ipc_api::cross::IpcEnvelope;
 use ipc_api::merkle::MerkleGen;
 use ipc_api::staking::{StakingChangeRequest, ValidatorInfo, ValidatorStakingInfo};
-use ipc_api::subnet::ConstructParams;
+use ipc_api::subnet::EthConstructParams;
 use ipc_api::subnet_id::SubnetID;
 use ipc_observability::lazy_static;
 use ipc_wallet::{EthKeyAddress, EvmKeyStore, PersistentKeyStore};
@@ -256,6 +256,10 @@ impl TopDownFinalityQuery for EthSubnetManager {
 #[async_trait]
 impl SubnetManager for EthSubnetManager {
     async fn create_subnet(&self, from: Address, params: ConstructParams) -> Result<Address> {
+        let params: EthConstructParams = match params {
+            ConstructParams::Eth(params) => params,
+            ConstructParams::Btc(_) => return Err(anyhow!("Unsupported subnet configuration")),
+        };
         self.ensure_same_gateway(&params.ipc_gateway_addr)?;
 
         let min_validator_stake = params
