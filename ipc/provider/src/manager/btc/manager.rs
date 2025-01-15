@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use ethers::providers::Authorization;
 use http::HeaderValue;
 use ipc_api::subnet::{Asset, AssetKind, BtcConstructParams, ConstructParams, PermissionMode};
+use ipc_api::subnet::{BtcJoinParams, JoinParams};
 use ipc_api::validator::Validator;
 use ipc_api::{ethers_address_to_fil_address, token_amount_from_satoshi};
 use reqwest::Client;
@@ -155,15 +156,75 @@ impl SubnetManager for BtcSubnetManager {
         Ok(new_child.clone())
     }
 
-    async fn join_subnet(
-        &self,
-        subnet: SubnetID,
-        _from: Address,
-        _collateral: TokenAmount,
-        _pub_key: Vec<u8>,
-    ) -> Result<ChainEpoch> {
-        tracing::info!("joining subnet on btc with params: {subnet:?}");
-        todo!()
+    async fn join_subnet(&self, params: JoinParams) -> Result<ChainEpoch> {
+        let params: BtcJoinParams = match params {
+            JoinParams::Eth(_) => return Err(anyhow!("Unsupported subnet configuration")),
+            JoinParams::Btc(params) => params,
+        };
+
+        tracing::info!("joining subnet on btc with params: {params:?}");
+
+        let body = json!({
+            "jsonrpc": "2.0",
+            "method": "joinsubnet",
+            "id": 1,
+            "params": {
+                "subnet_id":        params.subnet_id.to_string(),
+                "pubkey":           params.sender_public_key,
+                "collateral":       params.collateral,
+                "ip":               params.ip,
+                "backup_address":   params.backup_address,
+            }
+        });
+        tracing::info!("Request body: {body:?}");
+
+        let resp = self
+            .client
+            .post(self.rpc_url.clone())
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(anyhow!(
+                "Join Subnet request failed with status: {}",
+                resp.status()
+            ));
+        }
+
+        let data = resp.json::<Value>().await?;
+
+        if let Some(err_obj) = data.get("error") {
+            let code = err_obj
+                .get("code")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            let message = err_obj
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("Unknown error");
+            let error_data = err_obj
+                .get("data")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            return Err(anyhow!(
+                "JSON-RPC error: code={}, message={}, details={}",
+                code,
+                message,
+                error_data
+            ));
+        }
+
+        let tx_id = data
+            .get("result")
+            .and_then(|r| r.get("join_txid"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("Missing 'result.join_txid' in JSON-RPC response"))?;
+
+        tracing::info!("Joined subnet with txid: {tx_id}");
+
+        // TODO(Orestis). Check what block number to return
+        return Ok(0);
     }
 
     async fn pre_fund(
@@ -320,7 +381,7 @@ impl SubnetManager for BtcSubnetManager {
                 "subnet_id": subnet_id.to_string(),
             }
         });
-        println!("Request body: {body:#?}");
+        println!("Request body: {body:?}");
 
         let resp = self
             .client

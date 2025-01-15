@@ -199,10 +199,12 @@ impl SubnetID {
         }
 
         let children = self.children();
-        Some(SubnetID::new(
-            self.root_id(),
-            children[..children.len() - 1].to_vec(),
-        ))
+
+        Some(SubnetID {
+            root_network_type: self.root_network_type.clone(),
+            root: self.root,
+            children: children[..children.len() - 1].to_vec(),
+        })
     }
 
     /// Computes the common parent of the current subnet and the one given
@@ -220,7 +222,15 @@ impl SubnetID {
             .take_while(|(a, b)| a == b)
             .count();
         let children = self.children()[..common].to_vec();
-        Some((common, SubnetID::new(self.root_id(), children)))
+
+        Some((
+            common,
+            SubnetID {
+                root_network_type: self.root_network_type.clone(),
+                root: self.root,
+                children,
+            },
+        ))
     }
 
     /// In the path determined by the current subnet id, it moves
@@ -234,7 +244,11 @@ impl SubnetID {
 
         if let Some((i, _)) = self.common_parent(from) {
             let children = self.children()[..i + 1].to_vec();
-            return Some(SubnetID::new(self.root_id(), children));
+            return Some(SubnetID {
+                root_network_type: self.root_network_type.clone(),
+                root: self.root,
+                children,
+            });
         }
         None
     }
@@ -250,7 +264,11 @@ impl SubnetID {
 
         if let Some((i, _)) = self.common_parent(from) {
             let children = self.children()[..i - 1].to_vec();
-            return Some(SubnetID::new(self.root_id(), children));
+            return Some(SubnetID {
+                root_network_type: self.root_network_type.clone(),
+                root: self.root,
+                children,
+            });
         }
         None
     }
