@@ -14,7 +14,7 @@ use ipc_api::checkpoint::{
 };
 use ipc_api::cross::IpcEnvelope;
 use ipc_api::staking::{StakingChangeRequest, ValidatorInfo};
-use ipc_api::subnet::{Asset, ConstructParams, PermissionMode};
+use ipc_api::subnet::{Asset, ConstructParams, JoinParams, PermissionMode};
 use ipc_api::subnet_id::SubnetID;
 use ipc_api::validator::Validator;
 
@@ -35,13 +35,7 @@ pub trait SubnetManager:
     /// of collateral. This function, as well as all of the ones on this trait, can infer
     /// the specific subnet and actors on which to perform the relevant calls from the
     /// SubnetID given as an argument.
-    async fn join_subnet(
-        &self,
-        subnet: SubnetID,
-        from: Address,
-        collateral: TokenAmount,
-        metadata: Vec<u8>,
-    ) -> Result<ChainEpoch>;
+    async fn join_subnet(&self, params: JoinParams) -> Result<ChainEpoch>;
 
     /// Adds some initial balance to an address before a child subnet bootstraps to make
     /// it available in the subnet at genesis.

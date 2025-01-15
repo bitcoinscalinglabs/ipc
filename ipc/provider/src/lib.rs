@@ -13,7 +13,7 @@ use ipc_api::checkpoint::consensus::ValidatorData;
 use ipc_api::checkpoint::{BottomUpCheckpointBundle, QuorumReachedEvent};
 use ipc_api::evm::payload_to_evm_address;
 use ipc_api::staking::{StakingChangeRequest, ValidatorInfo};
-use ipc_api::subnet::ConstructParams;
+use ipc_api::subnet::{BtcJoinParams, ConstructParams, EthJoinParams, JoinParams};
 use ipc_api::{cross::IpcEnvelope, subnet_id::SubnetID};
 use ipc_wallet::{
     EthKeyAddress, EvmKeyStore, KeyStore, KeyStoreConfig, PersistentKeyStore, Wallet,
@@ -274,27 +274,63 @@ impl IpcProvider {
         subnet: SubnetID,
         from: Option<Address>,
         collateral: TokenAmount,
+        validator_ip: Option<String>,
+        backup_address: Option<String>,
     ) -> anyhow::Result<ChainEpoch> {
-        let parent = subnet.parent().ok_or_else(|| anyhow!("no parent found"))?;
-        let conn = self.get_connection(&parent)?;
+        let parent_id = subnet.parent().ok_or_else(|| anyhow!("no parent found"))?;
+        let parent_conn = self.get_connection(&parent_id)?;
 
-        let subnet_config = conn.subnet();
-        let sender = self.check_sender(subnet_config, from)?;
-        let addr = payload_to_evm_address(sender.payload())?;
+        let parent_config = parent_conn.subnet();
+        let sender = self.check_sender(parent_config, from)?;
+        let addr_payload = sender.payload();
+
+        let addr = payload_to_evm_address(addr_payload)?;
         let keystore = self.evm_wallet()?;
         let key_info = keystore
             .read()
             .unwrap()
             .get(&addr.into())?
-            .ok_or_else(|| anyhow!("key does not exists"))?;
+            .ok_or_else(|| anyhow!("key does not exist"))?;
         let sk = libsecp256k1::SecretKey::parse_slice(key_info.private_key())?;
-        let public_key = libsecp256k1::PublicKey::from_secret_key(&sk).serialize();
-        let hex_public_key = hex::encode(public_key);
-        log::info!("joining subnet with public key: {hex_public_key:?}");
+        let public_key = libsecp256k1::PublicKey::from_secret_key(&sk);
+        let hex_public_key = hex::encode(public_key.serialize());
+        log::info!("joining subnet using public key: {hex_public_key:?}");
 
-        conn.manager()
-            .join_subnet(subnet, sender, collateral, public_key.into())
-            .await
+        let params = match parent_config.config {
+            config::subnet::SubnetConfig::Fevm(_) => JoinParams::Eth(EthJoinParams {
+                subnet_id: subnet,
+                sender: sender,
+                collateral: collateral,
+                metadata: public_key.serialize().to_vec(),
+            }),
+            config::subnet::SubnetConfig::Btc(_) => {
+                let validator_ip = match validator_ip {
+                    Some(ip) => ip,
+                    None => {
+                        return Err(anyhow!(
+                            "validator ip must be specified for subnets with bitcoin as parent"
+                        ))
+                    }
+                };
+                let backup_address = match backup_address {
+                    Some(addr) => addr,
+                    None => {
+                        return Err(anyhow!(
+                            "backup address must be specified for subnets with bitcoin as parent"
+                        ))
+                    }
+                };
+                JoinParams::Btc(BtcJoinParams {
+                    subnet_id: subnet,
+                    sender_public_key: hex::encode(serialize_x_coordinate(&public_key)?),
+                    collateral,
+                    ip: validator_ip,
+                    backup_address,
+                })
+            }
+        };
+
+        parent_conn.manager().join_subnet(params).await
     }
 
     pub async fn pre_fund(
@@ -924,4 +960,16 @@ pub fn expand_tilde<P: AsRef<Path>>(path: P) -> PathBuf {
             }
         })
         .unwrap_or(p)
+}
+
+// TODO(Orestis): Move this into the ipc wallet module
+pub fn serialize_x_coordinate(public_key: &libsecp256k1::PublicKey) -> anyhow::Result<[u8; 32]> {
+    let compressed = public_key.serialize_compressed();
+    if compressed[0] != libsecp256k1_core::util::TAG_PUBKEY_EVEN {
+        return Err(anyhow!("Invalid public key, y coordinate not even"));
+    }
+
+    let mut ret = [0u8; 32];
+    ret.copy_from_slice(&compressed[1..33]);
+    Ok(ret)
 }

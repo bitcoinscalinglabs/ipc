@@ -4,12 +4,16 @@ use anyhow::Result;
 use async_trait::async_trait;
 use clap::Args;
 use fvm_shared::address::Network;
+use ipc_api::subnet_id::SubnetID;
 use num_traits::cast::FromPrimitive;
 
 mod commands;
 
 pub use commands::*;
-use ipc_provider::config::Config;
+use ipc_provider::{
+    config::{subnet::NetworkType, Config},
+    IpcProvider,
+};
 
 /// The trait that represents the abstraction of a command line handler. To implement a new command
 /// line operation, implement this trait and register it.
@@ -80,4 +84,17 @@ fn parse_network(s: &str) -> Result<Network, String> {
             Ok(n)
         }
     }
+}
+
+// This is an auxiliary function, to be used for parsing the arguments of various ipc-cli commands.
+// Ideally there should be another way to get the network type of a subnet
+// without having to create a connection to the subnet.
+// TODO(Orestis): Check if we can get the network type from the subnet id.
+pub fn subnet_network_type(
+    provider: &IpcProvider,
+    subnet_id: &SubnetID,
+) -> anyhow::Result<NetworkType> {
+    let conn = provider.get_connection(&subnet_id)?;
+    let subnet = conn.subnet();
+    Ok(subnet.network_type())
 }

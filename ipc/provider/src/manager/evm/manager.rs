@@ -19,7 +19,9 @@ use reqwest::header::HeaderValue;
 use reqwest::Client;
 use std::net::{IpAddr, SocketAddr};
 
-use ipc_api::subnet::{Asset, AssetKind, ConstructParams, PermissionMode};
+use ipc_api::subnet::{
+    Asset, AssetKind, ConstructParams, EthJoinParams, JoinParams, PermissionMode,
+};
 use ipc_api::{eth_to_fil_amount, ethers_address_to_fil_address};
 
 use crate::config::subnet::SubnetConfig;
@@ -337,29 +339,34 @@ impl SubnetManager for EthSubnetManager {
         }
     }
 
-    async fn join_subnet(
-        &self,
-        subnet: SubnetID,
-        from: Address,
-        collateral: TokenAmount,
-        pub_key: Vec<u8>,
-    ) -> Result<ChainEpoch> {
-        let collateral = collateral
+    async fn join_subnet(&self, params: JoinParams) -> Result<ChainEpoch> {
+        let params: EthJoinParams = match params {
+            JoinParams::Eth(params) => params,
+            JoinParams::Btc(_) => return Err(anyhow!("Unsupported subnet configuration")),
+        };
+
+        let collateral = params
+            .collateral
             .atto()
             .to_u128()
             .ok_or_else(|| anyhow!("invalid min validator stake"))?;
 
-        let address = contract_address_from_subnet(&subnet)?;
+        let address = contract_address_from_subnet(&params.subnet_id)?;
         tracing::info!(
             "interacting with evm subnet contract: {address:} with collateral: {collateral:}"
         );
 
-        let signer = Arc::new(self.get_signer_with_fee_estimator(&from)?);
+        let signer = Arc::new(self.get_signer_with_fee_estimator(&params.sender)?);
         let contract =
             subnet_actor_manager_facet::SubnetActorManagerFacet::new(address, signer.clone());
 
-        let mut txn = contract.join(ethers::types::Bytes::from(pub_key), U256::from(collateral));
-        txn = self.handle_txn_token(&subnet, txn, collateral, 0).await?;
+        let mut txn = contract.join(
+            ethers::types::Bytes::from(params.metadata),
+            U256::from(collateral),
+        );
+        txn = self
+            .handle_txn_token(&params.subnet_id, txn, collateral, 0)
+            .await?;
 
         let txn = extend_call_with_pending_block(txn).await?;
 

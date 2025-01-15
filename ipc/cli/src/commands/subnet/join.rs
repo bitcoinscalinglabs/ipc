@@ -5,12 +5,13 @@
 use async_trait::async_trait;
 use clap::Args;
 use ipc_api::subnet_id::SubnetID;
+use ipc_provider::config::subnet::NetworkType;
 use num_traits::Zero;
 use std::{fmt::Debug, str::FromStr};
 
 use crate::{
-    f64_to_token_amount, get_ipc_provider, require_fil_addr_from_str, CommandLineHandler,
-    GlobalArguments,
+    f64_to_token_amount, get_ipc_provider, require_fil_addr_from_str, subnet_network_type,
+    CommandLineHandler, GlobalArguments,
 };
 
 /// The command to join a subnet
@@ -24,19 +25,38 @@ impl CommandLineHandler for JoinSubnet {
         log::debug!("join subnet with args: {:?}", arguments);
 
         let mut provider = get_ipc_provider(global)?;
-        let subnet = SubnetID::from_str(&arguments.subnet)?;
+        let subnet_id = SubnetID::from_str(&arguments.subnet)?;
+
         let from = match &arguments.from {
             Some(address) => Some(require_fil_addr_from_str(address)?),
             None => None,
         };
+
         if let Some(initial_balance) = arguments.initial_balance.filter(|x| !x.is_zero()) {
-            log::info!("pre-funding address with {initial_balance}");
-            provider
-                .pre_fund(subnet.clone(), from, f64_to_token_amount(initial_balance)?)
-                .await?;
+            let root_type =
+                subnet_network_type(&provider, &SubnetID::new_root(subnet_id.root_id()))?;
+            match root_type {
+                NetworkType::Fevm => {
+                    log::info!("pre-funding address with {initial_balance}");
+                    provider
+                        .pre_fund(
+                            subnet_id.clone(),
+                            from,
+                            f64_to_token_amount(initial_balance)?,
+                        )
+                        .await?
+                }
+                NetworkType::Btc => unimplemented!("pre-funding not yet implemented for BTC"),
+            }
         }
         let epoch = provider
-            .join_subnet(subnet, from, f64_to_token_amount(arguments.collateral)?)
+            .join_subnet(
+                subnet_id,
+                from,
+                f64_to_token_amount(arguments.collateral)?,
+                arguments.ip.clone(),
+                arguments.backup_address.clone(),
+            )
             .await?;
         println!("joined at epoch: {epoch}");
 
@@ -53,7 +73,7 @@ pub struct JoinSubnetArgs {
     pub subnet: String,
     #[arg(
         long,
-        help = "The collateral to stake in the subnet (in whole FIL units)"
+        help = "The collateral to stake in the subnet (in whole FIL units if parent network is Filecoin, in sats if parent network is Bitcoin)"
     )]
     pub collateral: f64,
     #[arg(
@@ -61,6 +81,16 @@ pub struct JoinSubnetArgs {
         help = "Optionally add an initial balance to the validator in genesis in the subnet"
     )]
     pub initial_balance: Option<f64>,
+    #[arg(
+        long,
+        help = "The IP address of the validator. Must be specified if parent network is Bitcoin"
+    )]
+    pub ip: Option<String>,
+    #[arg(
+        long,
+        help = "The backup address of the validator. Must be specified if parent network is Bitcoin"
+    )]
+    pub backup_address: Option<String>,
 }
 
 /// The command to stake in a subnet from validator
