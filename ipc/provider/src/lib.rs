@@ -5,6 +5,7 @@
 use crate::manager::{GetBlockHashResult, TopDownQueryPayload};
 use anyhow::anyhow;
 use base64::Engine;
+use config::subnet::NetworkType;
 use config::Config;
 use fvm_shared::{
     address::Address, clock::ChainEpoch, crypto::signature::SignatureType, econ::TokenAmount,
@@ -62,12 +63,21 @@ impl Connection {
     }
 }
 
-#[derive(Clone)]
+enum ConnectionBackend {
+    Evm(EvmConnectionBackend),
+    Btc(BtcConnectionBackend),
+}
+
+// Composition over inheritance: A single provider, having multiple `backends` that handle various polymorphic operations.
+// #[derive(Clone)]
+// pub struct IpcProvider {
+//     config: Arc<Config>,
+//     wallet: Box<dyn WalletBackend + 'static>,
+// }
 pub struct IpcProvider {
-    sender: Option<Address>,
     config: Arc<Config>,
-    fvm_wallet: Option<Arc<RwLock<Wallet>>>,
-    evm_keystore: Option<Arc<RwLock<PersistentKeyStore<EthKeyAddress>>>>,
+    wallet_backend: WalletBackend,
+    connection_backend: ConnectionBackend,
 }
 
 impl IpcProvider {
@@ -77,10 +87,13 @@ impl IpcProvider {
         evm_keystore: Arc<RwLock<PersistentKeyStore<EthKeyAddress>>>,
     ) -> Self {
         Self {
-            sender: None,
             config,
-            fvm_wallet: Some(fvm_wallet),
-            evm_keystore: Some(evm_keystore),
+            wallet_backend: WalletBackend::Evm(EvmWalletBackend {
+                sender: None,
+                fvm_wallet: Some(fvm_wallet),
+                evm_keystore: Some(evm_keystore),
+            }),
+            connection_backend: ConnectionBackend::Evm(EvmConnectionBackend {}),
         }
     }
 
@@ -88,11 +101,22 @@ impl IpcProvider {
     /// argument's config path.
     pub fn new_from_config(config_path: String) -> anyhow::Result<Self> {
         let config = Arc::new(Config::from_file(config_path)?);
-        let fvm_wallet = Arc::new(RwLock::new(Wallet::new(new_fvm_wallet_from_config(
-            config.clone(),
-        )?)));
-        let evm_keystore = Arc::new(RwLock::new(new_evm_keystore_from_config(config.clone())?));
-        Ok(Self::new(config, fvm_wallet, evm_keystore))
+        // TODO: change this to not use a fixed id, but look for root subnet id
+        match config.subnets.get(&SubnetID::new_root(314159)) {
+            Some(subnet) => match subnet.network_type() {
+                NetworkType::Fevm => {
+                    let fvm_wallet = Arc::new(RwLock::new(Wallet::new(
+                        new_fvm_wallet_from_config(config.clone())?,
+                    )));
+                    let evm_keystore =
+                        Arc::new(RwLock::new(new_evm_keystore_from_config(config.clone())?));
+
+                    Ok(Self::new(config, fvm_wallet, evm_keystore))
+                }
+                NetworkType::Btc => unimplemented!(),
+            },
+            None => unimplemented!(),
+        }
     }
 
     /// Initializes a new `IpcProvider` configured to interact with
@@ -102,149 +126,39 @@ impl IpcProvider {
         subnet: config::Subnet,
     ) -> anyhow::Result<Self> {
         let mut config = Config::new();
-        config.add_subnet(subnet);
+        config.add_subnet(subnet.clone());
         let config = Arc::new(config);
 
-        if let Some(repo_path) = keystore_path {
-            let fvm_wallet = Arc::new(RwLock::new(Wallet::new(new_fvm_keystore_from_path(
-                &repo_path,
-            )?)));
-            let evm_keystore = Arc::new(RwLock::new(new_evm_keystore_from_path(&repo_path)?));
-            Ok(Self::new(config, fvm_wallet, evm_keystore))
-        } else {
-            Ok(Self {
-                sender: None,
-                config,
-                fvm_wallet: None,
-                evm_keystore: None,
-            })
+        match subnet.network_type() {
+            NetworkType::Fevm => {
+                if let Some(repo_path) = keystore_path {
+                    let fvm_wallet = Arc::new(RwLock::new(Wallet::new(
+                        new_fvm_keystore_from_path(&repo_path)?,
+                    )));
+                    let evm_keystore =
+                        Arc::new(RwLock::new(new_evm_keystore_from_path(&repo_path)?));
+                    Ok(Self::new(config, fvm_wallet, evm_keystore))
+                } else {
+                    let wallet_backend = WalletBackend::Evm(EvmWalletBackend {
+                        sender: None,
+                        fvm_wallet: None,
+                        evm_keystore: None,
+                    });
+                    let connection_backend = ConnectionBackend::Evm(EvmConnectionBackend {});
+                    Ok(Self {
+                        config,
+                        wallet_backend,
+                        connection_backend,
+                    })
+                }
+            }
+            NetworkType::Btc => unimplemented!(),
         }
     }
 
     /// Initialized an `IpcProvider` using the default config path.
     pub fn new_default() -> anyhow::Result<Self> {
         Self::new_from_config(default_config_path())
-    }
-
-    /// Get the connection instance for the subnet.
-    pub fn connection(&self, subnet: &SubnetID) -> Option<Connection> {
-        let subnets = &self.config.subnets;
-
-        match subnets.get(subnet) {
-            Some(subnet) => match &subnet.config {
-                config::subnet::SubnetConfig::Fevm(_) => {
-                    let wallet = self.evm_keystore.clone();
-                    let manager =
-                        match EthSubnetManager::from_subnet_with_wallet_store(subnet, wallet) {
-                            Ok(w) => Some(w),
-                            Err(e) => {
-                                tracing::warn!("error initializing evm manager: {e}");
-                                return None;
-                            }
-                        };
-                    Some(Connection {
-                        manager: Box::new(manager.unwrap()),
-                        subnet: subnet.clone(),
-                    })
-                }
-                config::subnet::SubnetConfig::Btc(_) => {
-                    tracing::info!("Creating connection with Bitcoin");
-                    let manager = BtcSubnetManager::new(subnet).unwrap(); // TODO: handle properly
-                    Some(Connection {
-                        manager: Box::new(manager),
-                        subnet: subnet.clone(),
-                    })
-                }
-            },
-            None => None,
-        }
-    }
-
-    /// Get the connection of a subnet, or return an error.
-    fn get_connection(&self, subnet: &SubnetID) -> anyhow::Result<Connection> {
-        match self.connection(subnet) {
-            None => Err(anyhow!(
-                "subnet not found: {subnet}; known subnets: {:?}",
-                self.config
-                    .subnets
-                    .keys()
-                    .map(|id| id.to_string())
-                    .collect::<Vec<_>>()
-            )),
-            Some(conn) => Ok(conn),
-        }
-    }
-
-    /// Set the default account for the provider
-    pub fn with_sender(&mut self, from: Address) {
-        self.sender = Some(from);
-    }
-
-    /// Returns the evm wallet if it is configured, and throws an error if no wallet configured.
-    ///
-    /// This method should be used when we want the wallet retrieval to throw an error
-    /// if it is not configured (i.e. when the provider needs to sign transactions).
-    pub fn evm_wallet(&self) -> anyhow::Result<Arc<RwLock<PersistentKeyStore<EthKeyAddress>>>> {
-        if let Some(wallet) = &self.evm_keystore {
-            Ok(wallet.clone())
-        } else {
-            Err(anyhow!("No evm wallet found in provider"))
-        }
-    }
-
-    // FIXME: Reconcile these into a single wallet method that
-    // accepts an `ipc_wallet::WalletType` as an input.
-    pub fn fvm_wallet(&self) -> anyhow::Result<Arc<RwLock<Wallet>>> {
-        if let Some(wallet) = &self.fvm_wallet {
-            Ok(wallet.clone())
-        } else {
-            Err(anyhow!("No fvm wallet found in provider"))
-        }
-    }
-
-    fn check_sender(
-        &mut self,
-        subnet: &config::Subnet,
-        from: Option<Address>,
-    ) -> anyhow::Result<Address> {
-        // if there is from use that.
-        if let Some(from) = from {
-            return Ok(from);
-        }
-
-        // if not use the sender.
-        if let Some(sender) = self.sender {
-            return Ok(sender);
-        }
-
-        // and finally, if there is no sender, use the default and
-        // set it as the default sender.
-        match &subnet.config {
-            config::subnet::SubnetConfig::Fevm(_) => {
-                if self.sender.is_none() {
-                    let wallet = self.evm_wallet()?;
-                    let addr = match wallet.write().unwrap().get_default()? {
-                        None => return Err(anyhow!("no default evm account configured")),
-                        Some(addr) => Address::try_from(addr)?,
-                    };
-                    self.sender = Some(addr);
-                    return Ok(addr);
-                }
-            }
-            config::subnet::SubnetConfig::Btc(_) => {
-                if self.sender.is_none() {
-                    let wallet = self.evm_wallet()?;
-                    let addr = match wallet.write().unwrap().get_default()? {
-                        None => return Err(anyhow!("no default evm account configured")),
-                        Some(addr) => Address::try_from(addr)?,
-                    };
-                    self.sender = Some(addr);
-                    return Ok(addr);
-                }
-            }
-        };
-
-        Err(anyhow!("error fetching a valid sender"))
     }
 
     /// Lists available subnet connections
@@ -315,15 +229,12 @@ impl IpcProvider {
 
         let subnet_config = conn.subnet();
         let sender = self.check_sender(subnet_config, from)?;
-        let addr = payload_to_evm_address(sender.payload())?;
-        let keystore = self.evm_wallet()?;
-        let key_info = keystore
-            .read()
-            .unwrap()
-            .get(&addr.into())?
-            .ok_or_else(|| anyhow!("key does not exists"))?;
-        let sk = libsecp256k1::SecretKey::parse_slice(key_info.private_key())?;
-        let public_key = libsecp256k1::PublicKey::from_secret_key(&sk).serialize();
+
+        let public_key = match &mut self.wallet_backend {
+            WalletBackend::Evm(evm_wallet) => evm_wallet.get_public_key_for_address(sender)?,
+            WalletBackend::Btc(btc_wallet) => btc_wallet.get_public_key_for_address(sender)?,
+        };
+
         let hex_public_key = hex::encode(public_key);
         log::info!("joining subnet with public key: {hex_public_key:?}");
 
@@ -341,7 +252,11 @@ impl IpcProvider {
         let parent = subnet.parent().ok_or_else(|| anyhow!("no parent found"))?;
         let conn = self.get_connection(&parent)?;
         let subnet_config = conn.subnet();
-        let sender = self.check_sender(subnet_config, from)?;
+
+        let sender = match &mut self.wallet_backend {
+            WalletBackend::Evm(evm_wallet) => evm_wallet.check_sender(subnet_config, from)?,
+            WalletBackend::Btc(btc_wallet) => btc_wallet.check_sender(subnet_config, from)?,
+        };
 
         conn.manager().pre_fund(subnet, sender, balance).await
     }
@@ -356,7 +271,10 @@ impl IpcProvider {
         let conn = self.get_connection(&parent)?;
 
         let subnet_config = conn.subnet();
-        let sender = self.check_sender(subnet_config, from)?;
+        let sender = match &mut self.wallet_backend {
+            WalletBackend::Evm(evm_wallet) => evm_wallet.check_sender(subnet_config, from)?,
+            WalletBackend::Btc(btc_wallet) => btc_wallet.check_sender(subnet_config, from)?,
+        };
 
         conn.manager().pre_release(subnet, sender, amount).await
     }
@@ -507,9 +425,9 @@ impl IpcProvider {
         amount: TokenAmount,
     ) -> anyhow::Result<ChainEpoch> {
         let parent = subnet.parent().ok_or_else(|| anyhow!("no parent found"))?;
-        let conn = match self.connection(&parent) {
-            None => return Err(anyhow!("target parent subnet not found")),
-            Some(conn) => conn,
+        let conn = match self.get_connection(&parent) {
+            Err(err) => return Err(anyhow!("target parent subnet not found: {err}")),
+            Ok(conn) => conn,
         };
 
         let subnet_config = conn.subnet();
@@ -528,10 +446,7 @@ impl IpcProvider {
         to: Option<Address>,
         amount: TokenAmount,
     ) -> anyhow::Result<ChainEpoch> {
-        let conn = match self.connection(&subnet) {
-            None => return Err(anyhow!("target subnet not found: {subnet}")),
-            Some(conn) => conn,
-        };
+        let conn = self.get_connection(&subnet)?;
 
         let subnet_config = conn.subnet();
         let sender = self.check_sender(subnet_config, from)?;
@@ -688,10 +603,7 @@ impl IpcProvider {
         subnet: &SubnetID,
         height: ChainEpoch,
     ) -> anyhow::Result<Option<BottomUpCheckpointBundle>> {
-        let conn = match self.connection(subnet) {
-            None => return Err(anyhow!("target subnet not found")),
-            Some(conn) => conn,
-        };
+        let conn = self.get_connection(subnet)?;
 
         conn.manager().checkpoint_bundle_at(height).await
     }
@@ -802,6 +714,56 @@ impl IpcProvider {
             .batch_subnet_claim(validator, reward_claim_subnet, reward_source_subnet, claims)
             .await
     }
+
+    // Functions to access the backends
+    fn check_sender(
+        &mut self,
+        subnet_config: &config::Subnet,
+        from: Option<Address>,
+    ) -> Result<Address, anyhow::Error> {
+        let sender = match &mut self.wallet_backend {
+            WalletBackend::Evm(evm_wallet) => evm_wallet.check_sender(subnet_config, from)?,
+            WalletBackend::Btc(btc_wallet) => btc_wallet.check_sender(subnet_config, from)?,
+        };
+        Ok(sender)
+    }
+
+    /// Get the connection of a subnet, or return an error.
+    pub fn get_connection(&self, subnet: &SubnetID) -> anyhow::Result<Connection> {
+        let conn = match &self.connection_backend {
+            ConnectionBackend::Evm(evm_connection) => {
+                let wallet_backend = match &self.wallet_backend {
+                    WalletBackend::Evm(evm_wallet) => evm_wallet,
+                    WalletBackend::Btc(_) => {
+                        return Err(anyhow!("IpcProvider configured with incompatible backends"))
+                    }
+                };
+
+                evm_connection.connection(subnet, &self.config, wallet_backend.evm_keystore.clone())
+            }
+            ConnectionBackend::Btc(btc_connection) => unimplemented!(),
+        };
+        match conn {
+            None => Err(anyhow!(
+                "subnet not found: {subnet}; known subnets: {:?}",
+                &self
+                    .config
+                    .subnets
+                    .keys()
+                    .map(|id| id.to_string())
+                    .collect::<Vec<_>>()
+            )),
+            Some(conn) => Ok(conn),
+        }
+    }
+
+    /// Set the default account for the provider
+    pub fn with_sender(&mut self, from: Address) {
+        match &mut self.wallet_backend {
+            WalletBackend::Evm(evm_wallet) => evm_wallet.set_sender(from),
+            WalletBackend::Btc(_) => unimplemented!(),
+        }
+    }
 }
 
 /// Lotus JSON keytype format
@@ -827,12 +789,71 @@ impl Drop for LotusJsonKeyType {
     }
 }
 
+struct EvmWalletBackend {
+    sender: Option<Address>,
+    fvm_wallet: Option<Arc<RwLock<Wallet>>>,
+    evm_keystore: Option<Arc<RwLock<PersistentKeyStore<EthKeyAddress>>>>,
+}
+
+// impl WalletBackend for EvmWallet {
+impl EvmWalletBackend {
+    fn set_sender(&mut self, sender: Address) {
+        self.sender = Some(sender);
+    }
+
+    fn get_public_key_for_address(&mut self, sender: Address) -> Result<[u8; 65], anyhow::Error> {
+        let addr = payload_to_evm_address(sender.payload())?;
+        let keystore = self.evm_wallet()?;
+        let key_info = keystore
+            .read()
+            .unwrap()
+            .get(&addr.into())?
+            .ok_or_else(|| anyhow!("key does not exists"))?;
+        let sk: libsecp256k1::SecretKey =
+            libsecp256k1::SecretKey::parse_slice(key_info.private_key())?;
+        let public_key = libsecp256k1::PublicKey::from_secret_key(&sk).serialize();
+        Ok(public_key)
+    }
+
+    fn check_sender(
+        &mut self,
+        subnet: &config::Subnet,
+        from: Option<Address>,
+    ) -> anyhow::Result<Address> {
+        // if there is from use that.
+        if let Some(from) = from {
+            return Ok(from);
+        }
+
+        // if not use the sender.
+        if let Some(sender) = self.sender {
+            return Ok(sender);
+        }
+
+        // and finally, if there is no sender, use the default and
+        // set it as the default sender.
+        if self.sender.is_none() {
+            let wallet = self.evm_wallet()?;
+            let addr = match wallet.write().unwrap().get_default()? {
+                None => return Err(anyhow!("no default evm account configured")),
+                Some(addr) => Address::try_from(addr)?,
+            };
+            self.sender = Some(addr);
+            return Ok(addr);
+        }
+
+        Err(anyhow!("error fetching a valid sender"))
+    }
+}
+
+impl EvmWalletBackend {}
+
 // Here I put in some other category the wallet-related
 // function so we can reconcile them easily when we decide to tackle
 // https://github.com/consensus-shipyard/ipc-agent/issues/308
 // This should become its own module within the provider, we should have different
 // categories for each group of commands
-impl IpcProvider {
+impl EvmWalletBackend {
     pub fn new_fvm_key(&self, tp: WalletKeyType) -> anyhow::Result<Address> {
         let tp = match tp {
             WalletKeyType::BLS => SignatureType::BLS,
@@ -886,6 +907,28 @@ impl IpcProvider {
         let persisted: ipc_wallet::PersistentKeyInfo = serde_json::from_str(keyinfo)?;
         let persisted: String = persisted.private_key().parse()?;
         self.import_evm_key_from_privkey(&persisted)
+    }
+
+    /// Returns the evm wallet if it is configured, and throws an error if no wallet configured.
+    ///
+    /// This method should be used when we want the wallet retrieval to throw an error
+    /// if it is not configured (i.e. when the provider needs to sign transactions).
+    pub fn evm_wallet(&self) -> anyhow::Result<Arc<RwLock<PersistentKeyStore<EthKeyAddress>>>> {
+        if let Some(wallet) = &self.evm_keystore {
+            Ok(wallet.clone())
+        } else {
+            Err(anyhow!("No evm wallet found in provider"))
+        }
+    }
+
+    // FIXME: Reconcile these into a single wallet method that
+    // accepts an `ipc_wallet::WalletType` as an input.
+    pub fn fvm_wallet(&self) -> anyhow::Result<Arc<RwLock<Wallet>>> {
+        if let Some(wallet) = &self.fvm_wallet {
+            Ok(wallet.clone())
+        } else {
+            Err(anyhow!("No fvm wallet found in provider"))
+        }
     }
 }
 
@@ -959,4 +1002,82 @@ pub fn expand_tilde<P: AsRef<Path>>(path: P) -> PathBuf {
             }
         })
         .unwrap_or(p)
+}
+
+struct BtcWalletBackend {}
+
+// impl WalletBackend for BtcWallet {
+impl BtcWalletBackend {
+    fn set_sender(&mut self, sender: Address) {
+        unimplemented!()
+    }
+
+    fn get_public_key_for_address(&mut self, sender: Address) -> Result<[u8; 65], anyhow::Error> {
+        unimplemented!()
+    }
+
+    fn check_sender(
+        &mut self,
+        subnet: &config::Subnet,
+        from: Option<Address>,
+    ) -> anyhow::Result<Address> {
+        unimplemented!()
+    }
+}
+
+enum WalletBackend {
+    Evm(EvmWalletBackend),
+    Btc(BtcWalletBackend),
+}
+
+struct EvmConnectionBackend {}
+
+impl EvmConnectionBackend {
+    /// Get the connection instance for the subnet.
+    pub fn connection(
+        &self,
+        subnet: &SubnetID,
+        config: &Config,
+        evm_keystore: Option<Arc<RwLock<PersistentKeyStore<EthKeyAddress>>>>,
+    ) -> Option<Connection> {
+        let subnets = &config.subnets;
+
+        match subnets.get(subnet) {
+            Some(subnet) => {
+                let manager =
+                    match EthSubnetManager::from_subnet_with_wallet_store(subnet, evm_keystore) {
+                        Ok(w) => Some(w),
+                        Err(e) => {
+                            tracing::warn!("error initializing evm manager: {e}");
+                            return None;
+                        }
+                    };
+                Some(Connection {
+                    manager: Box::new(manager.unwrap()),
+                    subnet: subnet.clone(),
+                })
+            }
+            None => None,
+        }
+    }
+}
+
+struct BtcConnectionBackend {}
+
+impl BtcConnectionBackend {
+    pub fn connection(&self, subnet: &SubnetID, config: &Config) -> Option<Connection> {
+        let subnets = &config.subnets;
+
+        match subnets.get(subnet) {
+            Some(subnet) => {
+                tracing::info!("Creating connection with Bitcoin");
+                let manager = BtcSubnetManager::new(subnet).unwrap(); // TODO: handle properly
+                Some(Connection {
+                    manager: Box::new(manager),
+                    subnet: subnet.clone(),
+                })
+            }
+            None => None,
+        }
+    }
 }
