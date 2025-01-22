@@ -8,6 +8,13 @@ use crate::as_human_readable_str;
 use crate::error::Error;
 use crate::subnet_id::SubnetID;
 
+/// A helper type to determine the type of root chain
+/// based of the universal subnet id
+pub enum ChainType {
+    Fevm,
+    Btc,
+}
+
 /// UniversalSubnetId represents a subnet identifier that can work across different
 /// blockchain ecosystems by using CAIP-2 chain IDs for the root network and allowing
 /// arbitrary string identifiers for child subnets.
@@ -152,6 +159,17 @@ impl UniversalSubnetId {
             self.root_id(),
             children[..children.len() - 1].to_vec(),
         ))
+    }
+
+    /// Returns the network type of the root network
+    /// Unknown networks will return None
+    // TODO this should be revisited
+    pub fn root_network_type(&self) -> Option<ChainType> {
+        match self.root.namespace.as_str() {
+            "eip155" => Some(ChainType::Fevm),
+            "bip122" => Some(ChainType::Btc),
+            _ => None,
+        }
     }
 }
 
@@ -302,5 +320,37 @@ mod tests {
             }
             _ => panic!("Expected InvalidID error with namespace message"),
         }
+    }
+
+    #[test]
+    fn test_universal_subnet_id_root_network_type() {
+        // Test EIP155 (Ethereum) networks
+        let eth_mainnet = UniversalSubnetId::from_str("/eip155:1/f01001").unwrap();
+        assert!(matches!(
+            eth_mainnet.root_network_type(),
+            Some(ChainType::Fevm)
+        ));
+        let fevm_calibration = UniversalSubnetId::from_str("/eip155:314159/f01001").unwrap();
+        assert!(matches!(
+            fevm_calibration.root_network_type(),
+            Some(ChainType::Fevm)
+        ));
+
+        // Test BIP122 (Bitcoin) networks
+        let btc_mainnet = UniversalSubnetId::from_str("/bip122:000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f/4467317d030d3bcac27b897d05e7c1ad2aa138d669d017e512131852ccfbf287").unwrap();
+        assert!(matches!(
+            btc_mainnet.root_network_type(),
+            Some(ChainType::Btc)
+        ));
+
+        let btc_testnet = UniversalSubnetId::from_str("/bip122:000000000933ea01ad0ee984209779baaec3ced90fa3f408719526f8d77f4943/4467317d030d3bcac27b897d05e7c1ad2aa138d669d017e512131852ccfbf287").unwrap();
+        assert!(matches!(
+            btc_testnet.root_network_type(),
+            Some(ChainType::Btc)
+        ));
+
+        // Test unknown network
+        let unknown_id = UniversalSubnetId::from_str("/unknown:123/child1").unwrap();
+        assert!(matches!(unknown_id.root_network_type(), None));
     }
 }
