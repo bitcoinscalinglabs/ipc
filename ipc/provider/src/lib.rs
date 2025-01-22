@@ -276,10 +276,10 @@ impl IpcProvider {
     pub async fn create_subnet(
         &mut self,
         from: Option<Address>,
-        parent: SubnetID,
+        parent: UniversalSubnetId,
         params: ConstructParams,
     ) -> anyhow::Result<Address> {
-        let conn = self.get_connection_legacy(&parent)?;
+        let conn = self.get_connection(&parent)?;
 
         let subnet = conn.subnet();
         let sender = self.check_sender(subnet, from)?;
