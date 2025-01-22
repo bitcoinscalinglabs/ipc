@@ -1,4 +1,5 @@
 use fvm_shared::address::Address;
+use lazy_static::lazy_static;
 use serde_tuple::{Deserialize_tuple, Serialize_tuple};
 use ssi_caips::caip2::ChainId;
 use std::fmt;
@@ -23,6 +24,13 @@ pub struct UniversalSubnetId {
     #[serde(with = "chain_id_serde")]
     root: ChainId,
     children: Vec<String>,
+}
+
+lazy_static! {
+    pub static ref UNDEF: UniversalSubnetId = UniversalSubnetId {
+        root: ChainId::from_str("eip155:0").unwrap(),
+        children: vec![],
+    };
 }
 
 // Custom serialization for ChainId
@@ -192,6 +200,12 @@ impl fmt::Display for UniversalSubnetId {
             write!(f, "/{}", child)?;
         }
         Ok(())
+    }
+}
+
+impl Default for UniversalSubnetId {
+    fn default() -> Self {
+        UNDEF.clone()
     }
 }
 
