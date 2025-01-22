@@ -193,6 +193,16 @@ impl UniversalSubnetId {
             _ => Some(ChainType::Fevm),    // Anything deeper, parent is Fevm
         }
     }
+
+    /// Returns the network type of current chain
+    /// For the root, returns the root network type
+    /// For anything deeper, returns FEVM
+    pub fn network_type(&self) -> Option<ChainType> {
+        match self.children.len() {
+            0 => self.root_network_type(), // At root, return root network type
+            _ => Some(ChainType::Fevm),    // Anything L2+ is Fevm
+        }
+    }
 }
 
 impl fmt::Display for UniversalSubnetId {

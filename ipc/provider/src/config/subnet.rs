@@ -35,7 +35,7 @@ pub enum SubnetConfig {
 }
 
 /// A helper enum to differentiate the different network types
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Debug)]
 pub enum NetworkType {
     Fevm,
     Btc,

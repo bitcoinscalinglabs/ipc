@@ -271,12 +271,13 @@ impl SubnetManager for EthSubnetManager {
 
         tracing::debug!("calling create subnet for EVM manager");
 
-        let route = subnet_id_to_evm_addresses(&params.parent)?;
+        let parent = params.parent.to_subnet_id()?;
+        let route = subnet_id_to_evm_addresses(&parent)?;
         tracing::debug!("root SubnetID as Ethereum type: {route:?}");
 
         let params = register_subnet_facet::ConstructorParams {
             parent_id: register_subnet_facet::SubnetID {
-                root: params.parent.root_id(),
+                root: parent.root_id(),
                 route,
             },
             ipc_gateway_addr: self.ipc_contract_info.gateway_addr,

@@ -21,11 +21,9 @@ use crate::commands::subnet::show_gateway_contract_commit_sha::{
 use crate::commands::subnet::validator::{ValidatorInfo, ValidatorInfoArgs};
 use crate::{CommandLineHandler, GlobalArguments};
 use clap::{Args, Subcommand};
-use create_on_bitcoin::{CreateSubnetOnBitcoin, CreateSubnetOnBitcoinArgs};
 
 pub mod bootstrap;
 pub mod create;
-pub mod create_on_bitcoin;
 mod genesis_epoch;
 pub mod join;
 pub mod kill;
@@ -55,7 +53,6 @@ impl SubnetCommandsArgs {
     pub async fn handle(&self, global: &GlobalArguments) -> anyhow::Result<()> {
         match &self.command {
             Commands::Create(args) => CreateSubnet::handle(global, args).await,
-            Commands::CreateOnBitcoin(args) => CreateSubnetOnBitcoin::handle(global, args).await,
             Commands::List(args) => ListSubnets::handle(global, args).await,
             Commands::ListValidators(args) => ListValidators::handle(global, args).await,
             Commands::Join(args) => JoinSubnet::handle(global, args).await,
@@ -82,7 +79,6 @@ impl SubnetCommandsArgs {
 #[derive(Debug, Subcommand)]
 pub(crate) enum Commands {
     Create(CreateSubnetArgs),
-    CreateOnBitcoin(CreateSubnetOnBitcoinArgs),
     List(ListSubnetsArgs),
     ListValidators(ListValidatorsArgs),
     Join(JoinSubnetArgs),
