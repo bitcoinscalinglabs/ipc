@@ -668,9 +668,12 @@ impl IpcProvider {
 
     /// Get genesis info for a child subnet. This can be used to deterministically
     /// generate the genesis of the subnet
-    pub async fn get_genesis_info(&self, subnet: &SubnetID) -> anyhow::Result<SubnetGenesisInfo> {
+    pub async fn get_genesis_info(
+        &self,
+        subnet: &UniversalSubnetId,
+    ) -> anyhow::Result<SubnetGenesisInfo> {
         let parent = subnet.parent().ok_or_else(|| anyhow!("no parent found"))?;
-        let conn = self.get_connection_legacy(&parent)?;
+        let conn = self.get_connection(&parent)?;
         conn.manager().get_genesis_info(subnet).await
     }
 

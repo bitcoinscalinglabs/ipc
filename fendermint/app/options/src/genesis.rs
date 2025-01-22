@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 
 use clap::{Args, Subcommand, ValueEnum};
-use ipc_api::subnet_id::SubnetID;
+use ipc_api::{subnet_id::SubnetID, universal_subnet_id::UniversalSubnetId};
 
 use super::parse::{
     parse_eth_address, parse_full_fil, parse_network_version, parse_percentage, parse_signer_addr,
@@ -205,29 +205,11 @@ pub struct GenesisIpcGatewayArgs {
     pub active_validators_limit: u16,
 }
 
-#[derive(Debug, Clone)]
-pub enum ParentNetworkType {
-    Fevm,
-    Bitcoin,
-}
-
-pub fn parse_parent_network_type(s: &str) -> Result<ParentNetworkType, String> {
-    match s.to_lowercase().as_str() {
-        "fevm" => Ok(ParentNetworkType::Fevm),
-        "bitcoin" => Ok(ParentNetworkType::Bitcoin),
-        _ => Err("Invalid parent network type".to_owned()),
-    }
-}
-
 #[derive(Args, Debug, Clone)]
 pub struct GenesisFromParentArgs {
     /// Child subnet for with the genesis file is being created
     #[arg(long, short)]
-    pub subnet_id: SubnetID,
-
-    /// Type of the parent network
-    #[arg(long, default_value = "Fevm", value_parser = parse_parent_network_type)]
-    pub parent_network_type: ParentNetworkType,
+    pub subnet_id: UniversalSubnetId,
 
     /// Endpoint to the RPC of the child subnet's parent
     #[arg(long, short)]
