@@ -6,7 +6,7 @@ use std::fmt::Debug;
 use std::str::FromStr;
 
 use async_trait::async_trait;
-use clap::Args;
+use clap::{Args, Subcommand};
 use fvm_shared::address::Address;
 use fvm_shared::clock::ChainEpoch;
 
@@ -14,7 +14,6 @@ use ipc_api::subnet::{
     Asset, AssetKind, BtcConstructParams, ConsensusType, ConstructParams, EthConstructParams,
     PermissionMode,
 };
-use ipc_api::subnet_id::SubnetID;
 use ipc_api::universal_subnet_id::UniversalSubnetId;
 use ipc_provider::config::subnet::NetworkType;
 use ipc_provider::config::Subnet;
@@ -37,56 +36,40 @@ impl CreateSubnet {
         let mut provider = get_ipc_provider(global)?;
         let parent = UniversalSubnetId::from_str(&arguments.parent)?;
 
-        let from = match &arguments.from {
-            Some(address) => Some(require_fil_addr_from_str(address)?),
-            None => None,
-        };
-
         let conn_to_parent = provider.get_connection(&parent)?;
         let parent_subnet = conn_to_parent.subnet();
 
         match parent_subnet.network_type() {
-            NetworkType::Fevm => {
-                if arguments.network_specific.fevm.is_none() {
-                    return Err(anyhow::anyhow!(
-                        "FEVM-specific arguments are required for FEVM parent subnet"
-                    ));
+            NetworkType::Fevm => match &arguments.network_specific {
+                SpecifiedNetwork::Fevm(args) => {
+                    Self::create_fevm(&mut provider, parent, parent_subnet, arguments, args).await
                 }
-                if arguments.network_specific.btc.is_some() {
-                    return Err(anyhow::anyhow!(
-                        "BTC-specific arguments cannot be used with FEVM parent subnet"
-                    ));
+                _ => Err(anyhow::anyhow!(
+                    "FEVM-specific arguments are required for FEVM parent subnet"
+                )),
+            },
+            NetworkType::Btc => match &arguments.network_specific {
+                SpecifiedNetwork::Btc(args) => {
+                    Self::create_btc(&mut provider, parent, arguments, args).await
                 }
-                Self::create_fevm(&mut provider, from, parent, parent_subnet, arguments).await
-            }
-            NetworkType::Btc => {
-                if arguments.network_specific.btc.is_none() {
-                    return Err(anyhow::anyhow!(
-                        "BTC-specific arguments are required for BTC parent subnet"
-                    ));
-                }
-                if arguments.network_specific.fevm.is_some() {
-                    return Err(anyhow::anyhow!(
-                        "FEVM-specific arguments cannot be used with BTC parent subnet"
-                    ));
-                }
-                Self::create_btc(&mut provider, from, parent, parent_subnet, arguments).await
-            }
-            _ => Err(anyhow::anyhow!(
-                "Unsupported network type: {:?}",
-                parent_subnet.network_type()
-            )),
+                _ => Err(anyhow::anyhow!(
+                    "BTC-specific arguments are required for BTC parent subnet"
+                )),
+            },
         }
     }
 
     async fn create_fevm(
         provider: &mut IpcProvider,
-        from: Option<Address>,
         parent: UniversalSubnetId,
         parent_subnet: &Subnet,
         arguments: &CreateSubnetArgs,
+        fevm_args: &FevmArgs,
     ) -> anyhow::Result<String> {
-        let fevm_args = arguments.network_specific.fevm.as_ref().unwrap();
+        let from = match &fevm_args.from {
+            Some(address) => Some(require_fil_addr_from_str(address)?),
+            None => None,
+        };
 
         let supply_source = parse_supply_source(fevm_args)?;
         let collateral_source = parse_collateral_source(fevm_args)?;
@@ -129,15 +112,12 @@ impl CreateSubnet {
 
     async fn create_btc(
         provider: &mut IpcProvider,
-        from: Option<Address>,
         parent: UniversalSubnetId,
-        parent_subnet: &Subnet,
         arguments: &CreateSubnetArgs,
+        btc_args: &BtcArgs,
     ) -> anyhow::Result<String> {
-        let btc_args = arguments.network_specific.btc.as_ref().unwrap();
-
         let whitelist = btc_args
-            .whitelist
+            .validator_whitelist
             .split(',')
             .map(|str| str.to_string())
             .collect();
@@ -155,7 +135,7 @@ impl CreateSubnet {
         });
 
         let addr = provider
-            .create_subnet(from, parent, construct_params)
+            .create_subnet(None, parent, construct_params)
             .await?;
         Ok(addr.to_string())
     }
@@ -212,9 +192,6 @@ impl CommandLineHandler for CreateSubnet {
 #[derive(Debug, Args)]
 #[command(name = "create", about = "Create a new subnet")]
 pub struct CreateSubnetArgs {
-    #[arg(long, help = "The address that creates the subnet")]
-    pub from: Option<String>,
-
     #[arg(long, help = "The parent subnet to create the new actor in")]
     pub parent: String,
 
@@ -230,23 +207,23 @@ pub struct CreateSubnetArgs {
     #[arg(long, help = "The max number of active validators in subnet")]
     pub active_validators_limit: Option<u16>,
 
-    // Network specific arguments wrapped in a struct
-    #[command(flatten)]
-    pub network_specific: NetworkSpecificArgs,
+    #[command(subcommand)]
+    pub network_specific: SpecifiedNetwork,
 }
 
-#[derive(Debug, Args)]
-#[group(multiple = false)]
-pub struct NetworkSpecificArgs {
-    #[command(flatten)]
-    pub fevm: Option<FevmArgs>,
-
-    #[command(flatten)]
-    pub btc: Option<BtcArgs>,
+#[derive(Debug, Subcommand)]
+pub enum SpecifiedNetwork {
+    #[command(name = "fevm")]
+    Fevm(FevmArgs),
+    #[command(name = "btc")]
+    Btc(BtcArgs),
 }
 
 #[derive(Debug, Args)]
 pub struct FevmArgs {
+    #[arg(long, help = "The address that creates the subnet")]
+    pub from: Option<String>,
+
     #[arg(
         long,
         help = "The minimum number of collateral required for validators in (in whole FIL; the minimum is 1 nanoFIL)"
@@ -318,5 +295,5 @@ pub struct BtcArgs {
         long,
         help = "A comma-separated list of bitcoin x-only public keys that can join the subnet before it is bootstrapped"
     )]
-    pub whitelist: String,
+    pub validator_whitelist: String,
 }
