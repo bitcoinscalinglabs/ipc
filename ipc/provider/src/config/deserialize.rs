@@ -7,6 +7,7 @@ use anyhow::anyhow;
 use fvm_shared::address::Address;
 use http::HeaderValue;
 use ipc_api::subnet_id::SubnetID;
+use ipc_api::universal_subnet_id::UniversalSubnetId;
 use ipc_types::EthAddress;
 use serde::de::{Error, SeqAccess};
 use serde::{Deserialize, Deserializer};
@@ -20,7 +21,7 @@ use url::Url;
 /// Subnet struct as value from a vec of subnets
 pub(crate) fn deserialize_subnets_from_vec<'de, D>(
     deserializer: D,
-) -> anyhow::Result<HashMap<SubnetID, Subnet>, D::Error>
+) -> anyhow::Result<HashMap<UniversalSubnetId, Subnet>, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -101,6 +102,31 @@ where
             E: Error,
         {
             SubnetID::from_str(v).map_err(E::custom)
+        }
+    }
+    deserializer.deserialize_str(SubnetIDVisitor)
+}
+
+/// A serde deserialization method to deserialize a subnet path string into a [`UniversalSubnetId`].
+pub(crate) fn deserialize_universal_subnet_id<'de, D>(
+    deserializer: D,
+) -> anyhow::Result<UniversalSubnetId, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct SubnetIDVisitor;
+    impl<'de> serde::de::Visitor<'de> for SubnetIDVisitor {
+        type Value = UniversalSubnetId;
+
+        fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
+            formatter.write_str("a string")
+        }
+
+        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+        where
+            E: Error,
+        {
+            UniversalSubnetId::from_str(v).map_err(E::custom)
         }
     }
     deserializer.deserialize_str(SubnetIDVisitor)

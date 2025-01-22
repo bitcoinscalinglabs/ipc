@@ -21,7 +21,7 @@ use fendermint_vm_genesis::{
     Account, Actor, ActorMeta, Collateral, Genesis, SignerAddr, Validator, ValidatorKey,
 };
 use fvm_shared::{bigint::Zero, chainid::ChainID, econ::TokenAmount, version::NetworkVersion};
-use ipc_api::subnet_id::SubnetID;
+use ipc_api::{subnet_id::SubnetID, universal_subnet_id::UniversalSubnetId};
 use ipc_provider::config::subnet::{
     EVMSubnet, Subnet as IpcCliSubnet, SubnetConfig as IpcCliSubnetConfig,
 };
@@ -511,7 +511,7 @@ impl DockerMaterializer {
         // Create a `config.toml`` file for the `ipc-cli` based on the deployment of the parent.
         self.update_ipc_cli_config(&testnet_name, |config| {
             config.add_subnet(IpcCliSubnet {
-                id: subnet_id,
+                id: UniversalSubnetId::from_subnet_id(&subnet_id),
                 config: IpcCliSubnetConfig::Fevm(EVMSubnet {
                     provider_http: url,
                     provider_timeout: Some(Duration::from_secs(30)),

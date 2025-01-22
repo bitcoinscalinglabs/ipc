@@ -1189,10 +1189,12 @@ impl EthSubnetManager {
         let gateway_address = payload_to_evm_address(config.gateway_addr.payload())?;
         let registry_address = payload_to_evm_address(config.registry_addr.payload())?;
 
+        let subnet_id = subnet.id.to_subnet_id()?;
+
         Ok(Self::new(
             gateway_address,
             registry_address,
-            subnet.id.chain_id(),
+            subnet_id.chain_id(),
             provider,
             keystore,
         ))

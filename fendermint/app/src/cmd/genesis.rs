@@ -4,6 +4,7 @@
 use anyhow::{anyhow, Context};
 use fendermint_crypto::PublicKey;
 use fvm_shared::address::Address;
+use ipc_api::universal_subnet_id::UniversalSubnetId;
 use ipc_provider::config::subnet::{BTCSubnet, EVMSubnet, SubnetConfig};
 use ipc_provider::IpcProvider;
 use std::path::PathBuf;
@@ -335,13 +336,16 @@ async fn new_genesis_from_parent(
         }),
     };
 
+    let subnet_id = args
+        .subnet_id
+        .parent()
+        .ok_or_else(|| anyhow!("subnet is not a child"))?;
+    let subnet_id = UniversalSubnetId::from_subnet_id(&subnet_id);
+
     let parent_provider = IpcProvider::new_with_subnet(
         None,
         ipc_provider::config::Subnet {
-            id: args
-                .subnet_id
-                .parent()
-                .ok_or_else(|| anyhow!("subnet is not a child"))?,
+            id: subnet_id,
             config,
         },
     )?;

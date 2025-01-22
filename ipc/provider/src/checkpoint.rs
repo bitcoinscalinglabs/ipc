@@ -46,8 +46,11 @@ impl<T: BottomUpCheckpointRelayer> BottomUpCheckpointManager<T> {
         child_handler: T,
         max_parallelism: usize,
     ) -> Result<Self> {
+        // TODO use universal subnet id
+        let child_id = &child.id.to_subnet_id()?;
+
         let period = parent_handler
-            .checkpoint_period(&child.id)
+            .checkpoint_period(child_id)
             .await
             .map_err(|e| anyhow!("cannot get bottom up checkpoint period: {e}"))?;
         Ok(Self {
@@ -131,9 +134,11 @@ impl<T: BottomUpCheckpointRelayer + Send + Sync + 'static> BottomUpCheckpointMan
 
     /// Checks if the relayer has already submitted at the next submission epoch, if not it submits it.
     async fn submit_next_epoch(&self, submitter: Address) -> Result<()> {
+        let child_id = &self.metadata.child.id.to_subnet_id()?;
+
         let last_checkpoint_epoch = self
             .parent_handler
-            .last_bottom_up_checkpoint_height(&self.metadata.child.id)
+            .last_bottom_up_checkpoint_height(child_id)
             .await
             .map_err(|e| {
                 anyhow!("cannot obtain the last bottom up checkpoint height due to: {e:}")

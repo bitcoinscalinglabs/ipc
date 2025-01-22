@@ -6,6 +6,7 @@ use crate::config::Subnet;
 use anyhow::anyhow;
 use fvm_shared::address::{Address, Payload};
 use ipc_api::subnet_id::SubnetID;
+use ipc_api::universal_subnet_id::UniversalSubnetId;
 use ipc_types::EthAddress;
 use serde::ser::{Error, SerializeSeq};
 use serde::Serializer;
@@ -14,7 +15,7 @@ use std::collections::HashMap;
 /// A serde serialization method to serialize a hashmap of subnets with subnet id as key and
 /// Subnet struct as value to a vec of subnets
 pub fn serialize_subnets_to_str<S>(
-    subnets: &HashMap<SubnetID, Subnet>,
+    subnets: &HashMap<UniversalSubnetId, Subnet>,
     s: S,
 ) -> Result<S::Ok, S::Error>
 where
@@ -30,6 +31,16 @@ where
 }
 
 pub fn serialize_subnet_id_to_str<S>(id: &SubnetID, s: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    s.serialize_str(&id.to_string())
+}
+
+pub fn serialize_universal_subnet_id_to_str<S>(
+    id: &UniversalSubnetId,
+    s: S,
+) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {

@@ -450,7 +450,22 @@ impl LotusJsonRPCClient<JsonRpcClientImpl> {
         let url = subnet.rpc_http().clone();
         let auth_token = subnet.auth_token();
         let jsonrpc_client = JsonRpcClientImpl::new(url, auth_token.as_deref());
-        LotusJsonRPCClient::new(jsonrpc_client, subnet.id.clone())
+
+        // TODO use universal subnet id
+        let subnet_id = match subnet.id.to_subnet_id() {
+            Ok(subnet_id) => subnet_id,
+            Err(e) => {
+                tracing::error!(
+                    "lotus from_subnet: failed to convert subnet id to subnet id: {:?}",
+                    e
+                );
+                panic!(
+                    "lotus from_subnet: failed to convert subnet id to subnet id: {:?}",
+                    e
+                );
+            }
+        };
+        LotusJsonRPCClient::new(jsonrpc_client, subnet_id)
     }
 
     pub fn from_subnet_with_wallet_store(
@@ -460,7 +475,17 @@ impl LotusJsonRPCClient<JsonRpcClientImpl> {
         let url = subnet.rpc_http().clone();
         let auth_token = subnet.auth_token();
         let jsonrpc_client = JsonRpcClientImpl::new(url, auth_token.as_deref());
-        LotusJsonRPCClient::new_with_wallet_store(jsonrpc_client, subnet.id.clone(), wallet_store)
+
+        // TODO use universal subnet id
+        let subnet_id = match subnet.id.to_subnet_id() {
+            Ok(subnet_id) => subnet_id,
+            Err(e) => {
+                tracing::error!("lotus from_subnet_with_wallet_store: failed to convert subnet id to subnet id: {:?}", e);
+                panic!("lotus from_subnet_with_wallet_store: failed to convert subnet id to subnet id: {:?}", e);
+            }
+        };
+
+        LotusJsonRPCClient::new_with_wallet_store(jsonrpc_client, subnet_id, wallet_store)
     }
 }
 
