@@ -31,7 +31,7 @@ keystore_path = "~/.ipc"
 
 # Filecoin Calibration
 [[subnets]]
-id = "/r314159"
+id = "/eip155:314159"
 
 [subnets.config]
 network_type = "fevm"
@@ -41,7 +41,7 @@ registry_addr = "0x0b4e239FF21b40120cDa817fba77bD1B366c1bcD"
 
 # Subnet template - uncomment and adjust before using
 # [[subnets]]
-# id = "/r314159/<SUBNET_ID>"
+# id = "/eip155:314159/<SUBNET_ID>"
 
 # [subnets.config]
 # network_type = "fevm"

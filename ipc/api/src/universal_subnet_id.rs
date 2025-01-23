@@ -19,6 +19,9 @@ pub enum ChainType {
 /// UniversalSubnetId represents a subnet identifier that can work across different
 /// blockchain ecosystems by using CAIP-2 chain IDs for the root network and allowing
 /// arbitrary string identifiers for child subnets.
+///
+/// Read more at: https://chainagnostic.org/CAIPs/caip-2
+/// https://eips.ethereum.org/EIPS/eip-155
 #[derive(PartialEq, Eq, Hash, Clone, Debug, Serialize_tuple, Deserialize_tuple)]
 pub struct UniversalSubnetId {
     #[serde(with = "chain_id_serde")]
