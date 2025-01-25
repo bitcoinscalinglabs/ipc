@@ -256,7 +256,7 @@ impl TopDownFinalityQuery for EthSubnetManager {
 
 #[async_trait]
 impl SubnetManager for EthSubnetManager {
-    async fn create_subnet(&self, from: Address, params: ConstructParams) -> Result<Address> {
+    async fn create_subnet(&self, from: Address, params: ConstructParams) -> Result<String> {
         let params: EthConstructParams = match params {
             ConstructParams::Eth(params) => params,
             ConstructParams::Btc(_) => return Err(anyhow!("Unsupported subnet configuration")),
@@ -325,7 +325,8 @@ impl SubnetManager for EthSubnetManager {
                                 subnet_deploy;
 
                             tracing::debug!("subnet deployed at {subnet_addr:?}");
-                            return ethers_address_to_fil_address(&subnet_addr);
+                            let addr = ethers_address_to_fil_address(&subnet_addr)?;
+                            return Ok(addr.to_string());
                         }
                         Err(_) => {
                             tracing::debug!("no event for subnet actor published yet, continue");

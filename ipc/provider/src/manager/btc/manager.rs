@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 use std::collections::{BTreeMap, HashMap};
+use std::str::FromStr;
 
 use async_trait::async_trait;
 use ethers::providers::Authorization;
@@ -77,7 +78,7 @@ impl BtcSubnetManager {
 }
 #[async_trait]
 impl SubnetManager for BtcSubnetManager {
-    async fn create_subnet(&self, _from: Address, params: ConstructParams) -> Result<Address> {
+    async fn create_subnet(&self, _from: Address, params: ConstructParams) -> Result<String> {
         let params: BtcConstructParams = match params {
             ConstructParams::Eth(_) => return Err(anyhow!("Unsupported subnet configuration")),
             ConstructParams::Btc(params) => params,
@@ -144,7 +145,13 @@ impl SubnetManager for BtcSubnetManager {
 
         tracing::info!("New subnet created with ID: {subnet_id}");
 
-        todo!() // TODO: parse the address somehow
+        let subnet_id = UniversalSubnetId::from_str(subnet_id)?;
+        let new_child = subnet_id
+            .children_as_ref()
+            .last()
+            .ok_or_else(|| anyhow!("Newly created subnet must have a child in ID"))?;
+
+        Ok(new_child.clone())
     }
 
     async fn join_subnet(

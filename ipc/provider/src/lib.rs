@@ -278,7 +278,7 @@ impl IpcProvider {
         from: Option<Address>,
         parent: UniversalSubnetId,
         params: ConstructParams,
-    ) -> anyhow::Result<Address> {
+    ) -> anyhow::Result<String> {
         let conn = self.get_connection(&parent)?;
 
         let subnet = conn.subnet();

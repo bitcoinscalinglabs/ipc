@@ -38,24 +38,31 @@ impl CreateSubnet {
         let conn_to_parent = provider.get_connection(&parent)?;
         let parent_subnet = conn_to_parent.subnet();
 
-        match parent_subnet.network_type() {
-            NetworkType::Fevm => match &arguments.network_specific {
-                SpecifiedNetwork::Fevm(args) => {
-                    Self::create_fevm(&mut provider, parent, parent_subnet, arguments, args).await
-                }
-                _ => Err(anyhow::anyhow!(
-                    "FEVM-specific arguments are required for FEVM parent subnet"
-                )),
-            },
-            NetworkType::Btc => match &arguments.network_specific {
-                SpecifiedNetwork::Btc(args) => {
-                    Self::create_btc(&mut provider, parent, arguments, args).await
-                }
-                _ => Err(anyhow::anyhow!(
-                    "BTC-specific arguments are required for BTC parent subnet"
-                )),
-            },
-        }
+        let create = match (parent_subnet.network_type(), &arguments.network_specific) {
+            // Create a subnet from a FEVM parent
+            (NetworkType::Fevm, SpecifiedNetwork::Fevm(fevm_args)) => {
+                Self::create_fevm(
+                    &mut provider,
+                    parent.clone(),
+                    parent_subnet,
+                    arguments,
+                    fevm_args,
+                )
+                .await
+            }
+            // Create a subnet from a BTC parent
+            (NetworkType::Btc, SpecifiedNetwork::Btc(btc_args)) => {
+                Self::create_btc(&mut provider, parent.clone(), arguments, btc_args).await
+            }
+            _ => Err(anyhow::anyhow!(
+                "Invalid network type or network-specific arguments"
+            )),
+        };
+
+        let child = create?;
+        // Append the new child to the parent subnet id
+        let new_subnet_id = UniversalSubnetId::new_from_parent(&parent, child);
+        Ok(new_subnet_id.to_string())
     }
 
     async fn create_fevm(
@@ -104,8 +111,9 @@ impl CreateSubnet {
         });
 
         let addr = provider
-            .create_subnet(from, parent, construct_params)
+            .create_subnet(from, parent.clone(), construct_params)
             .await?;
+
         Ok(addr.to_string())
     }
 
@@ -133,10 +141,11 @@ impl CreateSubnet {
             validator_whitelist: whitelist,
         });
 
-        let addr = provider
+        let child = provider
             .create_subnet(None, parent, construct_params)
             .await?;
-        Ok(addr.to_string())
+
+        Ok(child)
     }
 }
 
@@ -176,13 +185,9 @@ impl CommandLineHandler for CreateSubnet {
     async fn handle(global: &GlobalArguments, arguments: &Self::Arguments) -> anyhow::Result<()> {
         log::debug!("create subnet with args: {:?}", arguments);
 
-        let address = CreateSubnet::create(global, arguments).await?;
+        let subnet_id = CreateSubnet::create(global, arguments).await?;
 
-        log::info!(
-            "created subnet actor with id: {}/{}",
-            arguments.parent,
-            address
-        );
+        log::info!("created subnet with id: {}", subnet_id);
 
         Ok(())
     }

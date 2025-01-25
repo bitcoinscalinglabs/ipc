@@ -27,9 +27,9 @@ pub trait SubnetManager:
 {
     /// Deploys a new subnet actor on the `parent` subnet and with the
     /// configuration passed in `ConstructParams`.
-    /// The result of the function is the ID address for the subnet actor from which the final
+    /// The result of the function is the ID of the subnet child from which the final
     /// subnet ID can be inferred.
-    async fn create_subnet(&self, from: Address, params: ConstructParams) -> Result<Address>;
+    async fn create_subnet(&self, from: Address, params: ConstructParams) -> Result<String>;
 
     /// Performs the call to join a subnet from a wallet address and staking an amount
     /// of collateral. This function, as well as all of the ones on this trait, can infer
