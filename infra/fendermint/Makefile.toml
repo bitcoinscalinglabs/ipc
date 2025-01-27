@@ -17,8 +17,9 @@ default_to_workspace = false
 [env]
 # General network-specific parameters
 SUBNET_ID = { value = "/r0", condition = { env_not_set = ["SUBNET_ID"] } }
-# The network name is derived from the SUBNET_ID, replacing slashes with dashes, and dropping the first dash if any.
-NETWORK_NAME = { script = ["echo $SUBNET_ID | sed -e 's|/|-|g' -e 's|^-||1'"] }
+# The network name is derived from the SUBNET_ID
+# Replacing slashes with dashes, colons with underscores and dropping the first dash if any.
+NETWORK_NAME = { script = ["echo $SUBNET_ID | sed -e 's|/|-|g' -e 's|:|_|g' -e 's|^-||1'"] }
 # External P2P address advertised by CometBFT to other peers.
 CMT_P2P_EXTERNAL_ADDR = { value = "", condition = { env_not_set = ["CMT_P2P_EXTERNAL_ADDR"] } }
 CMT_P2P_HOST_PORT = { value = "26656", condition = { env_not_set = ["CMT_P2P_HOST_PORT"] } }
@@ -96,7 +97,6 @@ CMT_DOCKER_IMAGE = "cometbft/cometbft:v0.37.x"
 FM_DOCKER_TAG = "latest"
 FM_DOCKER_IMAGE = "fendermint:${FM_DOCKER_TAG}"
 FM_REMOTE_DOCKER_IMAGE = "ghcr.io/consensus-shipyard/fendermint:${FM_DOCKER_TAG}"
-PARENT_NETWORK_TYPE = "fvm"
 PROMTAIL_DOCKER_IMAGE = "grafana/promtail:latest"
 # If this wasn't present, any wait task is skipped.
 CARGO_MAKE_WAIT_MILLISECONDS = 5000
