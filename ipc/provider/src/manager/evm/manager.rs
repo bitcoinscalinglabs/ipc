@@ -14,6 +14,7 @@ use ipc_actors_abis::{
     subnet_actor_manager_facet, subnet_actor_reward_facet,
 };
 use ipc_api::evm::{fil_to_eth_amount, payload_to_evm_address, subnet_id_to_evm_addresses};
+use ipc_api::universal_subnet_id::UniversalSubnetId;
 use ipc_api::validator::from_contract_validators;
 use reqwest::header::HeaderValue;
 use reqwest::Client;
@@ -788,7 +789,9 @@ impl SubnetManager for EthSubnetManager {
         Ok(Asset::try_from(raw)?)
     }
 
-    async fn get_genesis_info(&self, subnet: &SubnetID) -> Result<SubnetGenesisInfo> {
+    async fn get_genesis_info(&self, subnet: &UniversalSubnetId) -> Result<SubnetGenesisInfo> {
+        let subnet = &subnet.to_subnet_id()?;
+
         let address = contract_address_from_subnet(subnet)?;
         let contract = subnet_actor_getter_facet::SubnetActorGetterFacet::new(
             address,
@@ -1189,10 +1192,12 @@ impl EthSubnetManager {
         let gateway_address = payload_to_evm_address(config.gateway_addr.payload())?;
         let registry_address = payload_to_evm_address(config.registry_addr.payload())?;
 
+        let subnet_id = subnet.id.to_subnet_id()?;
+
         Ok(Self::new(
             gateway_address,
             registry_address,
-            subnet.id.chain_id(),
+            subnet_id.chain_id(),
             provider,
             keystore,
         ))

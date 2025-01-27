@@ -32,6 +32,7 @@ serde_with = { workspace = true, features = ["hex"] }
 ipc_actors_abis = { workspace = true }
 ipc-types = { workspace = true }
 merkle-tree-rs = { path = "../../ext/merkle-tree-rs" }
+ssi-caips = "0.2.1"
 
 [dev-dependencies]
 serde_json = { workspace = true }

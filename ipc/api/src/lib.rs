@@ -16,6 +16,7 @@ pub mod gateway;
 mod runtime;
 pub mod subnet;
 pub mod subnet_id;
+pub mod universal_subnet_id;
 pub mod validator;
 
 pub mod evm;

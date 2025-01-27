@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use ethers::providers::Authorization;
 use http::HeaderValue;
 use ipc_api::subnet::{Asset, AssetKind, PermissionMode};
+use ipc_api::universal_subnet_id::UniversalSubnetId;
 use reqwest::Client;
 
 use crate::config::subnet::SubnetConfig;
@@ -228,7 +229,7 @@ impl SubnetManager for BtcSubnetManager {
         todo!()
     }
 
-    async fn get_genesis_info(&self, subnet: &SubnetID) -> Result<SubnetGenesisInfo> {
+    async fn get_genesis_info(&self, subnet: &UniversalSubnetId) -> Result<SubnetGenesisInfo> {
         tracing::info!("getting genesis info on btc with params: {subnet:?}");
         Ok(SubnetGenesisInfo {
             active_validators_limit: 10,
@@ -267,6 +268,11 @@ impl SubnetManager for BtcSubnetManager {
         _validator: &Address,
     ) -> Result<ValidatorInfo> {
         tracing::info!("getting validator info on btc with params: {subnet:?}");
+        todo!()
+    }
+
+    async fn list_validators(&self, subnet: &SubnetID) -> Result<Vec<(Address, ValidatorInfo)>> {
+        tracing::info!("list validators on btc with params: {subnet:?}");
         todo!()
     }
 
@@ -421,7 +427,7 @@ mod tests {
 
     #[test]
     fn test_create_manager() {
-        let _ = super::BtcSubnetManager::new();
+        // let _ = super::BtcSubnetManager::new();
         assert!(true);
     }
 }

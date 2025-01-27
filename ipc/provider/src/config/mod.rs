@@ -18,7 +18,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use deserialize::deserialize_subnets_from_vec;
-use ipc_api::subnet_id::SubnetID;
+use ipc_api::universal_subnet_id::UniversalSubnetId;
 use serde::{Deserialize, Serialize};
 use serialize::serialize_subnets_to_str;
 pub use subnet::Subnet;
@@ -31,7 +31,7 @@ keystore_path = "~/.ipc"
 
 # Filecoin Calibration
 [[subnets]]
-id = "/r314159"
+id = "/eip155:314159"
 
 [subnets.config]
 network_type = "fevm"
@@ -41,7 +41,7 @@ registry_addr = "0x0b4e239FF21b40120cDa817fba77bD1B366c1bcD"
 
 # Subnet template - uncomment and adjust before using
 # [[subnets]]
-# id = "/r314159/<SUBNET_ID>"
+# id = "/eip155:314159/<SUBNET_ID>"
 
 # [subnets.config]
 # network_type = "fevm"
@@ -58,7 +58,7 @@ pub struct Config {
     pub keystore_path: Option<String>,
     #[serde(deserialize_with = "deserialize_subnets_from_vec", default)]
     #[serde(serialize_with = "serialize_subnets_to_str")]
-    pub subnets: HashMap<SubnetID, Subnet>,
+    pub subnets: HashMap<UniversalSubnetId, Subnet>,
 }
 
 impl Config {
@@ -107,7 +107,7 @@ impl Config {
         self.subnets.insert(subnet.id.clone(), subnet);
     }
 
-    pub fn remove_subnet(&mut self, subnet_id: &SubnetID) {
+    pub fn remove_subnet(&mut self, subnet_id: &UniversalSubnetId) {
         self.subnets.remove(subnet_id);
     }
 }

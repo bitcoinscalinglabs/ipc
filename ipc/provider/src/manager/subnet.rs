@@ -14,6 +14,7 @@ use ipc_api::cross::IpcEnvelope;
 use ipc_api::staking::{StakingChangeRequest, ValidatorInfo};
 use ipc_api::subnet::{Asset, ConstructParams, PermissionMode};
 use ipc_api::subnet_id::SubnetID;
+use ipc_api::universal_subnet_id::UniversalSubnetId;
 use ipc_api::validator::Validator;
 use std::collections::{BTreeMap, HashMap};
 
@@ -172,7 +173,7 @@ pub trait SubnetManager:
     async fn get_subnet_collateral_source(&self, subnet: &SubnetID) -> Result<Asset>;
 
     /// Gets the genesis information required to bootstrap a child subnet
-    async fn get_genesis_info(&self, subnet: &SubnetID) -> Result<SubnetGenesisInfo>;
+    async fn get_genesis_info(&self, subnet: &UniversalSubnetId) -> Result<SubnetGenesisInfo>;
 
     /// Advertises the endpoint of a bootstrap node for the subnet.
     async fn add_bootstrap(

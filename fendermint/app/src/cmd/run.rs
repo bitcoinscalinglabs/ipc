@@ -27,6 +27,7 @@ use fendermint_vm_topdown::sync::launch_polling_syncer;
 use fendermint_vm_topdown::voting::{publish_vote_loop, Error as VoteError, VoteTally};
 use fendermint_vm_topdown::{CachedFinalityProvider, IPCParentFinality, Toggle};
 use fvm_shared::address::{current_network, Address, Network};
+use ipc_api::universal_subnet_id::UniversalSubnetId;
 use ipc_ipld_resolver::{Event as ResolverEvent, VoteRecord};
 use ipc_observability::observe::register_metrics as register_default_metrics;
 use ipc_provider::config::subnet::{BTCSubnet, SubnetConfig};
@@ -423,12 +424,16 @@ fn make_resolver_service(
 
 fn make_ipc_provider_proxy(settings: &Settings) -> anyhow::Result<IPCProviderProxy> {
     let topdown_config = settings.ipc.topdown_config()?;
+
+    let subnet_id = settings
+        .ipc
+        .subnet_id
+        .parent()
+        .ok_or_else(|| anyhow!("subnet has no parent"))?;
+    let subnet_id = UniversalSubnetId::from_subnet_id(&subnet_id);
+
     let subnet = ipc_provider::config::Subnet {
-        id: settings
-            .ipc
-            .subnet_id
-            .parent()
-            .ok_or_else(|| anyhow!("subnet has no parent"))?,
+        id: subnet_id,
         // TODO(btc) btc or fevm config
         config: SubnetConfig::Btc(BTCSubnet {
             provider_http: topdown_config
