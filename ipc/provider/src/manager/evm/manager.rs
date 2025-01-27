@@ -105,7 +105,8 @@ abigen!(
 
 #[async_trait]
 impl TopDownFinalityQuery for EthSubnetManager {
-    async fn genesis_epoch(&self, subnet_id: &SubnetID) -> Result<ChainEpoch> {
+    async fn genesis_epoch(&self, subnet_id: &UniversalSubnetId) -> Result<ChainEpoch> {
+        let subnet_id = &subnet_id.to_subnet_id()?;
         let address = contract_address_from_subnet(subnet_id)?;
         tracing::info!("querying genesis epoch in evm subnet contract: {address:}");
 
@@ -795,8 +796,11 @@ impl SubnetManager for EthSubnetManager {
         Ok(Asset::try_from(raw)?)
     }
 
-    async fn get_genesis_info(&self, subnet: &UniversalSubnetId) -> Result<SubnetGenesisInfo> {
-        let subnet = &subnet.to_subnet_id()?;
+    async fn get_genesis_info(
+        &self,
+        universal_subnet_id: &UniversalSubnetId,
+    ) -> Result<SubnetGenesisInfo> {
+        let subnet = &universal_subnet_id.to_subnet_id()?;
 
         let address = contract_address_from_subnet(subnet)?;
         let contract = subnet_actor_getter_facet::SubnetActorGetterFacet::new(
@@ -813,7 +817,7 @@ impl SubnetManager for EthSubnetManager {
             // Bottom-up checkpoint period set in the subnet actor.
             bottom_up_checkpoint_period,
             // Genesis epoch when the subnet was bootstrapped in the parent.
-            genesis_epoch: self.genesis_epoch(subnet).await?,
+            genesis_epoch: self.genesis_epoch(universal_subnet_id).await?,
             // Majority percentage of
             majority_percentage: contract.majority_percentage().call().await?,
             // Minimum collateral required for subnets to register into the subnet

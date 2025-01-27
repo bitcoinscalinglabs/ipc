@@ -4,7 +4,7 @@
 
 use async_trait::async_trait;
 use clap::Args;
-use ipc_api::subnet_id::SubnetID;
+use ipc_api::universal_subnet_id::UniversalSubnetId;
 use std::fmt::Debug;
 use std::str::FromStr;
 
@@ -21,7 +21,7 @@ impl CommandLineHandler for GenesisEpoch {
         log::debug!("get genesis epoch with args: {:?}", arguments);
 
         let provider = get_ipc_provider(global)?;
-        let subnet = SubnetID::from_str(&arguments.subnet)?;
+        let subnet = UniversalSubnetId::from_str(&arguments.subnet)?;
 
         let ls = provider.genesis_epoch(&subnet).await?;
         println!("genesis epoch: {}", ls);

@@ -10,6 +10,7 @@ use fvm_shared::clock::ChainEpoch;
 use ipc_api::cross::IpcEnvelope;
 use ipc_api::staking::StakingChangeRequest;
 use ipc_api::subnet_id::SubnetID;
+use ipc_api::universal_subnet_id::UniversalSubnetId;
 use ipc_observability::emit;
 use ipc_provider::manager::{GetBlockHashResult, TopDownQueryPayload};
 use ipc_provider::IpcProvider;
@@ -43,6 +44,7 @@ pub trait ParentQueryProxy {
 }
 
 /// The proxy to the subnet's parent
+// TODO(bitcoin) switch to UniversalSubnetId
 pub struct IPCProviderProxy {
     ipc_provider: IpcProvider,
     /// The parent subnet for the child subnet we are target. We can derive from child subnet,
@@ -75,7 +77,8 @@ impl ParentQueryProxy for IPCProviderProxy {
     /// Get the genesis epoch of the child subnet, i.e. the epoch that the subnet was created in
     /// the parent subnet.
     async fn get_genesis_epoch(&self) -> anyhow::Result<BlockHeight> {
-        let height = self.ipc_provider.genesis_epoch(&self.child_subnet).await?;
+        let child_subnet_id = UniversalSubnetId::from_subnet_id(&self.child_subnet);
+        let height = self.ipc_provider.genesis_epoch(&child_subnet_id).await?;
         Ok(height as BlockHeight)
     }
 

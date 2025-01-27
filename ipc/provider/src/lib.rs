@@ -591,9 +591,9 @@ impl IpcProvider {
     }
 
     /// Obtain the genesis epoch of the input subnet.
-    pub async fn genesis_epoch(&self, subnet: &SubnetID) -> anyhow::Result<ChainEpoch> {
+    pub async fn genesis_epoch(&self, subnet: &UniversalSubnetId) -> anyhow::Result<ChainEpoch> {
         let parent = subnet.parent().ok_or_else(|| anyhow!("no parent found"))?;
-        let conn = self.get_connection_legacy(&parent)?;
+        let conn = self.get_connection(&parent)?;
         conn.manager().genesis_epoch(subnet).await
     }
 

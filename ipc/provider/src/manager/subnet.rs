@@ -237,7 +237,7 @@ pub struct GetBlockHashResult {
 #[async_trait]
 pub trait TopDownFinalityQuery: Send + Sync {
     /// Returns the genesis epoch that the subnet is created in parent network
-    async fn genesis_epoch(&self, subnet_id: &SubnetID) -> Result<ChainEpoch>;
+    async fn genesis_epoch(&self, subnet_id: &UniversalSubnetId) -> Result<ChainEpoch>;
     /// Returns the chain head height
     async fn chain_head_height(&self) -> Result<ChainEpoch>;
     /// Returns the list of top down messages
