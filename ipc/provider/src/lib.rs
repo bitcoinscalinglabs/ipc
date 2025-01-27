@@ -649,7 +649,7 @@ impl IpcProvider {
         subnet: &SubnetID,
     ) -> anyhow::Result<Vec<(Address, ValidatorInfo)>> {
         let parent = subnet.parent().ok_or_else(|| anyhow!("no parent found"))?;
-        let conn = self.get_connection(&parent)?;
+        let conn = self.get_connection_legacy(&parent)?;
 
         conn.manager().list_validators(subnet).await
     }

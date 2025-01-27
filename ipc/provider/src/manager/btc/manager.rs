@@ -271,6 +271,11 @@ impl SubnetManager for BtcSubnetManager {
         todo!()
     }
 
+    async fn list_validators(&self, subnet: &SubnetID) -> Result<Vec<(Address, ValidatorInfo)>> {
+        tracing::info!("list validators on btc with params: {subnet:?}");
+        todo!()
+    }
+
     async fn set_federated_power(
         &self,
         _from: &Address,
