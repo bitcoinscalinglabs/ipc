@@ -23,7 +23,7 @@ use ipc_wallet::{
     EthKeyAddress, EvmKeyStore, KeyStore, KeyStoreConfig, PersistentKeyStore, Wallet,
 };
 use lotus::message::wallet::WalletKeyType;
-use manager::{EthSubnetManager, SubnetGenesisInfo, SubnetInfo, SubnetManager};
+use manager::{BtcSubnetManager, EthSubnetManager, SubnetGenesisInfo, SubnetInfo, SubnetManager};
 use serde::{Deserialize, Serialize};
 use std::{
     borrow::Borrow,
@@ -147,6 +147,14 @@ impl IpcProvider {
                         subnet: subnet.clone(),
                     })
                 }
+                config::subnet::SubnetConfig::Btc(_) => {
+                    tracing::info!("Creating connection with Bitcoin");
+                    let manager = BtcSubnetManager::new(subnet).unwrap(); // TODO: handle properly
+                    Some(Connection {
+                        manager: Box::new(manager),
+                        subnet: subnet.clone(),
+                    })
+                }
             },
             None => None,
         }
@@ -213,6 +221,17 @@ impl IpcProvider {
         // set it as the default sender.
         match &subnet.config {
             config::subnet::SubnetConfig::Fevm(_) => {
+                if self.sender.is_none() {
+                    let wallet = self.evm_wallet()?;
+                    let addr = match wallet.write().unwrap().get_default()? {
+                        None => return Err(anyhow!("no default evm account configured")),
+                        Some(addr) => Address::try_from(addr)?,
+                    };
+                    self.sender = Some(addr);
+                    return Ok(addr);
+                }
+            }
+            config::subnet::SubnetConfig::Btc(_) => {
                 if self.sender.is_none() {
                     let wallet = self.evm_wallet()?;
                     let addr = match wallet.write().unwrap().get_default()? {

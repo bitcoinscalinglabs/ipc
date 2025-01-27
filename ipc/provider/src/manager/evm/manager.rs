@@ -1155,7 +1155,10 @@ impl EthSubnetManager {
         let url = subnet.rpc_http().clone();
         let auth_token = subnet.auth_token();
 
-        let SubnetConfig::Fevm(config) = &subnet.config;
+        let config = match &subnet.config {
+            SubnetConfig::Fevm(config) => config,
+            _ => return Err(anyhow!("Unsupported subnet configuration")),
+        };
 
         let mut client = Client::builder();
 
