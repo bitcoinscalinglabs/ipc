@@ -23,10 +23,17 @@ impl CommandLineHandler for WalletRemove {
         let wallet_type = WalletType::from_str(&arguments.wallet_type)?;
 
         match wallet_type {
-            WalletType::Evm => {
-                let wallet = provider.evm_wallet()?;
+            WalletType::Evm | WalletType::Btc => {
+                let wallet = if wallet_type == WalletType::Evm {
+                    provider.evm_wallet()?
+                } else {
+                    provider.btc_wallet()?
+                };
                 let addr = ipc_wallet::EthKeyAddress::from_str(&arguments.address)?;
-                wallet.write().unwrap().remove(&addr)?;
+                wallet
+                    .write()
+                    .map_err(|e| anyhow::anyhow!("Failed to remove wallet: {}", e))?
+                    .remove(&addr)?;
             }
             WalletType::Fvm => {
                 let wallet = provider.fvm_wallet()?;

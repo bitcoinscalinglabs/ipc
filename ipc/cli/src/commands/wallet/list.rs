@@ -54,6 +54,27 @@ impl CommandLineHandler for WalletList {
                 }
                 Ok(())
             }
+            WalletType::Btc => {
+                let wallet = provider.btc_wallet()?;
+                let addresses = wallet.read().unwrap().list()?;
+                for address in addresses.iter() {
+                    print!("Address: {}", address);
+
+                    let key_info = wallet.read().unwrap().get(address)?.unwrap();
+                    let sk = libsecp256k1::SecretKey::parse_slice(key_info.private_key())?;
+                    println!("\tSecret key: {}", hex::encode(sk.serialize()));
+
+                    let pub_key =
+                        hex::encode(libsecp256k1::PublicKey::from_secret_key(&sk).serialize())
+                            .to_string();
+                    println!("\tPubKey: {}", pub_key);
+
+                    let x_only_pub_key =
+                        hex::encode(ipc_wallet::get_xonly_public_key_serialized(&sk)?.to_vec());
+                    println!("\tXonlyPubKey: {}", x_only_pub_key);
+                }
+                Ok(())
+            }
         }
     }
 }
