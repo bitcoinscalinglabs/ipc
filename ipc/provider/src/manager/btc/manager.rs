@@ -10,6 +10,7 @@ use http::HeaderValue;
 use ipc_api::subnet::{Asset, AssetKind, BtcConstructParams, ConstructParams, PermissionMode};
 use ipc_api::universal_subnet_id::UniversalSubnetId;
 use ipc_api::validator::Validator;
+use ipc_api::{ethers_address_to_fil_address, token_amount_from_satoshi};
 use reqwest::Client;
 use serde_json::{json, Value};
 
@@ -320,7 +321,7 @@ impl SubnetManager for BtcSubnetManager {
                 "subnet_id": subnet_id.to_string(),
             }
         });
-        tracing::info!("Request body: {body:?}");
+        println!("Request body: {body:#?}");
 
         let resp = self
             .client
@@ -363,6 +364,18 @@ impl SubnetManager for BtcSubnetManager {
             .get("result")
             .ok_or_else(|| anyhow!("No result found"))?;
 
+        println!("btc manager get genesis info result: {result:#?}");
+
+        // Check if subnet is bootstrapped
+        if result
+            .get("bootstrapped")
+            .and_then(Value::as_bool)
+            .unwrap_or_default()
+            == false
+        {
+            return Err(anyhow!("Subnet not bootstrapped"));
+        }
+
         // Extract create_subnet_msg parameters
         let create_subnet_msg = result
             .get("create_subnet_msg")
@@ -399,18 +412,32 @@ impl SubnetManager for BtcSubnetManager {
             .filter_map(|v| {
                 let subnet_address = v.get("subnet_address")?.as_str()?;
                 let collateral = v.get("collateral")?.as_u64()?;
+                let pubkey = v.get("pubkey")?.as_str()?;
+                let pubkey = hex::decode(pubkey).ok()?;
 
-                // Remove "0x" prefix if present and parse address
-                let subnet_address = subnet_address.strip_prefix("0x").unwrap_or(subnet_address);
-                let address = Address::from_str(subnet_address).ok()?;
+                let addr = ethers::types::Address::from_str(subnet_address).ok()?;
+                let addr = ethers_address_to_fil_address(&addr).ok()?;
 
-                Some(Validator {
-                    addr: address,
-                    metadata: Vec::with_capacity(0),
-                    weight: TokenAmount::from_atto(collateral),
-                })
+                // Recreate a compressed pubkey (with even y-coordinate)
+                let mut metadata: Vec<u8> = Vec::with_capacity(33);
+                metadata.push(0x02);
+                metadata.extend(pubkey);
+
+                let weight = token_amount_from_satoshi(collateral);
+
+                let v = Validator {
+                    addr,
+                    metadata,
+                    weight,
+                };
+
+                Some(v)
             })
             .collect();
+
+        let min_collateral = token_amount_from_satoshi(min_validator_stake);
+
+        println!("validators = {validators:#?}");
 
         Ok(SubnetGenesisInfo {
             active_validators_limit: active_validators_limit as u16,
@@ -422,7 +449,7 @@ impl SubnetManager for BtcSubnetManager {
                 .unwrap_or(0),
             // TODO impl majority_percentage
             majority_percentage: 66, // Default value as per the original implementation
-            min_collateral: TokenAmount::from_atto(min_validator_stake),
+            min_collateral,
             validators,
             // TODO impl genesis_balances
             genesis_balances: BTreeMap::new(),

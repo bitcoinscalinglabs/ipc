@@ -37,6 +37,11 @@ pub fn ethers_address_to_fil_address(addr: &ethers::types::Address) -> anyhow::R
     Ok(Address::from(eth_addr))
 }
 
+pub fn token_amount_from_satoshi(sats: impl Into<fvm_shared::bigint::BigInt>) -> TokenAmount {
+    const SATOSHI_TO_ATTO: u64 = 10u64.pow((TokenAmount::DECIMALS as u32) - 8);
+    TokenAmount::from_atto(sats.into() * SATOSHI_TO_ATTO)
+}
+
 /// Marker type for serialising data to/from string
 pub struct HumanReadable;
 
