@@ -245,9 +245,15 @@ impl IpcProvider {
             }
             config::subnet::SubnetConfig::Btc(_) => {
                 if self.sender.is_none() {
-                    let wallet = self.evm_wallet()?;
-                    let addr = match wallet.write().unwrap().get_default()? {
-                        None => return Err(anyhow!("no default evm account configured")),
+                    let wallet = self.btc_wallet()?;
+                    let addr = match wallet
+                        .write()
+                        .map_err(|e| {
+                            anyhow::anyhow!("Failed to get the lock for btc keystore: {}", e)
+                        })?
+                        .get_default()?
+                    {
+                        None => return Err(anyhow!("no default btc key configured")),
                         Some(addr) => Address::try_from(addr)?,
                     };
                     self.sender = Some(addr);
@@ -299,38 +305,53 @@ impl IpcProvider {
         let parent_config = parent_conn.subnet();
         let sender = self.check_sender(parent_config, from)?;
         let addr_payload = sender.payload();
-
         let addr = payload_to_evm_address(addr_payload)?;
-        let keystore = self.evm_wallet()?;
-        let key_info = keystore
-            .read()
-            .unwrap()
-            .get(&addr.into())?
-            .ok_or_else(|| anyhow!("key does not exist"))?;
-        let sk = libsecp256k1::SecretKey::parse_slice(key_info.private_key())?;
-        let public_key = libsecp256k1::PublicKey::from_secret_key(&sk);
-        let hex_public_key = hex::encode(public_key.serialize());
-        log::info!("joining subnet using public key: {hex_public_key:?}");
 
         let params = match parent_config.config {
-            config::subnet::SubnetConfig::Fevm(_) => JoinParams::Eth(EthJoinParams {
-                subnet_id: subnet,
-                sender: sender,
-                collateral: TokenAmount::from_nano(collateral as u128),
-                metadata: public_key.serialize().to_vec(),
-            }),
+            config::subnet::SubnetConfig::Fevm(_) => {
+                let keystore = self.evm_wallet()?;
+                let key_info = keystore
+                    .read()
+                    .unwrap()
+                    .get(&addr.into())?
+                    .ok_or_else(|| anyhow!("key does not exist"))?;
+                let sk = libsecp256k1::SecretKey::parse_slice(key_info.private_key())?;
+                let public_key = libsecp256k1::PublicKey::from_secret_key(&sk);
+                let hex_public_key = hex::encode(public_key.serialize());
+                log::info!("joining subnet using public key: {hex_public_key:?}");
+
+                JoinParams::Eth(EthJoinParams {
+                    subnet_id: subnet,
+                    sender: sender,
+                    collateral: TokenAmount::from_nano(collateral as u128),
+                    metadata: public_key.serialize().to_vec(),
+                })
+            }
             config::subnet::SubnetConfig::Btc(_) => {
+                let keystore = self.btc_wallet()?;
+                let key_info = keystore
+                    .read()
+                    .map_err(|e| anyhow::anyhow!("Failed to get the lock for btc keystore: {}", e))?
+                    .get(&addr.into())?
+                    .ok_or_else(|| anyhow!("btc key does not exist"))?;
+                let sk = ipc_wallet::parse_and_validate_secret_key(key_info.private_key())?;
+                let public_key = ipc_wallet::get_xonly_public_key_serialized(&sk)?;
+                let hex_public_key = hex::encode(public_key);
+                log::info!("joining subnet using public key: {hex_public_key:?}");
+
                 let ip = match validator_ip {
                     Some(ip) => ip,
                     None => return Err(anyhow!("validator ip is required")),
                 };
+
                 let backup_address = match backup_address {
                     Some(backup_address) => backup_address,
                     None => return Err(anyhow!("backup address is required")),
                 };
+
                 JoinParams::Btc(BtcJoinParams {
                     subnet_id: subnet,
-                    sender_public_key: unimplemented!(), //hex::encode()
+                    sender_public_key: hex_public_key,
                     collateral: collateral as u64,
                     ip,
                     backup_address,
