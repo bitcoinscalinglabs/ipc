@@ -119,5 +119,7 @@ fn settings(opts: &Options) -> anyhow::Result<Settings> {
     let settings =
         Settings::new(&config_dir, &opts.home_dir, &opts.mode).context("error parsing settings")?;
 
+    println!("fendermint settings = {settings:#?}");
+
     Ok(settings)
 }

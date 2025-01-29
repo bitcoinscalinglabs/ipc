@@ -4,7 +4,7 @@ env = { "ENTRY" = "fendermint", "CMD" = "run", "FLAGS" = "-d" }
 
 [tasks.fendermint-pull]
 condition = { env_not_set = [
-  "FM_PULL_SKIP",
+	"FM_PULL_SKIP",
 ], fail_message = "Skipped pulling fendermint Docker image." }
 script = """
   docker pull ghcr.io/consensus-shipyard/fendermint:${FM_DOCKER_TAG}
@@ -12,7 +12,6 @@ script = """
 """
 
 [tasks.fendermint-run]
-# TODO recheck --publish
 script.main = """
 docker run \
   ${FLAGS} \
@@ -20,7 +19,6 @@ docker run \
   --init \
   --user $(id -u) \
   --network ${NETWORK_NAME} \
-  --publish 3030:3030 \
   --volume ${BASE_DIR}:/data \
   --volume fendermint-logs:/fendermint/logs \
   --env-file ${ENV_FILE} \
@@ -45,14 +43,12 @@ extend = "fendermint-run-validator"
 env = { "CMD" = "run", "FLAGS" = "-d" }
 
 [tasks.fendermint-run-validator]
-# TODO recheck --publish
 script = """
 docker run \
   ${FLAGS} \
   --name ${FM_CONTAINER_NAME} \
   --init \
   --user $(id -u) \
-  --publish 3030:3030 \
   --network ${NETWORK_NAME} \
   --volume ${BASE_DIR}:/data \
   --publish ${RESOLVER_HOST_PORT}:${RESOLVER_HOST_PORT} \
@@ -93,14 +89,12 @@ extend = "fendermint-run-subnet"
 env = { "CMD" = "run", "FLAGS" = "-d" }
 
 [tasks.fendermint-run-subnet]
-# TODO recheck --publish
 script = """
 docker run \
   ${FLAGS} \
   --name ${FM_CONTAINER_NAME} \
   --init \
   --user $(id -u) \
-  --publish 3030:3030 \
   --network ${NETWORK_NAME} \
   --volume ${BASE_DIR}:/data \
   --publish ${RESOLVER_HOST_PORT}:${RESOLVER_HOST_PORT} \
@@ -133,13 +127,11 @@ docker run \
 dependencies = ["docker-network-create", "fendermint-deps"]
 
 [tasks.fendermint-tool]
-# TODO recheck --publish
 script.main = """
 docker run \
   ${FLAGS} \
   --init \
   --user $(id -u) \
-  --publish 3030:3030 \
   --volume ${BASE_DIR}:/data \
   --env LOG_LEVEL=${FM_LOG_LEVEL} \
   --env RUST_BACKTRACE=1 \

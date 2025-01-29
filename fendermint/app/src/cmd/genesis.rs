@@ -342,10 +342,14 @@ async fn new_genesis_from_parent(
         }
     };
 
+    println!("config: {:#?}", config);
+
     let subnet_id = args
         .subnet_id
         .parent()
         .ok_or_else(|| anyhow!("subnet is not a child"))?;
+
+    println!("{}", subnet_id);
 
     let parent_provider = IpcProvider::new_with_subnet(
         None,
@@ -355,9 +359,11 @@ async fn new_genesis_from_parent(
         },
     )?;
 
+    println!("getting genesis_info {:#?}", args.subnet_id);
+
     let genesis_info = parent_provider.get_genesis_info(&args.subnet_id).await?;
 
-    println!("{:#?}", genesis_info);
+    println!("genesis cmd: genesis_info = {:?}", genesis_info);
 
     let subnet_id = args
         .subnet_id

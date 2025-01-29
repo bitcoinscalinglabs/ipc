@@ -168,7 +168,12 @@ async fn run(settings: Settings) -> anyhow::Result<()> {
     let checkpoint_pool = CheckpointPool::new();
     let parent_finality_votes = VoteTally::empty();
 
+    tracing::info!("settings = {settings:#?}");
+
     let topdown_enabled = settings.topdown_enabled();
+    tracing::info!("topdown_enabled = {topdown_enabled}");
+    tracing::info!("temporarily disabling topdown finality");
+    let topdown_enabled = false;
 
     // If enabled, start a resolver that communicates with the application through the resolve pool.
     if settings.resolver_enabled() {
@@ -272,6 +277,9 @@ async fn run(settings: Settings) -> anyhow::Result<()> {
         info!("topdown finality disabled");
         (Arc::new(Toggle::disabled()), None)
     };
+
+    info!("topdown finality disabled");
+    let (parent_finality_provider, ipc_tuple) = (Arc::new(Toggle::disabled()), None);
 
     // Start a snapshot manager in the background.
     let snapshots = if settings.snapshots.enabled {
@@ -425,12 +433,17 @@ fn make_resolver_service(
 fn make_ipc_provider_proxy(settings: &Settings) -> anyhow::Result<IPCProviderProxy> {
     let topdown_config = settings.ipc.topdown_config()?;
 
+    println!("topdown config {topdown_config:#?}");
+
     let subnet_id = settings
         .ipc
         .subnet_id
         .parent()
         .ok_or_else(|| anyhow!("subnet has no parent"))?;
-    let subnet_id = UniversalSubnetId::from_subnet_id(&subnet_id);
+
+    println!("subnet_id {subnet_id:#?}");
+
+    let legacy_subnet_id = subnet_id.to_subnet_id()?;
 
     let subnet = ipc_provider::config::Subnet {
         id: subnet_id,
@@ -448,7 +461,7 @@ fn make_ipc_provider_proxy(settings: &Settings) -> anyhow::Result<IPCProviderPro
     info!("init ipc provider with subnet: {}", subnet.id);
 
     let ipc_provider = IpcProvider::new_with_subnet(None, subnet)?;
-    IPCProviderProxy::new(ipc_provider, settings.ipc.subnet_id.clone())
+    IPCProviderProxy::new(ipc_provider, legacy_subnet_id)
 }
 
 fn to_resolver_config(settings: &Settings) -> anyhow::Result<ipc_ipld_resolver::Config> {
