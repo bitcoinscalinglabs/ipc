@@ -6,7 +6,7 @@
 /// to ensure that they are in sync in this project.
 /// However, we should either deprecate the native actors, or make
 /// them use the types from this sdk directly.
-use crate::subnet_id::SubnetID;
+use crate::universal_subnet_id::UniversalSubnetId;
 use fvm_ipld_encoding::repr::*;
 use fvm_shared::{address::Address, clock::ChainEpoch, econ::TokenAmount};
 use serde::{Deserialize, Serialize};
@@ -74,9 +74,14 @@ pub enum AssetKind {
     ERC20,
 }
 
+pub enum ConstructParams {
+    Eth(EthConstructParams),
+    Btc(BtcConstructParams),
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ConstructParams {
-    pub parent: SubnetID,
+pub struct EthConstructParams {
+    pub parent: UniversalSubnetId,
     pub ipc_gateway_addr: Address,
     pub consensus: ConsensusType,
     pub min_validator_stake: TokenAmount,
@@ -89,6 +94,16 @@ pub struct ConstructParams {
     pub collateral_source: Asset,
     pub validator_gater: Address,
     pub validator_rewarder: Address,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BtcConstructParams {
+    pub parent: UniversalSubnetId,
+    pub min_validator_stake: u64,
+    pub min_validators: u64,
+    pub bottomup_check_period: ChainEpoch,
+    pub active_validators_limit: u16,
+    pub min_cross_msg_fee: u64,
+    pub validator_whitelist: Vec<String>,
 }
 
 /// Consensus types supported by hierarchical consensus

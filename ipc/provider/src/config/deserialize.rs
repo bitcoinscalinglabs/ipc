@@ -85,6 +85,7 @@ where
 }
 
 /// A serde deserialization method to deserialize a subnet path string into a [`SubnetID`].
+#[allow(dead_code)]
 pub(crate) fn deserialize_subnet_id<'de, D>(deserializer: D) -> anyhow::Result<SubnetID, D::Error>
 where
     D: Deserializer<'de>,

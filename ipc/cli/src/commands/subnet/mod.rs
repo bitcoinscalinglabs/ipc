@@ -41,7 +41,7 @@ pub(crate) const ZERO_ADDRESS: &str = "0000000000000000000000000000000000000000"
 #[derive(Debug, Args)]
 #[command(
     name = "subnet",
-    about = "subnet related commands such as create, join and etc"
+    about = "subnet related commands such as create, join, etc"
 )]
 #[command(args_conflicts_with_subcommands = true)]
 pub(crate) struct SubnetCommandsArgs {

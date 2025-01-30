@@ -20,7 +20,7 @@ use reqwest::header::HeaderValue;
 use reqwest::Client;
 use std::net::{IpAddr, SocketAddr};
 
-use ipc_api::subnet::{Asset, AssetKind, PermissionMode};
+use ipc_api::subnet::{Asset, AssetKind, ConstructParams, PermissionMode};
 use ipc_api::{eth_to_fil_amount, ethers_address_to_fil_address};
 
 use crate::config::subnet::SubnetConfig;
@@ -54,7 +54,7 @@ use ipc_api::checkpoint::{
 use ipc_api::cross::IpcEnvelope;
 use ipc_api::merkle::MerkleGen;
 use ipc_api::staking::{StakingChangeRequest, ValidatorInfo, ValidatorStakingInfo};
-use ipc_api::subnet::ConstructParams;
+use ipc_api::subnet::EthConstructParams;
 use ipc_api::subnet_id::SubnetID;
 use ipc_observability::lazy_static;
 use ipc_wallet::{EthKeyAddress, EvmKeyStore, PersistentKeyStore};
@@ -256,7 +256,11 @@ impl TopDownFinalityQuery for EthSubnetManager {
 
 #[async_trait]
 impl SubnetManager for EthSubnetManager {
-    async fn create_subnet(&self, from: Address, params: ConstructParams) -> Result<Address> {
+    async fn create_subnet(&self, from: Address, params: ConstructParams) -> Result<String> {
+        let params: EthConstructParams = match params {
+            ConstructParams::Eth(params) => params,
+            ConstructParams::Btc(_) => return Err(anyhow!("Unsupported subnet configuration")),
+        };
         self.ensure_same_gateway(&params.ipc_gateway_addr)?;
 
         let min_validator_stake = params
@@ -267,12 +271,13 @@ impl SubnetManager for EthSubnetManager {
 
         tracing::debug!("calling create subnet for EVM manager");
 
-        let route = subnet_id_to_evm_addresses(&params.parent)?;
+        let parent = params.parent.to_subnet_id()?;
+        let route = subnet_id_to_evm_addresses(&parent)?;
         tracing::debug!("root SubnetID as Ethereum type: {route:?}");
 
         let params = register_subnet_facet::ConstructorParams {
             parent_id: register_subnet_facet::SubnetID {
-                root: params.parent.root_id(),
+                root: parent.root_id(),
                 route,
             },
             ipc_gateway_addr: self.ipc_contract_info.gateway_addr,
@@ -320,7 +325,8 @@ impl SubnetManager for EthSubnetManager {
                                 subnet_deploy;
 
                             tracing::debug!("subnet deployed at {subnet_addr:?}");
-                            return ethers_address_to_fil_address(&subnet_addr);
+                            let addr = ethers_address_to_fil_address(&subnet_addr)?;
+                            return Ok(addr.to_string());
                         }
                         Err(_) => {
                             tracing::debug!("no event for subnet actor published yet, continue");
