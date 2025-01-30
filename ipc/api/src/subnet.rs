@@ -106,6 +106,28 @@ pub struct BtcConstructParams {
     pub validator_whitelist: Vec<String>,
 }
 
+pub enum JoinParams {
+    Eth(EthJoinParams),
+    Btc(BtcJoinParams),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EthJoinParams {
+    pub subnet_id: SubnetID,
+    pub sender: Address,
+    pub collateral: TokenAmount,
+    pub metadata: Vec<u8>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BtcJoinParams {
+    pub subnet_id: SubnetID,
+    // The x coordinate of the secp256k1 public key of the sender, hex encoded
+    pub sender_public_key: String,
+    pub collateral: u64,
+    pub ip: String,
+    pub backup_address: String,
+}
+
 /// Consensus types supported by hierarchical consensus
 #[derive(PartialEq, Eq, Clone, Copy, Debug, Deserialize_repr, Serialize_repr)]
 #[repr(u64)]
