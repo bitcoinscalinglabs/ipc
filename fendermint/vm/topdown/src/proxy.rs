@@ -43,7 +43,6 @@ pub trait ParentQueryProxy {
 }
 
 /// The proxy to the subnet's parent
-// TODO(bitcoin) switch to UniversalSubnetId
 pub struct IPCProviderProxy {
     ipc_provider: IpcProvider,
     /// The parent subnet for the child subnet we are target. We can derive from child subnet,

@@ -7,7 +7,6 @@ use fvm_shared::address::Address;
 use fvm_shared::bigint::Zero;
 use fvm_shared::econ::TokenAmount;
 use ipc_api::subnet_id::SubnetID;
-use ipc_api::universal_subnet_id::UniversalSubnetId;
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, DurationSeconds};
 use std::fmt::{Display, Formatter};
@@ -41,7 +40,6 @@ pub mod utils;
 struct IsHumanReadable;
 
 human_readable_str!(SubnetID);
-human_readable_str!(UniversalSubnetId);
 human_readable_delegate!(TokenAmount);
 
 #[derive(Debug, Deserialize, Clone)]
