@@ -27,7 +27,6 @@ use fendermint_vm_topdown::sync::launch_polling_syncer;
 use fendermint_vm_topdown::voting::{publish_vote_loop, Error as VoteError, VoteTally};
 use fendermint_vm_topdown::{CachedFinalityProvider, IPCParentFinality, Toggle};
 use fvm_shared::address::{current_network, Address, Network};
-use ipc_api::universal_subnet_id::UniversalSubnetId;
 use ipc_ipld_resolver::{Event as ResolverEvent, VoteRecord};
 use ipc_observability::observe::register_metrics as register_default_metrics;
 use ipc_provider::config::subnet::{BTCSubnet, SubnetConfig};
@@ -168,7 +167,12 @@ async fn run(settings: Settings) -> anyhow::Result<()> {
     let checkpoint_pool = CheckpointPool::new();
     let parent_finality_votes = VoteTally::empty();
 
+    tracing::info!("settings = {settings:#?}");
+
     let topdown_enabled = settings.topdown_enabled();
+    tracing::info!("topdown_enabled = {topdown_enabled}");
+    tracing::info!("temporarily disabling topdown finality");
+    let topdown_enabled = false;
 
     // If enabled, start a resolver that communicates with the application through the resolve pool.
     if settings.resolver_enabled() {
@@ -425,12 +429,15 @@ fn make_resolver_service(
 fn make_ipc_provider_proxy(settings: &Settings) -> anyhow::Result<IPCProviderProxy> {
     let topdown_config = settings.ipc.topdown_config()?;
 
+    println!("topdown config {topdown_config:#?}");
+
     let subnet_id = settings
         .ipc
         .subnet_id
         .parent()
         .ok_or_else(|| anyhow!("subnet has no parent"))?;
-    let subnet_id = UniversalSubnetId::from_subnet_id(&subnet_id);
+
+    println!("subnet_id {subnet_id:#?}");
 
     let subnet = ipc_provider::config::Subnet {
         id: subnet_id,

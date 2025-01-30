@@ -24,7 +24,6 @@ use ipc_api::ethers_address_to_fil_address;
 
 use fvm_shared::address::set_current_network;
 use ipc_api::subnet_id::SubnetID;
-use ipc_api::universal_subnet_id::UniversalSubnetId;
 use ipc_provider::config::{Config, Subnet};
 use std::fmt::Debug;
 use std::io;
@@ -181,8 +180,6 @@ pub(crate) fn get_subnet_config(
     subnet: &SubnetID,
 ) -> Result<Subnet> {
     let config = Config::from_file(&config_path)?;
-    let subnet = &UniversalSubnetId::from_subnet_id(&subnet);
-
     Ok(config
         .subnets
         .get(subnet)

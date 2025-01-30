@@ -4,24 +4,24 @@ use std::time::Duration;
 // Copyright 2022-2024 Protocol Labs
 // SPDX-License-Identifier: MIT
 use fvm_shared::address::Address;
-use ipc_api::universal_subnet_id::UniversalSubnetId;
+use ipc_api::subnet_id::SubnetID;
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, DurationSeconds};
 use url::Url;
 
 use crate::config::deserialize::{
-    deserialize_address_from_str, deserialize_eth_address_from_str, deserialize_universal_subnet_id,
+    deserialize_address_from_str, deserialize_eth_address_from_str, deserialize_subnet_id,
 };
 use crate::config::serialize::{
-    serialize_address_to_str, serialize_eth_address_to_str, serialize_universal_subnet_id_to_str,
+    serialize_address_to_str, serialize_eth_address_to_str, serialize_subnet_id_to_str,
 };
 
 /// Represents a subnet declaration in the config.
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct Subnet {
-    #[serde(deserialize_with = "deserialize_universal_subnet_id")]
-    #[serde(serialize_with = "serialize_universal_subnet_id_to_str")]
-    pub id: UniversalSubnetId,
+    #[serde(deserialize_with = "deserialize_subnet_id")]
+    #[serde(serialize_with = "serialize_subnet_id_to_str")]
+    pub id: SubnetID,
     pub config: SubnetConfig,
 }
 

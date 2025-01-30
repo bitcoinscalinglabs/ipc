@@ -275,6 +275,17 @@ pub fn subnet_id_to_eth(subnet_id: &SubnetID) -> Result<(u64, Vec<et::Address>),
             {
                 EthAddress(da.subaddress().try_into().expect("checked length"))
             }
+            // To conform to the Ethereum address length, we take the first 20 bytes
+            // of the txid (which has 32 bytes).
+            // This is how subnet id is represented in the Solidity contracts.
+            //
+            // TODO(btc) see if something is relying on these addresses being real.
+            Payload::Delegated(da)
+                if da.namespace() == ipc_api::subnet_id::BTC_NAMESPACE
+                    && da.subaddress().len() == 32 =>
+            {
+                EthAddress(da.subaddress()[..20].try_into().expect("checked length"))
+            }
             _ => return Err(AddressError::InvalidPayload),
         };
         route.push(et::H160::from(addr.0))

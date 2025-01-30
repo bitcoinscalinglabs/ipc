@@ -14,7 +14,6 @@ use ipc_api::cross::IpcEnvelope;
 use ipc_api::staking::{StakingChangeRequest, ValidatorInfo};
 use ipc_api::subnet::{Asset, ConstructParams, PermissionMode};
 use ipc_api::subnet_id::SubnetID;
-use ipc_api::universal_subnet_id::UniversalSubnetId;
 use ipc_api::validator::Validator;
 use std::collections::{BTreeMap, HashMap};
 
@@ -29,7 +28,7 @@ pub trait SubnetManager:
     /// configuration passed in `ConstructParams`.
     /// The result of the function is the ID of the subnet child from which the final
     /// subnet ID can be inferred.
-    async fn create_subnet(&self, from: Address, params: ConstructParams) -> Result<String>;
+    async fn create_subnet(&self, from: Address, params: ConstructParams) -> Result<Address>;
 
     /// Performs the call to join a subnet from a wallet address and staking an amount
     /// of collateral. This function, as well as all of the ones on this trait, can infer
@@ -173,7 +172,7 @@ pub trait SubnetManager:
     async fn get_subnet_collateral_source(&self, subnet: &SubnetID) -> Result<Asset>;
 
     /// Gets the genesis information required to bootstrap a child subnet
-    async fn get_genesis_info(&self, subnet: &UniversalSubnetId) -> Result<SubnetGenesisInfo>;
+    async fn get_genesis_info(&self, subnet: &SubnetID) -> Result<SubnetGenesisInfo>;
 
     /// Advertises the endpoint of a bootstrap node for the subnet.
     async fn add_bootstrap(

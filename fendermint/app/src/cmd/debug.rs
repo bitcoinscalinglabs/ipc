@@ -6,7 +6,6 @@ use fendermint_app_options::debug::{
     DebugArgs, DebugCommands, DebugExportTopDownEventsArgs, DebugIpcCommands,
 };
 use fendermint_vm_topdown::proxy::IPCProviderProxy;
-use ipc_api::universal_subnet_id::UniversalSubnetId;
 use ipc_provider::{
     config::subnet::{EVMSubnet, SubnetConfig},
     IpcProvider,
@@ -38,7 +37,6 @@ async fn export_topdown_events(args: &DebugExportTopDownEventsArgs) -> anyhow::R
         .subnet_id
         .parent()
         .ok_or_else(|| anyhow!("subnet is not a child"))?;
-    let subnet_id = UniversalSubnetId::from_subnet_id(&subnet_id);
 
     // Configuration for the child subnet on the parent network,
     // based on how it's done in `run.rs` and the `genesis ipc from-parent` command.

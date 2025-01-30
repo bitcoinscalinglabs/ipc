@@ -4,7 +4,7 @@
 use anyhow::{anyhow, Context};
 use fendermint_crypto::PublicKey;
 use fvm_shared::address::Address;
-use ipc_api::universal_subnet_id::ChainType;
+use ipc_api::subnet_id::NetworkType;
 use ipc_provider::config::subnet::{BTCSubnet, EVMSubnet, SubnetConfig};
 use ipc_provider::IpcProvider;
 use std::path::PathBuf;
@@ -322,14 +322,14 @@ async fn new_genesis_from_parent(
 ) -> anyhow::Result<()> {
     // provider with the parent.
     let config = match args.subnet_id.parent_network_type() {
-        Some(ChainType::Fevm) => SubnetConfig::Fevm(EVMSubnet {
+        Some(NetworkType::Fevm) => SubnetConfig::Fevm(EVMSubnet {
             provider_http: args.parent_endpoint.clone(),
             provider_timeout: None,
             auth_token: args.parent_auth_token.clone(),
             registry_addr: args.parent_registry,
             gateway_addr: args.parent_gateway,
         }),
-        Some(ChainType::Btc) => SubnetConfig::Btc(BTCSubnet {
+        Some(NetworkType::Btc) => SubnetConfig::Btc(BTCSubnet {
             provider_http: args.parent_endpoint.clone(),
             provider_timeout: None,
             auth_token: args.parent_auth_token.clone(),
@@ -342,10 +342,14 @@ async fn new_genesis_from_parent(
         }
     };
 
+    println!("config: {:#?}", config);
+
     let subnet_id = args
         .subnet_id
         .parent()
         .ok_or_else(|| anyhow!("subnet is not a child"))?;
+
+    println!("{}", subnet_id);
 
     let parent_provider = IpcProvider::new_with_subnet(
         None,
@@ -355,20 +359,16 @@ async fn new_genesis_from_parent(
         },
     )?;
 
+    println!("getting genesis_info {:#?}", args.subnet_id);
+
     let genesis_info = parent_provider.get_genesis_info(&args.subnet_id).await?;
 
-    println!("{:#?}", genesis_info);
-
-    let subnet_id = args
-        .subnet_id
-        .to_subnet_id()
-        // TODO temporary empty subnet id for non-eip155 chains
-        .unwrap_or(ipc_api::subnet_id::SubnetID::default());
+    println!("genesis cmd: genesis_info = {:?}", genesis_info);
 
     // get gateway genesis
     let ipc_params = ipc::IpcParams {
         gateway: ipc::GatewayParams {
-            subnet_id,
+            subnet_id: args.subnet_id.clone(),
             bottom_up_check_period: genesis_info.bottom_up_checkpoint_period,
             majority_percentage: genesis_info.majority_percentage,
             active_validators_limit: genesis_info.active_validators_limit,

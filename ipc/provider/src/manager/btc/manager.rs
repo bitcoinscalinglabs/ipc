@@ -8,7 +8,8 @@ use async_trait::async_trait;
 use ethers::providers::Authorization;
 use http::HeaderValue;
 use ipc_api::subnet::{Asset, AssetKind, BtcConstructParams, ConstructParams, PermissionMode};
-use ipc_api::universal_subnet_id::UniversalSubnetId;
+use ipc_api::validator::Validator;
+use ipc_api::{ethers_address_to_fil_address, token_amount_from_satoshi};
 use reqwest::Client;
 use serde_json::{json, Value};
 
@@ -78,7 +79,7 @@ impl BtcSubnetManager {
 }
 #[async_trait]
 impl SubnetManager for BtcSubnetManager {
-    async fn create_subnet(&self, _from: Address, params: ConstructParams) -> Result<String> {
+    async fn create_subnet(&self, _from: Address, params: ConstructParams) -> Result<Address> {
         let params: BtcConstructParams = match params {
             ConstructParams::Eth(_) => return Err(anyhow!("Unsupported subnet configuration")),
             ConstructParams::Btc(params) => params,
@@ -145,7 +146,7 @@ impl SubnetManager for BtcSubnetManager {
 
         tracing::info!("New subnet created with ID: {subnet_id}");
 
-        let subnet_id = UniversalSubnetId::from_str(subnet_id)?;
+        let subnet_id = SubnetID::from_str(subnet_id)?;
         let new_child = subnet_id
             .children_as_ref()
             .last()
@@ -308,15 +309,148 @@ impl SubnetManager for BtcSubnetManager {
         todo!()
     }
 
-    async fn get_genesis_info(&self, subnet: &UniversalSubnetId) -> Result<SubnetGenesisInfo> {
-        tracing::info!("getting genesis info on btc with params: {subnet:?}");
+    async fn get_genesis_info(&self, subnet_id: &SubnetID) -> Result<SubnetGenesisInfo> {
+        tracing::info!("getting genesis info on btc with params: {subnet_id:?}");
+
+        let body = json!({
+            "jsonrpc": "2.0",
+            "method": "getgenesisinfo",
+            "id": 1,
+            "params": {
+                "subnet_id": subnet_id.to_string(),
+            }
+        });
+        println!("Request body: {body:#?}");
+
+        let resp = self
+            .client
+            .post(self.rpc_url.clone())
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(anyhow!(
+                "btc getgenesisinfo request failed with status: {}",
+                resp.status()
+            ));
+        }
+
+        let data = resp.json::<Value>().await?;
+
+        if let Some(err_obj) = data.get("error") {
+            let code = err_obj
+                .get("code")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            let message = err_obj
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("Unknown error");
+            let error_data = err_obj
+                .get("data")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            return Err(anyhow!(
+                "JSON-RPC error: code={}, message={}, details={}",
+                code,
+                message,
+                error_data
+            ));
+        }
+
+        let result = data
+            .get("result")
+            .ok_or_else(|| anyhow!("No result found"))?;
+
+        println!("btc manager get genesis info result: {result:#?}");
+
+        // Check if subnet is bootstrapped
+        if result
+            .get("bootstrapped")
+            .and_then(Value::as_bool)
+            .unwrap_or_default()
+            == false
+        {
+            return Err(anyhow!("Subnet not bootstrapped"));
+        }
+
+        // Extract create_subnet_msg parameters
+        let create_subnet_msg = result
+            .get("create_subnet_msg")
+            .ok_or_else(|| anyhow!("No create_subnet_msg found"))?;
+
+        let min_validator_stake = create_subnet_msg
+            .get("min_validator_stake")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| anyhow!("Invalid min_validator_stake"))?;
+
+        let active_validators_limit = create_subnet_msg
+            .get("active_validators_limit")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| anyhow!("Invalid active_validators_limit"))?;
+
+        // Ensure active_validators_limit fits in u16
+        if active_validators_limit > u16::MAX as u64 {
+            return Err(anyhow!("active_validators_limit exceeds maximum u16 value"));
+        }
+
+        let bottomup_check_period = create_subnet_msg
+            .get("bottomup_check_period")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| anyhow!("Invalid bottomup_check_period"))?;
+
+        // Extract genesis validators
+        let genesis_validators = result
+            .get("genesis_validators")
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow!("No genesis_validators found"))?;
+
+        let validators = genesis_validators
+            .iter()
+            .filter_map(|v| {
+                let subnet_address = v.get("subnet_address")?.as_str()?;
+                let collateral = v.get("collateral")?.as_u64()?;
+                let pubkey = v.get("pubkey")?.as_str()?;
+                let pubkey = hex::decode(pubkey).ok()?;
+
+                let addr = ethers::types::Address::from_str(subnet_address).ok()?;
+                let addr = ethers_address_to_fil_address(&addr).ok()?;
+
+                // Recreate a compressed pubkey (with even y-coordinate)
+                let mut metadata: Vec<u8> = Vec::with_capacity(33);
+                metadata.push(0x02);
+                metadata.extend(pubkey);
+
+                let weight = token_amount_from_satoshi(collateral);
+
+                let v = Validator {
+                    addr,
+                    metadata,
+                    weight,
+                };
+
+                Some(v)
+            })
+            .collect();
+
+        let min_collateral = token_amount_from_satoshi(min_validator_stake);
+
+        println!("validators = {validators:#?}");
+
         Ok(SubnetGenesisInfo {
-            active_validators_limit: 10,
-            bottom_up_checkpoint_period: 1000,
-            genesis_epoch: 100,
-            majority_percentage: 66,
-            min_collateral: TokenAmount::from_whole(10000),
-            validators: vec![],
+            active_validators_limit: active_validators_limit as u16,
+            bottom_up_checkpoint_period: bottomup_check_period,
+            genesis_epoch: result
+                .get("genesis_block_height")
+                // TODO recheck parsing + casting
+                .and_then(Value::as_i64)
+                .unwrap_or(0),
+            // TODO impl majority_percentage
+            majority_percentage: 66, // Default value as per the original implementation
+            min_collateral,
+            validators,
+            // TODO impl genesis_balances
             genesis_balances: BTreeMap::new(),
             permission_mode: PermissionMode::Collateral,
             supply_source: Asset {
@@ -424,8 +558,65 @@ impl BottomUpCheckpointRelayer for BtcSubnetManager {
 impl TopDownFinalityQuery for BtcSubnetManager {
     /// Returns the genesis epoch that the subnet is created in parent network
     async fn genesis_epoch(&self, subnet_id: &SubnetID) -> Result<ChainEpoch> {
-        tracing::info!("getting genesis epoch for subnet: {subnet_id:}");
-        Ok(0)
+        tracing::info!("getting genesis epoch on btc for: {subnet_id}");
+
+        let body = json!({
+            "jsonrpc": "2.0",
+            "method": "getgenesisinfo",
+            "id": 1,
+            "params": {
+                "subnet_id": subnet_id.to_string(),
+            }
+        });
+        tracing::info!("Request body: {body:?}");
+
+        let resp = self
+            .client
+            .post(self.rpc_url.clone())
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(anyhow!(
+                "btc getgenesisinfo request failed with status: {}",
+                resp.status()
+            ));
+        }
+
+        let data = resp.json::<Value>().await?;
+
+        if let Some(err_obj) = data.get("error") {
+            let code = err_obj
+                .get("code")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            let message = err_obj
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("Unknown error");
+            let error_data = err_obj
+                .get("data")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            return Err(anyhow!(
+                "JSON-RPC error: code={}, message={}, details={}",
+                code,
+                message,
+                error_data
+            ));
+        }
+
+        let result = data
+            .get("result")
+            .ok_or_else(|| anyhow!("No result found"))?;
+
+        dbg!(result);
+
+        result
+            .get("genesis_block_height")
+            .and_then(Value::as_i64)
+            .ok_or(anyhow!("Invalid bootstrap_block_height"))
     }
     /// Returns the chain head height
     async fn chain_head_height(&self) -> Result<ChainEpoch> {

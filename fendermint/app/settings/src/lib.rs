@@ -7,6 +7,7 @@ use fvm_shared::address::Address;
 use fvm_shared::bigint::Zero;
 use fvm_shared::econ::TokenAmount;
 use ipc_api::subnet_id::SubnetID;
+use ipc_api::universal_subnet_id::UniversalSubnetId;
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, DurationSeconds};
 use std::fmt::{Display, Formatter};
@@ -40,6 +41,7 @@ pub mod utils;
 struct IsHumanReadable;
 
 human_readable_str!(SubnetID);
+human_readable_str!(UniversalSubnetId);
 human_readable_delegate!(TokenAmount);
 
 #[derive(Debug, Deserialize, Clone)]
@@ -302,7 +304,9 @@ impl Settings {
     /// then overrides from the local environment,
     /// finally parse it into the [Settings] type.
     pub fn new(config_dir: &Path, home_dir: &Path, run_mode: &str) -> Result<Self, ConfigError> {
-        Self::config(config_dir, home_dir, run_mode).and_then(Self::parse)
+        let config = Self::config(config_dir, home_dir, run_mode)?;
+        println!("fenderming Settings::new config = {config:#?}");
+        Self::parse(config)
     }
 
     /// Load the configuration into a generic data structure.

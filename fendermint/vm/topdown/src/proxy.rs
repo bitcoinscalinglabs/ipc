@@ -43,6 +43,7 @@ pub trait ParentQueryProxy {
 }
 
 /// The proxy to the subnet's parent
+// TODO(bitcoin) switch to UniversalSubnetId
 pub struct IPCProviderProxy {
     ipc_provider: IpcProvider,
     /// The parent subnet for the child subnet we are target. We can derive from child subnet,
@@ -75,7 +76,7 @@ impl ParentQueryProxy for IPCProviderProxy {
     /// Get the genesis epoch of the child subnet, i.e. the epoch that the subnet was created in
     /// the parent subnet.
     async fn get_genesis_epoch(&self) -> anyhow::Result<BlockHeight> {
-        let height = self.ipc_provider.genesis_epoch(&self.child_subnet).await?;
+        let height = self.ipc_provider.genesis_epoch(&&self.child_subnet).await?;
         Ok(height as BlockHeight)
     }
 
