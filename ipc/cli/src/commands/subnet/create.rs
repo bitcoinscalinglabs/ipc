@@ -7,13 +7,14 @@ use std::str::FromStr;
 
 use async_trait::async_trait;
 use clap::{Args, Subcommand};
+use fvm_shared::address::Address;
 use fvm_shared::clock::ChainEpoch;
 
 use ipc_api::subnet::{
     Asset, AssetKind, BtcConstructParams, ConsensusType, ConstructParams, EthConstructParams,
     PermissionMode,
 };
-use ipc_api::universal_subnet_id::UniversalSubnetId;
+use ipc_api::subnet_id::SubnetID;
 use ipc_provider::config::subnet::NetworkType;
 use ipc_provider::config::Subnet;
 use ipc_provider::IpcProvider;
@@ -33,7 +34,7 @@ impl CreateSubnet {
         arguments: &CreateSubnetArgs,
     ) -> anyhow::Result<String> {
         let mut provider = get_ipc_provider(global)?;
-        let parent = UniversalSubnetId::from_str(&arguments.parent)?;
+        let parent = SubnetID::from_str(&arguments.parent)?;
 
         let conn_to_parent = provider.get_connection(&parent)?;
         let parent_subnet = conn_to_parent.subnet();
@@ -61,17 +62,17 @@ impl CreateSubnet {
 
         let child = create?;
         // Append the new child to the parent subnet id
-        let new_subnet_id = UniversalSubnetId::new_from_parent(&parent, child);
+        let new_subnet_id = SubnetID::new_from_parent(&parent, child);
         Ok(new_subnet_id.to_string())
     }
 
     async fn create_fevm(
         provider: &mut IpcProvider,
-        parent: UniversalSubnetId,
+        parent: SubnetID,
         parent_subnet: &Subnet,
         arguments: &CreateSubnetArgs,
         fevm_args: &FevmArgs,
-    ) -> anyhow::Result<String> {
+    ) -> anyhow::Result<Address> {
         let from = match &fevm_args.from {
             Some(address) => Some(require_fil_addr_from_str(address)?),
             None => None,
@@ -114,15 +115,15 @@ impl CreateSubnet {
             .create_subnet(from, parent.clone(), construct_params)
             .await?;
 
-        Ok(addr.to_string())
+        Ok(addr)
     }
 
     async fn create_btc(
         provider: &mut IpcProvider,
-        parent: UniversalSubnetId,
+        parent: SubnetID,
         arguments: &CreateSubnetArgs,
         btc_args: &BtcArgs,
-    ) -> anyhow::Result<String> {
+    ) -> anyhow::Result<Address> {
         let whitelist = btc_args
             .validator_whitelist
             .split(',')
@@ -141,11 +142,11 @@ impl CreateSubnet {
             validator_whitelist: whitelist,
         });
 
-        let child = provider
+        let addr = provider
             .create_subnet(None, parent, construct_params)
             .await?;
 
-        Ok(child)
+        Ok(addr)
     }
 }
 

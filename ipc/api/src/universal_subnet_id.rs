@@ -1,4 +1,4 @@
-use fvm_shared::address::{Address, MAX_SUBADDRESS_LEN};
+use fvm_shared::address::Address;
 use lazy_static::lazy_static;
 use serde_tuple::{Deserialize_tuple, Serialize_tuple};
 use ssi_caips::caip2::ChainId;
@@ -7,7 +7,7 @@ use std::str::FromStr;
 
 use crate::as_human_readable_str;
 use crate::error::Error;
-use crate::subnet_id::SubnetID;
+use crate::subnet_id::{NetworkType, SubnetID};
 
 /// A helper type to determine the type of root chain
 /// based of the universal subnet id
@@ -120,8 +120,8 @@ impl UniversalSubnetId {
                     "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f" => 1,
                     // Bitcoin testnet genesis block hash
                     "000000000933ea01ad0ee984209779baaec3ced90fa3f408719526f8d77f4943" => 2,
-                    // Bitcoin testnet genesis block hash
-                    "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206" => 3,
+                    // Bitcoin regtest genesis block hash
+                    "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206" => 4,
                     // Add other Bitcoin networks as needed
                     _ => {
                         return Err(Error::InvalidID(
@@ -138,8 +138,6 @@ impl UniversalSubnetId {
 
                 // Create Bitcoin subnet with the first child as the Bitcoin address
                 let btc_id = &self.children[0];
-                // Slice to max subaddress length
-                let btc_id = &btc_id[..btc_id.len().min(MAX_SUBADDRESS_LEN)];
                 let mut subnet = SubnetID::new_btc(root_id, btc_id)?;
 
                 // Add any additional children as regular addresses
@@ -168,9 +166,14 @@ impl UniversalSubnetId {
     /// Creates a UniversalSubnetId from an existing SubnetID
     /// The root chain ID will be in the eip155 namespace
     pub fn from_subnet_id(subnet_id: &SubnetID) -> Self {
-        // Convert root ID to a CAIP-2 chain ID using eip155 namespace
+        // Convert root ID to a CAIP-2 chain ID
+        let namespace = match subnet_id.root_network_type() {
+            NetworkType::Fevm => "eip155",
+            NetworkType::Btc => "bip122",
+        };
+
         let root = ChainId {
-            namespace: "eip155".into(),
+            namespace: namespace.into(),
             reference: subnet_id.root_id().to_string(),
         };
 
@@ -392,14 +395,14 @@ mod tests {
         let bitcoin_id_str = "/bip122:000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f/4467317d030d3bcac27b897d05e7c1ad2aa138d669d017e512131852ccfbf287";
         let bitcoin_universal_id = UniversalSubnetId::from_str(bitcoin_id_str).unwrap();
         let btc_subnet_id = bitcoin_universal_id.to_subnet_id().expect("should convert");
-        assert_eq!(btc_subnet_id.network_type(), NetworkType::Btc);
+        assert_eq!(btc_subnet_id.root_network_type(), NetworkType::Btc);
         assert_eq!(btc_subnet_id.root_id(), 1);
 
         // EIP155 should succeed
         let eip155_id_str = "/eip155:1/f01001";
         let eip155_universal_id = UniversalSubnetId::from_str(eip155_id_str).unwrap();
         let eip155_subnet_id = eip155_universal_id.to_subnet_id().expect("should convert");
-        assert_eq!(eip155_subnet_id.network_type(), NetworkType::Eip155);
+        assert_eq!(eip155_subnet_id.root_network_type(), NetworkType::Fevm);
         assert_eq!(eip155_subnet_id.root_id(), 1);
     }
 

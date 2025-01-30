@@ -6,7 +6,7 @@
 /// to ensure that they are in sync in this project.
 /// However, we should either deprecate the native actors, or make
 /// them use the types from this sdk directly.
-use crate::universal_subnet_id::UniversalSubnetId;
+use crate::subnet_id::SubnetID;
 use fvm_ipld_encoding::repr::*;
 use fvm_shared::{address::Address, clock::ChainEpoch, econ::TokenAmount};
 use serde::{Deserialize, Serialize};
@@ -81,7 +81,7 @@ pub enum ConstructParams {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EthConstructParams {
-    pub parent: UniversalSubnetId,
+    pub parent: SubnetID,
     pub ipc_gateway_addr: Address,
     pub consensus: ConsensusType,
     pub min_validator_stake: TokenAmount,
@@ -97,7 +97,7 @@ pub struct EthConstructParams {
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BtcConstructParams {
-    pub parent: UniversalSubnetId,
+    pub parent: SubnetID,
     pub min_validator_stake: u64,
     pub min_validators: u64,
     pub bottomup_check_period: ChainEpoch,

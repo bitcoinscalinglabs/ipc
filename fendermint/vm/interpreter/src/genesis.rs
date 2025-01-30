@@ -565,6 +565,8 @@ fn deploy_contracts(
             GatewayParams::new(SubnetID::new(config.chain_id.into(), vec![]))
         };
 
+        println!("fendermint vm genesis deploy contracts ipc_params={ipc_params:#?}");
+
         let params = ConstructorParameters::new(ipc_params, validators)
             .context("failed to create gateway constructor")?;
 

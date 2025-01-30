@@ -1,3 +1,4 @@
+use ethers::utils::hex::hex;
 // Copyright 2022-2024 Protocol Labs
 // SPDX-License-Identifier: MIT
 use fnv::FnvHasher;
@@ -20,12 +21,12 @@ pub const MAX_CHAIN_ID: u64 = 4503599627370476;
 
 #[derive(PartialEq, Eq, Hash, Clone, Debug, Serialize, Deserialize)]
 pub enum NetworkType {
-    Eip155, // For EIP-155 chains
-    Btc,    // For Bitcoin networks
+    Fevm, // For EIP-155 chains
+    Btc,  // For Bitcoin networks
 }
 
 /// Bitcoin namespace for delegated addresses
-// TODO explain why 20
+// TODO explain why 20 + see if there's a better name
 pub const BTC_NAMESPACE: u64 = 20;
 
 /// SubnetID is a unique identifier for a subnet.
@@ -34,7 +35,7 @@ pub const BTC_NAMESPACE: u64 = 20;
 /// hierarchy where the subnet is spawned.
 #[derive(PartialEq, Eq, Hash, Clone, Debug, Serialize_tuple, Deserialize_tuple)]
 pub struct SubnetID {
-    network_type: NetworkType,
+    root_network_type: NetworkType,
     root: u64, // For FEVM: chain_id, For BTC: 1=mainnet, 2=testnet, etc
     children: Vec<Address>,
 }
@@ -43,7 +44,7 @@ as_human_readable_str!(SubnetID);
 
 lazy_static! {
     pub static ref UNDEF: SubnetID = SubnetID {
-        network_type: NetworkType::Eip155,
+        root_network_type: NetworkType::Fevm,
         root: 0,
         children: vec![],
     };
@@ -52,7 +53,7 @@ lazy_static! {
 impl SubnetID {
     pub fn new(root_id: u64, children: Vec<Address>) -> Self {
         Self {
-            network_type: NetworkType::Eip155,
+            root_network_type: NetworkType::Fevm,
             root: root_id,
             children,
         }
@@ -61,13 +62,18 @@ impl SubnetID {
     // New constructor for Bitcoin networks
     pub fn new_btc(network_id: u64, btc_id: &str) -> Result<Self, Error> {
         // Convert Bitcoin address to bytes
-        let btc_bytes = btc_id.as_bytes();
+        let btc_bytes = hex::decode(&btc_id).map_err(|_| {
+            Error::InvalidID(
+                btc_id.to_string(),
+                "Bitcoin subnet child is not a valid hex".to_string(),
+            )
+        })?;
 
         // Create delegated address with Bitcoin namespace
-        let delegated_addr = Address::new_delegated(BTC_NAMESPACE, btc_bytes)?;
+        let delegated_addr = Address::new_delegated(BTC_NAMESPACE, &btc_bytes)?;
 
         Ok(Self {
-            network_type: NetworkType::Btc,
+            root_network_type: NetworkType::Btc,
             root: network_id,
             children: vec![delegated_addr],
         })
@@ -77,14 +83,35 @@ impl SubnetID {
         let mut children = parent.children();
         children.push(subnet_act);
         Self {
-            network_type: parent.network_type(),
+            root_network_type: parent.root_network_type(),
             root: parent.root_id(),
             children,
         }
     }
 
-    pub fn network_type(&self) -> NetworkType {
-        self.network_type.clone()
+    pub fn root_network_type(&self) -> NetworkType {
+        self.root_network_type.clone()
+    }
+
+    /// Returns the network type of the parent network
+    /// If there is only one child, returns the root network type
+    /// If there are more children, returns FEVM as all intermediate networks are FEVM
+    pub fn parent_network_type(&self) -> Option<NetworkType> {
+        match self.children.len() {
+            0 => None,                           // No parent if we're at root
+            1 => Some(self.root_network_type()), // We're on L2, so return the root network type
+            _ => Some(NetworkType::Fevm),        // Anything deeper, parent is Fevm
+        }
+    }
+
+    /// Returns the network type of current chain
+    /// For the root, returns the root network type
+    /// For anything deeper, returns FEVM
+    pub fn network_type(&self) -> Option<NetworkType> {
+        match self.children.len() {
+            0 => Some(self.root_network_type()), // At root, return root network type
+            _ => Some(NetworkType::Fevm),        // Anything L2+ is Fevm
+        }
     }
 
     /// Ensures that the SubnetID only uses f0 addresses for the subnet actor
@@ -108,7 +135,7 @@ impl SubnetID {
     /// Creates a new rootnet SubnetID
     pub fn new_root(root_id: u64) -> Self {
         Self {
-            network_type: NetworkType::Eip155,
+            root_network_type: NetworkType::Fevm,
             root: root_id,
             children: vec![],
         }
@@ -231,8 +258,8 @@ impl SubnetID {
 
 impl fmt::Display for SubnetID {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let prefix = match self.network_type {
-            NetworkType::Eip155 => "/r",
+        let prefix = match self.root_network_type {
+            NetworkType::Fevm => "/r",
             NetworkType::Btc => "/b",
         };
 
@@ -265,7 +292,7 @@ impl FromStr for SubnetID {
         }
 
         let network_type = if id.starts_with("/r") {
-            NetworkType::Eip155
+            NetworkType::Fevm
         } else {
             NetworkType::Btc
         };
@@ -292,7 +319,7 @@ impl FromStr for SubnetID {
         }
 
         Ok(Self {
-            network_type,
+            root_network_type: network_type,
             root,
             children,
         })
@@ -308,24 +335,24 @@ mod tests {
     #[test]
     fn test_parse_root_net() {
         let subnet_id = SubnetID::from_str("/r123").unwrap();
-        assert_eq!(subnet_id.network_type, NetworkType::Eip155);
+        assert_eq!(subnet_id.root_network_type, NetworkType::Fevm);
         assert_eq!(subnet_id.root, 123);
     }
 
     #[test]
     fn test_parse_bitcoin_root_net() {
         let subnet_id = SubnetID::from_str("/b1").unwrap();
-        assert_eq!(subnet_id.network_type, NetworkType::Btc);
+        assert_eq!(subnet_id.root_network_type, NetworkType::Btc);
         assert_eq!(subnet_id.root, 1);
     }
 
     #[test]
     fn test_bitcoin_subnet() {
         // Test Bitcoin mainnet subnet creation
-        let btc_id = "2e87774fe9e002d7afe7bf83158dbf7ab2797ba4bcab4c6561f8b5";
+        let btc_id = "2e87774fe9e002d7afe7bf83158dbf7ab2797ba4bcab4c6561f8b5d335b8d161";
         let btc_subnet = SubnetID::new_btc(1, btc_id).unwrap();
 
-        assert_eq!(btc_subnet.network_type(), NetworkType::Btc);
+        assert_eq!(btc_subnet.root_network_type(), NetworkType::Btc);
         assert_eq!(btc_subnet.root_id(), 1);
         assert_eq!(btc_subnet.children().len(), 1);
 

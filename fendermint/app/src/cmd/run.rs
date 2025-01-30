@@ -27,7 +27,6 @@ use fendermint_vm_topdown::sync::launch_polling_syncer;
 use fendermint_vm_topdown::voting::{publish_vote_loop, Error as VoteError, VoteTally};
 use fendermint_vm_topdown::{CachedFinalityProvider, IPCParentFinality, Toggle};
 use fvm_shared::address::{current_network, Address, Network};
-use ipc_api::universal_subnet_id::UniversalSubnetId;
 use ipc_ipld_resolver::{Event as ResolverEvent, VoteRecord};
 use ipc_observability::observe::register_metrics as register_default_metrics;
 use ipc_provider::config::subnet::{BTCSubnet, SubnetConfig};
@@ -278,9 +277,6 @@ async fn run(settings: Settings) -> anyhow::Result<()> {
         (Arc::new(Toggle::disabled()), None)
     };
 
-    info!("topdown finality disabled");
-    let (parent_finality_provider, ipc_tuple) = (Arc::new(Toggle::disabled()), None);
-
     // Start a snapshot manager in the background.
     let snapshots = if settings.snapshots.enabled {
         let (manager, client) = SnapshotManager::new(
@@ -443,8 +439,6 @@ fn make_ipc_provider_proxy(settings: &Settings) -> anyhow::Result<IPCProviderPro
 
     println!("subnet_id {subnet_id:#?}");
 
-    let legacy_subnet_id = subnet_id.to_subnet_id()?;
-
     let subnet = ipc_provider::config::Subnet {
         id: subnet_id,
         // TODO(btc) btc or fevm config
@@ -461,7 +455,7 @@ fn make_ipc_provider_proxy(settings: &Settings) -> anyhow::Result<IPCProviderPro
     info!("init ipc provider with subnet: {}", subnet.id);
 
     let ipc_provider = IpcProvider::new_with_subnet(None, subnet)?;
-    IPCProviderProxy::new(ipc_provider, legacy_subnet_id)
+    IPCProviderProxy::new(ipc_provider, settings.ipc.subnet_id.clone())
 }
 
 fn to_resolver_config(settings: &Settings) -> anyhow::Result<ipc_ipld_resolver::Config> {

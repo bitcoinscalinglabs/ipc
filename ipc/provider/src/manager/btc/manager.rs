@@ -8,7 +8,6 @@ use async_trait::async_trait;
 use ethers::providers::Authorization;
 use http::HeaderValue;
 use ipc_api::subnet::{Asset, AssetKind, BtcConstructParams, ConstructParams, PermissionMode};
-use ipc_api::universal_subnet_id::UniversalSubnetId;
 use ipc_api::validator::Validator;
 use ipc_api::{ethers_address_to_fil_address, token_amount_from_satoshi};
 use reqwest::Client;
@@ -80,7 +79,7 @@ impl BtcSubnetManager {
 }
 #[async_trait]
 impl SubnetManager for BtcSubnetManager {
-    async fn create_subnet(&self, _from: Address, params: ConstructParams) -> Result<String> {
+    async fn create_subnet(&self, _from: Address, params: ConstructParams) -> Result<Address> {
         let params: BtcConstructParams = match params {
             ConstructParams::Eth(_) => return Err(anyhow!("Unsupported subnet configuration")),
             ConstructParams::Btc(params) => params,
@@ -147,7 +146,7 @@ impl SubnetManager for BtcSubnetManager {
 
         tracing::info!("New subnet created with ID: {subnet_id}");
 
-        let subnet_id = UniversalSubnetId::from_str(subnet_id)?;
+        let subnet_id = SubnetID::from_str(subnet_id)?;
         let new_child = subnet_id
             .children_as_ref()
             .last()
@@ -310,7 +309,7 @@ impl SubnetManager for BtcSubnetManager {
         todo!()
     }
 
-    async fn get_genesis_info(&self, subnet_id: &UniversalSubnetId) -> Result<SubnetGenesisInfo> {
+    async fn get_genesis_info(&self, subnet_id: &SubnetID) -> Result<SubnetGenesisInfo> {
         tracing::info!("getting genesis info on btc with params: {subnet_id:?}");
 
         let body = json!({
@@ -558,7 +557,7 @@ impl BottomUpCheckpointRelayer for BtcSubnetManager {
 #[async_trait]
 impl TopDownFinalityQuery for BtcSubnetManager {
     /// Returns the genesis epoch that the subnet is created in parent network
-    async fn genesis_epoch(&self, subnet_id: &UniversalSubnetId) -> Result<ChainEpoch> {
+    async fn genesis_epoch(&self, subnet_id: &SubnetID) -> Result<ChainEpoch> {
         tracing::info!("getting genesis epoch on btc for: {subnet_id}");
 
         let body = json!({

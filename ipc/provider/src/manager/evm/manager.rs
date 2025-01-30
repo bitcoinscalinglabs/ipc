@@ -14,7 +14,6 @@ use ipc_actors_abis::{
     subnet_actor_manager_facet, subnet_actor_reward_facet,
 };
 use ipc_api::evm::{fil_to_eth_amount, payload_to_evm_address, subnet_id_to_evm_addresses};
-use ipc_api::universal_subnet_id::UniversalSubnetId;
 use ipc_api::validator::from_contract_validators;
 use reqwest::header::HeaderValue;
 use reqwest::Client;
@@ -105,8 +104,7 @@ abigen!(
 
 #[async_trait]
 impl TopDownFinalityQuery for EthSubnetManager {
-    async fn genesis_epoch(&self, subnet_id: &UniversalSubnetId) -> Result<ChainEpoch> {
-        let subnet_id = &subnet_id.to_subnet_id()?;
+    async fn genesis_epoch(&self, subnet_id: &SubnetID) -> Result<ChainEpoch> {
         let address = contract_address_from_subnet(subnet_id)?;
         tracing::info!("querying genesis epoch in evm subnet contract: {address:}");
 
@@ -257,7 +255,7 @@ impl TopDownFinalityQuery for EthSubnetManager {
 
 #[async_trait]
 impl SubnetManager for EthSubnetManager {
-    async fn create_subnet(&self, from: Address, params: ConstructParams) -> Result<String> {
+    async fn create_subnet(&self, from: Address, params: ConstructParams) -> Result<Address> {
         let params: EthConstructParams = match params {
             ConstructParams::Eth(params) => params,
             ConstructParams::Btc(_) => return Err(anyhow!("Unsupported subnet configuration")),
@@ -272,13 +270,12 @@ impl SubnetManager for EthSubnetManager {
 
         tracing::debug!("calling create subnet for EVM manager");
 
-        let parent = params.parent.to_subnet_id()?;
-        let route = subnet_id_to_evm_addresses(&parent)?;
+        let route = subnet_id_to_evm_addresses(&params.parent)?;
         tracing::debug!("root SubnetID as Ethereum type: {route:?}");
 
         let params = register_subnet_facet::ConstructorParams {
             parent_id: register_subnet_facet::SubnetID {
-                root: parent.root_id(),
+                root: params.parent.root_id(),
                 route,
             },
             ipc_gateway_addr: self.ipc_contract_info.gateway_addr,
@@ -326,8 +323,7 @@ impl SubnetManager for EthSubnetManager {
                                 subnet_deploy;
 
                             tracing::debug!("subnet deployed at {subnet_addr:?}");
-                            let addr = ethers_address_to_fil_address(&subnet_addr)?;
-                            return Ok(addr.to_string());
+                            return ethers_address_to_fil_address(&subnet_addr);
                         }
                         Err(_) => {
                             tracing::debug!("no event for subnet actor published yet, continue");
@@ -796,12 +792,7 @@ impl SubnetManager for EthSubnetManager {
         Ok(Asset::try_from(raw)?)
     }
 
-    async fn get_genesis_info(
-        &self,
-        universal_subnet_id: &UniversalSubnetId,
-    ) -> Result<SubnetGenesisInfo> {
-        let subnet = &universal_subnet_id.to_subnet_id()?;
-
+    async fn get_genesis_info(&self, subnet: &SubnetID) -> Result<SubnetGenesisInfo> {
         let address = contract_address_from_subnet(subnet)?;
         let contract = subnet_actor_getter_facet::SubnetActorGetterFacet::new(
             address,
@@ -817,7 +808,7 @@ impl SubnetManager for EthSubnetManager {
             // Bottom-up checkpoint period set in the subnet actor.
             bottom_up_checkpoint_period,
             // Genesis epoch when the subnet was bootstrapped in the parent.
-            genesis_epoch: self.genesis_epoch(universal_subnet_id).await?,
+            genesis_epoch: self.genesis_epoch(subnet).await?,
             // Majority percentage of
             majority_percentage: contract.majority_percentage().call().await?,
             // Minimum collateral required for subnets to register into the subnet
@@ -1202,12 +1193,10 @@ impl EthSubnetManager {
         let gateway_address = payload_to_evm_address(config.gateway_addr.payload())?;
         let registry_address = payload_to_evm_address(config.registry_addr.payload())?;
 
-        let subnet_id = subnet.id.to_subnet_id()?;
-
         Ok(Self::new(
             gateway_address,
             registry_address,
-            subnet_id.chain_id(),
+            subnet.id.chain_id(),
             provider,
             keystore,
         ))

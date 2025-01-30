@@ -4,7 +4,7 @@
 
 use async_trait::async_trait;
 use clap::Args;
-use ipc_api::{subnet_id::SubnetID, universal_subnet_id::UniversalSubnetId};
+use ipc_api::subnet_id::SubnetID;
 use std::fmt::Debug;
 use std::str::FromStr;
 
@@ -22,8 +22,7 @@ impl CommandLineHandler for RPCSubnet {
 
         let provider = get_ipc_provider(global)?;
         let subnet = SubnetID::from_str(&arguments.network)?;
-        let universal_subnet_id = UniversalSubnetId::from_subnet_id(&subnet);
-        let conn = match provider.connection(&universal_subnet_id) {
+        let conn = match provider.connection(&subnet) {
             None => return Err(anyhow::anyhow!("target subnet not found")),
             Some(conn) => conn,
         };
@@ -53,8 +52,7 @@ impl CommandLineHandler for ChainIdSubnet {
 
         let provider = get_ipc_provider(global)?;
         let subnet = SubnetID::from_str(&arguments.network)?;
-        let universal_subnet_id = UniversalSubnetId::from_subnet_id(&subnet);
-        let conn = match provider.connection(&universal_subnet_id) {
+        let conn = match provider.connection(&subnet) {
             None => return Err(anyhow::anyhow!("target subnet not found")),
             Some(conn) => conn,
         };

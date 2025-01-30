@@ -201,7 +201,7 @@ pub struct TopDownSettings {
 #[derive(Debug, Deserialize, Clone)]
 pub struct IpcSettings {
     #[serde_as(as = "IsHumanReadable")]
-    pub subnet_id: UniversalSubnetId,
+    pub subnet_id: SubnetID,
     /// Interval with which votes can be gossiped.
     #[serde_as(as = "DurationSeconds<u64>")]
     pub vote_interval: Duration,
@@ -377,7 +377,7 @@ impl Settings {
     /// Indicate whether we have configured the IPLD Resolver to run.
     pub fn resolver_enabled(&self) -> bool {
         !self.resolver.connection.listen_addr.is_empty()
-            && self.ipc.subnet_id != *ipc_api::universal_subnet_id::UNDEF
+            && self.ipc.subnet_id != *ipc_api::subnet_id::UNDEF
     }
 }
 

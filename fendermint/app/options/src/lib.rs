@@ -62,7 +62,7 @@ fn set_env_from_aliases() {
 #[derive(Args, Debug)]
 pub struct GlobalArgs {
     /// Set the FVM Address Network. It's value affects whether `f` (main) or `t` (test) prefixed addresses are accepted.
-    #[arg(short, long, default_value = "mainnet", env = "FM_NETWORK", value_parser = parse_network)]
+    #[arg(short, long, default_value = "testnet", env = "FM_NETWORK", value_parser = parse_network)]
     pub network: Network,
 }
 

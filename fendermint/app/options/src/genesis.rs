@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 
 use clap::{Args, Subcommand, ValueEnum};
-use ipc_api::{subnet_id::SubnetID, universal_subnet_id::UniversalSubnetId};
+use ipc_api::subnet_id::SubnetID;
 
 use super::parse::{
     parse_eth_address, parse_full_fil, parse_network_version, parse_percentage, parse_signer_addr,
@@ -209,7 +209,7 @@ pub struct GenesisIpcGatewayArgs {
 pub struct GenesisFromParentArgs {
     /// Child subnet for with the genesis file is being created
     #[arg(long, short)]
-    pub subnet_id: UniversalSubnetId,
+    pub subnet_id: SubnetID,
 
     /// Endpoint to the RPC of the child subnet's parent
     #[arg(long, short)]
