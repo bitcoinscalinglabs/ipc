@@ -152,4 +152,20 @@ mod tests {
         let dserialized_t = fvm_ipld_encoding::from_slice(&serialized_t).unwrap();
         assert_eq!(t, dserialized_t);
     }
+
+    #[test]
+    fn test_token_amount_from_satoshis() {
+        use fvm_shared::bigint::BigInt;
+        use fvm_shared::econ::TokenAmount;
+
+        // Test with zero
+        let sats = BigInt::from(0);
+        let amount = crate::token_amount_from_satoshi(sats);
+        assert_eq!(amount, TokenAmount::from_atto(0));
+
+        // Test with large number
+        let sats = BigInt::from(1_000_000_000); // 1 billion satoshis
+        let amount = crate::token_amount_from_satoshi(sats);
+        assert_eq!(amount, TokenAmount::from_whole(10)); // 10 BTC
+    }
 }

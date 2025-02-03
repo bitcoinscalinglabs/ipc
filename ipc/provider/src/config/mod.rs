@@ -29,6 +29,15 @@ pub const JSON_RPC_VERSION: &str = "2.0";
 pub const DEFAULT_CONFIG_TEMPLATE: &str = r#"
 keystore_path = "~/.ipc"
 
+# Bitcoin Regtest
+[[subnets]]
+id = "/b4"
+
+[subnets.config]
+network_type = "btc"
+provider_http = "http://127.0.0.1:3030/api"
+auth_token = ""
+
 # Filecoin Calibration
 [[subnets]]
 id = "/r314159"
