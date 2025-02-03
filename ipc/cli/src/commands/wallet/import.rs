@@ -29,7 +29,7 @@ impl CommandLineHandler for WalletImport {
                     "{:?}",
                     provider.import_evm_key_from_privkey(key)?.to_string()
                 ),
-                WalletType::Fvm => bail!("--private-key only supported by --wallet-type=evm"),
+                WalletType::Fvm => bail!("--private-key not supported by --wallet-type=fvm"),
                 WalletType::Btc => println!(
                     "{:?}",
                     provider.import_btc_key_from_privkey(key)?.to_string()
