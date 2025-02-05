@@ -80,7 +80,11 @@ impl BtcSubnetManager {
 }
 #[async_trait]
 impl SubnetManager for BtcSubnetManager {
-    async fn create_subnet(&self, _from: Address, params: ConstructParams) -> Result<Address> {
+    async fn create_subnet(
+        &self,
+        _from: Option<Address>,
+        params: ConstructParams,
+    ) -> Result<Address> {
         let params: BtcConstructParams = match params {
             ConstructParams::Eth(_) => return Err(anyhow!("Unsupported subnet configuration")),
             ConstructParams::Btc(params) => params,

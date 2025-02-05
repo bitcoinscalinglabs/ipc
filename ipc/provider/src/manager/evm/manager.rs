@@ -257,12 +257,21 @@ impl TopDownFinalityQuery for EthSubnetManager {
 
 #[async_trait]
 impl SubnetManager for EthSubnetManager {
-    async fn create_subnet(&self, from: Address, params: ConstructParams) -> Result<Address> {
+    async fn create_subnet(
+        &self,
+        from: Option<Address>,
+        params: ConstructParams,
+    ) -> Result<Address> {
         let params: EthConstructParams = match params {
             ConstructParams::Eth(params) => params,
             ConstructParams::Btc(_) => return Err(anyhow!("Unsupported subnet configuration")),
         };
         self.ensure_same_gateway(&params.ipc_gateway_addr)?;
+
+        let from = match from {
+            Some(f) => f,
+            None => return Err(anyhow!("missing from address")),
+        };
 
         let min_validator_stake = params
             .min_validator_stake

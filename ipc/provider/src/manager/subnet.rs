@@ -28,7 +28,11 @@ pub trait SubnetManager:
     /// configuration passed in `ConstructParams`.
     /// The result of the function is the ID of the subnet child from which the final
     /// subnet ID can be inferred.
-    async fn create_subnet(&self, from: Address, params: ConstructParams) -> Result<Address>;
+    async fn create_subnet(
+        &self,
+        from: Option<Address>,
+        params: ConstructParams,
+    ) -> Result<Address>;
 
     /// Performs the call to join a subnet from a wallet address and staking an amount
     /// of collateral. This function, as well as all of the ones on this trait, can infer

@@ -262,11 +262,17 @@ impl IpcProvider {
         params: ConstructParams,
     ) -> anyhow::Result<Address> {
         let conn = self.get_connection(&parent)?;
+        let parent = conn.subnet();
 
-        let subnet = conn.subnet();
-        let sender = self.check_sender(subnet, from)?;
-
-        conn.manager().create_subnet(sender, params).await
+        match parent.config {
+            config::subnet::SubnetConfig::Fevm(_) => {
+                let sender = self.check_sender(parent, from)?;
+                conn.manager().create_subnet(Some(sender), params).await
+            }
+            config::subnet::SubnetConfig::Btc(_) => {
+                conn.manager().create_subnet(None, params).await
+            }
+        }
     }
 
     pub async fn join_subnet(
