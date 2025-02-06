@@ -99,7 +99,10 @@ impl<T: Clone + Eq + Hash + TryFrom<KeyInfo> + Default + ToString> PersistentKey
             Ok(p) => p,
             Err(e) => {
                 return if e.kind() == ErrorKind::NotFound {
-                    log::info!("key store does not exist, initialized to empty key store");
+                    log::info!(
+                        "key store does not exist, initialized to empty key store File: {:?}",
+                        path
+                    );
                     Ok(Self {
                         memory: MemoryKeyStore {
                             data: Default::default(),

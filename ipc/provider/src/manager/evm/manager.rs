@@ -20,7 +20,8 @@ use reqwest::Client;
 use std::net::{IpAddr, SocketAddr};
 
 use ipc_api::subnet::{
-    Asset, AssetKind, ConstructParams, EthJoinParams, JoinParams, PermissionMode,
+    Asset, AssetKind, ConstructParams, EthFundParams, EthJoinParams, EthPreFundParams, FundParams,
+    JoinParams, PermissionMode, PreFundParams,
 };
 use ipc_api::{eth_to_fil_amount, ethers_address_to_fil_address};
 
@@ -143,7 +144,7 @@ impl TopDownFinalityQuery for EthSubnetManager {
             Arc::new(self.ipc_contract_info.provider.clone()),
         );
 
-        let topic1 = contract_address_from_subnet(subnet_id)?;
+        let topic1: ethers::types::H160 = contract_address_from_subnet(subnet_id)?;
         tracing::debug!(
             "getting top down messages for subnet: {:?} with topic 1: {}",
             subnet_id,
@@ -384,21 +385,28 @@ impl SubnetManager for EthSubnetManager {
         block_number_from_receipt(receipt)
     }
 
-    async fn pre_fund(&self, subnet: SubnetID, from: Address, balance: TokenAmount) -> Result<()> {
-        let balance = balance
+    async fn pre_fund(&self, params: PreFundParams) -> Result<()> {
+        let params: EthPreFundParams = match params {
+            PreFundParams::Eth(params) => params,
+            PreFundParams::Btc(_) => return Err(anyhow!("Unsupported subnet configuration")),
+        };
+        let balance = params
+            .amount
             .atto()
             .to_u128()
             .ok_or_else(|| anyhow!("invalid initial balance"))?;
 
-        let address = contract_address_from_subnet(&subnet)?;
+        let address = contract_address_from_subnet(&params.subnet_id)?;
         tracing::info!("interacting with evm subnet contract: {address:} with balance: {balance:}");
 
-        let signer = Arc::new(self.get_signer_with_fee_estimator(&from)?);
+        let signer = Arc::new(self.get_signer_with_fee_estimator(&params.sender)?);
         let contract =
             subnet_actor_manager_facet::SubnetActorManagerFacet::new(address, signer.clone());
 
         let mut txn = contract.pre_fund(U256::from(balance));
-        txn = self.handle_txn_token(&subnet, txn, 0, balance).await?;
+        txn = self
+            .handle_txn_token(&params.subnet_id, txn, balance, 0)
+            .await?;
 
         let txn = extend_call_with_pending_block(txn).await?;
 
@@ -559,27 +567,29 @@ impl SubnetManager for EthSubnetManager {
         Ok(())
     }
 
-    async fn fund(
-        &self,
-        subnet: SubnetID,
-        gateway_addr: Address,
-        from: Address,
-        to: Address,
-        amount: TokenAmount,
-    ) -> Result<ChainEpoch> {
+    async fn fund(&self, gateway_addr: Address, params: FundParams) -> Result<ChainEpoch> {
+        let params: EthFundParams = match params {
+            FundParams::Eth(params) => params,
+            FundParams::Btc(_) => return Err(anyhow!("Unsupported subnet configuration")),
+        };
+
         self.ensure_same_gateway(&gateway_addr)?;
 
-        let value = amount
+        let value = params
+            .amount
             .atto()
             .to_u128()
             .ok_or_else(|| anyhow!("invalid value to fund"))?;
 
-        tracing::info!("fund with evm gateway contract: {gateway_addr:} with value: {value:}, original: {amount:?}");
+        tracing::info!(
+            "fund with evm gateway contract: {gateway_addr:} with value: {value:}, original: {:?}",
+            params.amount
+        );
 
-        let evm_subnet_id = gateway_manager_facet::SubnetID::try_from(&subnet)?;
+        let evm_subnet_id = gateway_manager_facet::SubnetID::try_from(&params.subnet_id)?;
         tracing::debug!("evm subnet id to fund: {evm_subnet_id:?}");
 
-        let signer = Arc::new(self.get_signer_with_fee_estimator(&from)?);
+        let signer = Arc::new(self.get_signer_with_fee_estimator(&params.sender)?);
         let gateway_contract = gateway_manager_facet::GatewayManagerFacet::new(
             self.ipc_contract_info.gateway_addr,
             signer.clone(),
@@ -587,7 +597,7 @@ impl SubnetManager for EthSubnetManager {
 
         let mut txn = gateway_contract.fund(
             evm_subnet_id,
-            gateway_manager_facet::FvmAddress::try_from(to)?,
+            gateway_manager_facet::FvmAddress::try_from(params.to)?,
         );
         txn.tx.set_value(value);
         let txn = extend_call_with_pending_block(txn).await?;

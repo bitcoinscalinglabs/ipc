@@ -134,3 +134,43 @@ pub struct BtcJoinParams {
 pub enum ConsensusType {
     Fendermint,
 }
+
+pub enum PreFundParams {
+    Eth(EthPreFundParams),
+    Btc(BtcPreFundParams),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EthPreFundParams {
+    pub subnet_id: SubnetID,
+    pub sender: Address,
+    pub amount: TokenAmount,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BtcPreFundParams {
+    pub subnet_id: SubnetID,
+    pub sender: Address,
+    pub amount: u64,
+}
+
+pub enum FundParams {
+    Eth(EthFundParams),
+    Btc(BtcFundParams),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EthFundParams {
+    pub subnet_id: SubnetID,
+    pub sender: Address,
+    pub to: Address,
+    pub amount: TokenAmount,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BtcFundParams {
+    pub subnet_id: SubnetID,
+    pub sender: Address,
+    pub to: Address,
+    pub amount: u64,
+}
