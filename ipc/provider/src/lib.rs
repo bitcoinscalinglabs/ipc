@@ -13,7 +13,10 @@ use ipc_api::checkpoint::consensus::ValidatorData;
 use ipc_api::checkpoint::{BottomUpCheckpointBundle, QuorumReachedEvent};
 use ipc_api::evm::payload_to_evm_address;
 use ipc_api::staking::{StakingChangeRequest, ValidatorInfo};
-use ipc_api::subnet::{BtcJoinParams, ConstructParams, EthJoinParams, JoinParams};
+use ipc_api::subnet::{
+    BtcFundParams, BtcJoinParams, BtcPreFundParams, ConstructParams, EthFundParams, EthJoinParams,
+    EthPreFundParams, FundParams, JoinParams, PreFundParams,
+};
 use ipc_api::{cross::IpcEnvelope, subnet_id::SubnetID};
 use ipc_wallet::{
     parse_and_validate_secret_key, EthKeyAddress, EvmKeyStore, KeyStore, KeyStoreConfig,
@@ -372,14 +375,27 @@ impl IpcProvider {
         &mut self,
         subnet: SubnetID,
         from: Option<Address>,
-        balance: TokenAmount,
+        balance: f64,
     ) -> anyhow::Result<()> {
         let parent = subnet.parent().ok_or_else(|| anyhow!("no parent found"))?;
         let conn = self.get_connection(&parent)?;
         let subnet_config = conn.subnet();
         let sender = self.check_sender(subnet_config, from)?;
 
-        conn.manager().pre_fund(subnet, sender, balance).await
+        let params = match subnet_config.config {
+            config::subnet::SubnetConfig::Fevm(_) => PreFundParams::Eth(EthPreFundParams {
+                subnet_id: subnet,
+                sender: sender,
+                amount: TokenAmount::from_nano(balance as u128),
+            }),
+            config::subnet::SubnetConfig::Btc(_) => PreFundParams::Btc(BtcPreFundParams {
+                subnet_id: subnet,
+                sender: sender,
+                amount: balance as u64,
+            }),
+        };
+
+        conn.manager().pre_fund(params).await
     }
 
     pub async fn pre_release(
@@ -494,21 +510,37 @@ impl IpcProvider {
         gateway_addr: Option<Address>,
         from: Option<Address>,
         to: Option<Address>,
-        amount: TokenAmount,
+        amount: f64,
     ) -> anyhow::Result<ChainEpoch> {
         let parent = subnet.parent().ok_or_else(|| anyhow!("no parent found"))?;
-        let conn = self.get_connection(&parent)?;
+        let parent_conn = self.get_connection(&parent)?;
 
-        let subnet_config = conn.subnet();
-        let sender = self.check_sender(subnet_config, from)?;
+        let parent_config = parent_conn.subnet();
+        let sender = self.check_sender(parent_config, from)?;
 
-        let gateway_addr = match gateway_addr {
-            None => subnet_config.gateway_addr(),
+        let parent_gateway_addr = match gateway_addr {
+            None => parent_config.gateway_addr(),
             Some(addr) => addr,
         };
 
-        conn.manager()
-            .fund(subnet, gateway_addr, sender, to.unwrap_or(sender), amount)
+        let params = match parent_config.config {
+            config::subnet::SubnetConfig::Fevm(_) => FundParams::Eth(EthFundParams {
+                subnet_id: subnet,
+                sender: sender,
+                to: to.unwrap_or(sender),
+                amount: TokenAmount::from_nano(amount as u128),
+            }),
+            config::subnet::SubnetConfig::Btc(_) => FundParams::Btc(BtcFundParams {
+                subnet_id: subnet,
+                sender: sender,
+                to: to.unwrap_or(sender),
+                amount: amount as u64,
+            }),
+        };
+
+        parent_conn
+            .manager()
+            .fund(parent_gateway_addr, params)
             .await
     }
 

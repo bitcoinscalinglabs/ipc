@@ -66,11 +66,7 @@ impl JoinSubnet {
         if let Some(initial_balance) = arguments.initial_balance.filter(|x| !x.is_zero()) {
             log::info!("pre-funding address with {initial_balance}");
             provider
-                .pre_fund(
-                    subnet_id.clone(),
-                    from,
-                    f64_to_token_amount(initial_balance)?,
-                )
+                .pre_fund(subnet_id.clone(), from, initial_balance)
                 .await?;
         };
 
@@ -93,9 +89,12 @@ impl JoinSubnet {
             None => None,
         };
 
-        if let Some(_) = arguments.initial_balance.filter(|x| !x.is_zero()) {
-            unimplemented!("pre-funding not yet implemented for BTC");
-        }
+        if let Some(initial_balance) = arguments.initial_balance.filter(|x| !x.is_zero()) {
+            log::info!("pre-funding address with {initial_balance}");
+            provider
+                .pre_fund(subnet_id.clone(), from, initial_balance)
+                .await?;
+        };
 
         let epoch = provider
             .join_subnet(

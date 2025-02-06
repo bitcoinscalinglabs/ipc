@@ -12,7 +12,9 @@ use ipc_api::checkpoint::{
 };
 use ipc_api::cross::IpcEnvelope;
 use ipc_api::staking::{StakingChangeRequest, ValidatorInfo};
-use ipc_api::subnet::{Asset, ConstructParams, JoinParams, PermissionMode};
+use ipc_api::subnet::{
+    Asset, ConstructParams, FundParams, JoinParams, PermissionMode, PreFundParams,
+};
 use ipc_api::subnet_id::SubnetID;
 use ipc_api::validator::Validator;
 use std::collections::{BTreeMap, HashMap};
@@ -42,7 +44,7 @@ pub trait SubnetManager:
 
     /// Adds some initial balance to an address before a child subnet bootstraps to make
     /// it available in the subnet at genesis.
-    async fn pre_fund(&self, subnet: SubnetID, from: Address, balance: TokenAmount) -> Result<()>;
+    async fn pre_fund(&self, params: PreFundParams) -> Result<()>;
 
     /// Releases initial funds from an address for a subnet that has not yet been bootstrapped
     async fn pre_release(&self, subnet: SubnetID, from: Address, amount: TokenAmount)
@@ -75,14 +77,7 @@ pub trait SubnetManager:
 
     /// Fund injects new funds from an account of the parent chain to a subnet.
     /// Returns the epoch that the fund is executed in the parent.
-    async fn fund(
-        &self,
-        subnet: SubnetID,
-        gateway_addr: Address,
-        from: Address,
-        to: Address,
-        amount: TokenAmount,
-    ) -> Result<ChainEpoch>;
+    async fn fund(&self, gateway_addr: Address, params: FundParams) -> Result<ChainEpoch>;
 
     /// Sends funds to a specified subnet receiver using ERC20 tokens.
     /// This function locks the amount of ERC20 tokens into custody and then mints the supply in the specified subnet.

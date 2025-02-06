@@ -7,7 +7,10 @@ use std::str::FromStr;
 use async_trait::async_trait;
 use ethers::providers::Authorization;
 use http::HeaderValue;
-use ipc_api::subnet::{Asset, AssetKind, BtcConstructParams, ConstructParams, PermissionMode};
+use ipc_api::subnet::{
+    Asset, AssetKind, BtcConstructParams, BtcFundParams, BtcPreFundParams, ConstructParams,
+    FundParams, PermissionMode, PreFundParams,
+};
 use ipc_api::subnet::{BtcJoinParams, JoinParams};
 use ipc_api::validator::Validator;
 use ipc_api::{ethers_address_to_fil_address, token_amount_from_satoshi};
@@ -231,14 +234,63 @@ impl SubnetManager for BtcSubnetManager {
         return Ok(0);
     }
 
-    async fn pre_fund(
-        &self,
-        subnet: SubnetID,
-        _from: Address,
-        _balancee: TokenAmount,
-    ) -> Result<()> {
-        tracing::info!("pre-fund subnet on btc with params: {subnet:?}");
-        todo!()
+    async fn pre_fund(&self, params: PreFundParams) -> Result<()> {
+        let params: BtcPreFundParams = match params {
+            PreFundParams::Eth(_) => return Err(anyhow!("Unsupported subnet configuration")),
+            PreFundParams::Btc(params) => params,
+        };
+        tracing::info!("pre-fund subnet on btc with params: {params:?}");
+
+        let body = json!({
+            "jsonrpc": "2.0",
+            "method": "prefundsubnet",
+            "id": 1,
+            "params": {
+                "subnet_id":        params.subnet_id.to_string(),
+                "amount":           params.amount,
+                "address":          params.sender,
+            }
+        });
+        tracing::info!("Request body: {}", body);
+
+        let resp = self
+            .client
+            .post(self.rpc_url.clone())
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(anyhow!(
+                "Pre-fund request failed with status: {}",
+                resp.status()
+            ));
+        }
+
+        let data = resp.json::<Value>().await?;
+
+        if let Some(err_obj) = data.get("error") {
+            let code = err_obj
+                .get("code")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            let message = err_obj
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("Unknown error");
+            let error_data = err_obj
+                .get("data")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            return Err(anyhow!(
+                "JSON-RPC error: code={}, message={}, details={}",
+                code,
+                message,
+                error_data
+            ));
+        }
+
+        Ok(())
     }
 
     async fn pre_release(
@@ -294,15 +346,12 @@ impl SubnetManager for BtcSubnetManager {
         todo!()
     }
 
-    async fn fund(
-        &self,
-        subnet: SubnetID,
-        _gateway_addr: Address,
-        _from: Address,
-        _to: Address,
-        _amount: TokenAmount,
-    ) -> Result<ChainEpoch> {
-        tracing::info!("funding on btc with params: {subnet:?}");
+    async fn fund(&self, _gateway_addr: Address, params: FundParams) -> Result<ChainEpoch> {
+        let params: BtcFundParams = match params {
+            FundParams::Eth(_) => return Err(anyhow!("Unsupported subnet configuration")),
+            FundParams::Btc(params) => params,
+        };
+        tracing::info!("funding on btc with params: {params:?}");
         todo!()
     }
 
@@ -695,7 +744,21 @@ impl TopDownFinalityQuery for BtcSubnetManager {
         _epoch: ChainEpoch,
     ) -> Result<TopDownQueryPayload<Vec<IpcEnvelope>>> {
         tracing::info!("getting top down messages for subnet: {subnet_id:}");
-        todo!()
+
+        // Call the "get_postbox" method of bitcoin-ipc
+        let mut messages: Vec<IpcEnvelope> = vec![];
+        messages.push(IpcEnvelope {
+            kind: todo!(),
+            to: todo!(),
+            value: todo!(),
+            from: todo!(),
+            message: todo!(),
+            nonce: todo!(),
+        });
+        Ok(TopDownQueryPayload {
+            value: messages,
+            block_hash: todo!(),
+        })
     }
     /// Get the block hash
     async fn get_block_hash(&self, height: ChainEpoch) -> Result<GetBlockHashResult> {
