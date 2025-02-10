@@ -36,6 +36,9 @@ impl CommandLineHandler for WalletNew {
                 )?;
                 println!("{:?}", provider.new_fvm_key(tp)?)
             }
+            WalletType::Btc => {
+                println!("{:?}", provider.new_btc_key()?)
+            }
         };
 
         Ok(())

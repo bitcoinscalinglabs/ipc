@@ -99,6 +99,9 @@ impl CommandLineHandler for WalletBalances {
                     println!("{:?} - Balance: {}", addr, balance);
                 }
             }
+            WalletType::Btc => {
+                unimplemented!()
+            }
         };
 
         Ok(())

@@ -20,7 +20,13 @@ pub(crate) struct WalletExport;
 
 impl WalletExport {
     fn export_evm(provider: &IpcProvider, arguments: &WalletExportArgs) -> anyhow::Result<String> {
-        let keystore = provider.evm_wallet()?;
+        let wallet_type = WalletType::from_str(&arguments.wallet_type)?;
+        let keystore = if wallet_type == WalletType::Evm {
+            provider.evm_wallet()?
+        } else {
+            provider.btc_wallet()?
+        };
+
         let address = ethers::types::Address::from_str(&arguments.address)?;
 
         let key_info = keystore
@@ -76,7 +82,7 @@ impl CommandLineHandler for WalletExport {
 
         let wallet_type = WalletType::from_str(&arguments.wallet_type)?;
         let v = match wallet_type {
-            WalletType::Evm => WalletExport::export_evm(&provider, arguments),
+            WalletType::Evm | WalletType::Btc => WalletExport::export_evm(&provider, arguments),
             WalletType::Fvm => WalletExport::export_fvm(&provider, arguments),
         }?;
 
@@ -152,6 +158,23 @@ impl WalletPublicKey {
         let sk = libsecp256k1::SecretKey::parse_slice(key_info.private_key())?;
         Ok(hex::encode(libsecp256k1::PublicKey::from_secret_key(&sk).serialize()).to_string())
     }
+
+    fn pubkey_btc(
+        provider: &IpcProvider,
+        arguments: &WalletPublicKeyArgs,
+    ) -> anyhow::Result<String> {
+        let keystore = provider.btc_wallet()?;
+        let address = ethers::types::Address::from_str(&arguments.address)?;
+
+        let key_info = keystore
+            .read()
+            .map_err(|e| anyhow::anyhow!("Failed to read btc keystore: {}", e))?
+            .get(&address.into())?
+            .ok_or_else(|| anyhow!("key does not exists"))?;
+
+        let sk = ipc_wallet::parse_and_validate_secret_key(key_info.private_key())?;
+        Ok(hex::encode(libsecp256k1::PublicKey::from_secret_key(&sk).serialize()).to_string())
+    }
 }
 
 #[async_trait]
@@ -167,6 +190,7 @@ impl CommandLineHandler for WalletPublicKey {
         let v = match wallet_type {
             WalletType::Evm => WalletPublicKey::pubkey_evm(&provider, arguments),
             WalletType::Fvm => WalletPublicKey::pubkey_fvm(&provider, arguments),
+            WalletType::Btc => WalletPublicKey::pubkey_btc(&provider, arguments),
         }?;
         println!("{v}");
         Ok(())

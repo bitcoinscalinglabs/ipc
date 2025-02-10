@@ -16,7 +16,8 @@ use ipc_api::staking::{StakingChangeRequest, ValidatorInfo};
 use ipc_api::subnet::{BtcJoinParams, ConstructParams, EthJoinParams, JoinParams};
 use ipc_api::{cross::IpcEnvelope, subnet_id::SubnetID};
 use ipc_wallet::{
-    EthKeyAddress, EvmKeyStore, KeyStore, KeyStoreConfig, PersistentKeyStore, Wallet,
+    parse_and_validate_secret_key, EthKeyAddress, EvmKeyStore, KeyStore, KeyStoreConfig,
+    PersistentKeyStore, Wallet,
 };
 use lotus::message::wallet::WalletKeyType;
 use manager::{BtcSubnetManager, EthSubnetManager, SubnetGenesisInfo, SubnetInfo, SubnetManager};
@@ -64,6 +65,7 @@ pub struct IpcProvider {
     config: Arc<Config>,
     fvm_wallet: Option<Arc<RwLock<Wallet>>>,
     evm_keystore: Option<Arc<RwLock<PersistentKeyStore<EthKeyAddress>>>>,
+    btc_keystore: Option<Arc<RwLock<PersistentKeyStore<EthKeyAddress>>>>,
 }
 
 impl IpcProvider {
@@ -71,12 +73,15 @@ impl IpcProvider {
         config: Arc<Config>,
         fvm_wallet: Arc<RwLock<Wallet>>,
         evm_keystore: Arc<RwLock<PersistentKeyStore<EthKeyAddress>>>,
+        // TODO(Orestis): See if we have to change EthKeyAddress to something else
+        btc_keystore: Arc<RwLock<PersistentKeyStore<EthKeyAddress>>>,
     ) -> Self {
         Self {
             sender: None,
             config,
             fvm_wallet: Some(fvm_wallet),
             evm_keystore: Some(evm_keystore),
+            btc_keystore: Some(btc_keystore),
         }
     }
 
@@ -88,7 +93,8 @@ impl IpcProvider {
             config.clone(),
         )?)));
         let evm_keystore = Arc::new(RwLock::new(new_evm_keystore_from_config(config.clone())?));
-        Ok(Self::new(config, fvm_wallet, evm_keystore))
+        let btc_keystore = Arc::new(RwLock::new(new_btc_keystore_from_config(config.clone())?));
+        Ok(Self::new(config, fvm_wallet, evm_keystore, btc_keystore))
     }
 
     /// Initializes a new `IpcProvider` configured to interact with
@@ -106,13 +112,15 @@ impl IpcProvider {
                 &repo_path,
             )?)));
             let evm_keystore = Arc::new(RwLock::new(new_evm_keystore_from_path(&repo_path)?));
-            Ok(Self::new(config, fvm_wallet, evm_keystore))
+            let btc_keystore = Arc::new(RwLock::new(new_btc_keystore_from_path(&repo_path)?));
+            Ok(Self::new(config, fvm_wallet, evm_keystore, btc_keystore))
         } else {
             Ok(Self {
                 sender: None,
                 config,
                 fvm_wallet: None,
                 evm_keystore: None,
+                btc_keystore: None,
             })
         }
     }
@@ -198,6 +206,14 @@ impl IpcProvider {
         }
     }
 
+    pub fn btc_wallet(&self) -> anyhow::Result<Arc<RwLock<PersistentKeyStore<EthKeyAddress>>>> {
+        if let Some(wallet) = &self.btc_keystore {
+            Ok(wallet.clone())
+        } else {
+            Err(anyhow!("No btc keystore found in provider"))
+        }
+    }
+
     fn check_sender(
         &mut self,
         subnet: &config::Subnet,
@@ -229,9 +245,15 @@ impl IpcProvider {
             }
             config::subnet::SubnetConfig::Btc(_) => {
                 if self.sender.is_none() {
-                    let wallet = self.evm_wallet()?;
-                    let addr = match wallet.write().unwrap().get_default()? {
-                        None => return Err(anyhow!("no default evm account configured")),
+                    let wallet = self.btc_wallet()?;
+                    let addr = match wallet
+                        .write()
+                        .map_err(|e| {
+                            anyhow::anyhow!("Failed to get the lock for btc keystore: {}", e)
+                        })?
+                        .get_default()?
+                    {
+                        None => return Err(anyhow!("no default btc key configured")),
                         Some(addr) => Address::try_from(addr)?,
                     };
                     self.sender = Some(addr);
@@ -289,38 +311,53 @@ impl IpcProvider {
         let parent_config = parent_conn.subnet();
         let sender = self.check_sender(parent_config, from)?;
         let addr_payload = sender.payload();
-
         let addr = payload_to_evm_address(addr_payload)?;
-        let keystore = self.evm_wallet()?;
-        let key_info = keystore
-            .read()
-            .unwrap()
-            .get(&addr.into())?
-            .ok_or_else(|| anyhow!("key does not exist"))?;
-        let sk = libsecp256k1::SecretKey::parse_slice(key_info.private_key())?;
-        let public_key = libsecp256k1::PublicKey::from_secret_key(&sk);
-        let hex_public_key = hex::encode(public_key.serialize());
-        log::info!("joining subnet using public key: {hex_public_key:?}");
 
         let params = match parent_config.config {
-            config::subnet::SubnetConfig::Fevm(_) => JoinParams::Eth(EthJoinParams {
-                subnet_id: subnet,
-                sender: sender,
-                collateral: TokenAmount::from_nano(collateral as u128),
-                metadata: public_key.serialize().to_vec(),
-            }),
+            config::subnet::SubnetConfig::Fevm(_) => {
+                let keystore = self.evm_wallet()?;
+                let key_info = keystore
+                    .read()
+                    .unwrap()
+                    .get(&addr.into())?
+                    .ok_or_else(|| anyhow!("key does not exist"))?;
+                let sk = libsecp256k1::SecretKey::parse_slice(key_info.private_key())?;
+                let public_key = libsecp256k1::PublicKey::from_secret_key(&sk);
+                let hex_public_key = hex::encode(public_key.serialize());
+                log::info!("joining subnet using public key: {hex_public_key:?}");
+
+                JoinParams::Eth(EthJoinParams {
+                    subnet_id: subnet,
+                    sender: sender,
+                    collateral: TokenAmount::from_nano(collateral as u128),
+                    metadata: public_key.serialize().to_vec(),
+                })
+            }
             config::subnet::SubnetConfig::Btc(_) => {
+                let keystore = self.btc_wallet()?;
+                let key_info = keystore
+                    .read()
+                    .map_err(|e| anyhow::anyhow!("Failed to get the lock for btc keystore: {}", e))?
+                    .get(&addr.into())?
+                    .ok_or_else(|| anyhow!("btc key does not exist"))?;
+                let sk = ipc_wallet::parse_and_validate_secret_key(key_info.private_key())?;
+                let public_key = ipc_wallet::get_xonly_public_key_serialized(&sk)?;
+                let hex_public_key = hex::encode(public_key);
+                log::info!("joining subnet using public key: {hex_public_key:?}");
+
                 let ip = match validator_ip {
                     Some(ip) => ip,
                     None => return Err(anyhow!("validator ip is required")),
                 };
+
                 let backup_address = match backup_address {
                     Some(backup_address) => backup_address,
                     None => return Err(anyhow!("backup address is required")),
                 };
+
                 JoinParams::Btc(BtcJoinParams {
                     subnet_id: subnet,
-                    sender_public_key: hex::encode(serialize_x_coordinate(&public_key)?),
+                    sender_public_key: hex_public_key,
                     collateral: collateral as u64,
                     ip,
                     backup_address,
@@ -896,6 +933,40 @@ impl IpcProvider {
         let persisted: String = persisted.private_key().parse()?;
         self.import_evm_key_from_privkey(&persisted)
     }
+
+    pub fn new_btc_key(&self) -> anyhow::Result<EthKeyAddress> {
+        let key_info = ipc_wallet::random_btc_secret_key();
+        let keystore: Arc<RwLock<PersistentKeyStore<EthKeyAddress>>> = self.btc_wallet()?;
+
+        let out = keystore
+            .write()
+            .map_err(|_| anyhow!("Poisoned lock while writing to btc keystore"))?
+            .put(key_info);
+        out
+    }
+
+    pub fn import_btc_key_from_privkey(&self, private_key: &str) -> anyhow::Result<EthKeyAddress> {
+        let keystore = self.btc_wallet()?;
+        let mut keystore = keystore
+            .write()
+            .map_err(|_| anyhow!("Poisoned lock while writing to btc keystore"))?;
+
+        let private_key_str = if !private_key.starts_with("0x") {
+            hex::decode(private_key)?
+        } else {
+            hex::decode(&private_key[2..])?
+        };
+        let private_key = parse_and_validate_secret_key(&private_key_str)?;
+        keystore.put(ipc_wallet::EvmKeyInfo::new(
+            private_key.serialize().to_vec(),
+        ))
+    }
+
+    pub fn import_btc_key_from_json(&self, keyinfo: &str) -> anyhow::Result<EthKeyAddress> {
+        let persisted: ipc_wallet::PersistentKeyInfo = serde_json::from_str(keyinfo)?;
+        let persisted: String = persisted.private_key().parse()?;
+        self.import_btc_key_from_privkey(&persisted)
+    }
 }
 
 fn new_fvm_wallet_from_config(config: Arc<Config>) -> anyhow::Result<KeyStore> {
@@ -936,6 +1007,27 @@ pub fn new_fvm_keystore_from_path(repo_str: &str) -> anyhow::Result<KeyStore> {
     KeyStore::new(keystore_config).map_err(|e| anyhow!("Failed to create keystore: {}", e))
 }
 
+// TODO(Orestis): See if you have to change EthKeyAddress to something else
+pub fn new_btc_keystore_from_config(
+    config: Arc<Config>,
+) -> anyhow::Result<PersistentKeyStore<EthKeyAddress>> {
+    let repo_str = &config.keystore_path;
+    if let Some(repo_str) = repo_str {
+        new_btc_keystore_from_path(repo_str)
+    } else {
+        Err(anyhow!("No keystore repo found in config"))
+    }
+}
+
+// TODO(Orestis): Merge these two functions with the evm ones
+pub fn new_btc_keystore_from_path(
+    repo_str: &str,
+) -> anyhow::Result<PersistentKeyStore<EthKeyAddress>> {
+    let repo = Path::new(&repo_str).join(ipc_wallet::DEFAULT_BTC_KEYSTORE_NAME);
+    let repo = expand_tilde(repo);
+    PersistentKeyStore::new(repo).map_err(|e| anyhow!("Failed to create btc keystore: {}", e))
+}
+
 pub fn default_repo_path() -> String {
     let home = match std::env::var("HOME") {
         Ok(home) => home,
@@ -968,16 +1060,4 @@ pub fn expand_tilde<P: AsRef<Path>>(path: P) -> PathBuf {
             }
         })
         .unwrap_or(p)
-}
-
-// TODO(Orestis): Move this into the ipc wallet module
-pub fn serialize_x_coordinate(public_key: &libsecp256k1::PublicKey) -> anyhow::Result<[u8; 32]> {
-    let compressed = public_key.serialize_compressed();
-    if compressed[0] != libsecp256k1_core::util::TAG_PUBKEY_EVEN {
-        return Err(anyhow!("Invalid public key, y coordinate not even"));
-    }
-
-    let mut ret = [0u8; 32];
-    ret.copy_from_slice(&compressed[1..33]);
-    Ok(ret)
 }

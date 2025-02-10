@@ -3,6 +3,7 @@
 
 //! Ethereum wallet key store.
 
+pub mod btc_keys;
 mod memory;
 mod persistent;
 

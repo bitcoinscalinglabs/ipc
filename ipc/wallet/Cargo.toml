@@ -19,6 +19,7 @@ fvm_shared = { workspace = true, features = ["crypto"] }
 hex = { workspace = true }
 libc = "0.2"
 libsecp256k1 = { workspace = true }
+libsecp256k1-core = "0.3.0"
 log = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
