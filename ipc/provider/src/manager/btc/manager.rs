@@ -7,6 +7,7 @@ use std::str::FromStr;
 use async_trait::async_trait;
 use ethers::providers::Authorization;
 use http::HeaderValue;
+use ipc_api::evm::payload_to_evm_address;
 use ipc_api::subnet::{
     Asset, AssetKind, BtcConstructParams, BtcFundParams, BtcPreFundParams, ConstructParams,
     FundParams, PermissionMode, PreFundParams,
@@ -248,10 +249,10 @@ impl SubnetManager for BtcSubnetManager {
             "params": {
                 "subnet_id":        params.subnet_id.to_string(),
                 "amount":           params.amount,
-                "address":          params.sender,
+                "address":          payload_to_evm_address(params.sender.payload())?,
             }
         });
-        tracing::info!("Request body: {}", body);
+        tracing::info!("Request body: {body:?}");
 
         let resp = self
             .client
