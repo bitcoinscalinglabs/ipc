@@ -34,6 +34,7 @@ docker run \
   --entrypoint ${ENTRY} \
   ${FM_DOCKER_IMAGE} \
   --network=${FM_NETWORK} \
+  --add-host=host.docker.internal:host-gateway \
   ${CMD}
 """
 dependencies = ["docker-network-create", "fendermint-deps"]
@@ -78,6 +79,7 @@ docker run \
   --env RUST_BACKTRACE=1 \
   ${FM_DOCKER_IMAGE} \
   --network=${FM_NETWORK} \
+  --add-host=host.docker.internal:host-gateway \
   ${CMD}
 """
 dependencies = ["docker-network-create", "fendermint-deps"]
@@ -122,6 +124,7 @@ docker run \
   --env RUST_BACKTRACE=1 \
   ${FM_DOCKER_IMAGE} \
   --network=${FM_NETWORK} \
+  --add-host=host.docker.internal:host-gateway \
   ${CMD}
 """
 dependencies = ["docker-network-create", "fendermint-deps"]
@@ -137,6 +140,7 @@ docker run \
   --env RUST_BACKTRACE=1 \
   ${FM_DOCKER_IMAGE} \
   --network=${FM_NETWORK} \
+  --add-host=host.docker.internal:host-gateway \
   ${CMD}
 """
 dependencies = ["fendermint-deps"]
