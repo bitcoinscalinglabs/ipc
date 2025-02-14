@@ -135,6 +135,7 @@ docker run \
   ${FLAGS} \
   --init \
   --user $(id -u) \
+  --add-host=host.docker.internal:host-gateway \
   --volume ${BASE_DIR}:/data \
   --env LOG_LEVEL=${FM_LOG_LEVEL} \
   --env RUST_BACKTRACE=1 \
