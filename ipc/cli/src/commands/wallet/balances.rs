@@ -113,6 +113,6 @@ impl CommandLineHandler for WalletBalances {
 pub(crate) struct WalletBalancesArgs {
     #[arg(long, help = "The subnet to list wallets from")]
     pub subnet: String,
-    #[arg(long, help = "The type of the wallet, i.e. fvm, evm")]
+    #[arg(long, help = "The type of the wallet, i.e. fvm, evm, btc")]
     pub wallet_type: String,
 }

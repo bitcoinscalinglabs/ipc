@@ -25,7 +25,8 @@ impl CommandLineHandler for WalletNew {
         let wallet_type = WalletType::from_str(&arguments.wallet_type)?;
         match wallet_type {
             WalletType::Evm => {
-                println!("{:?}", provider.new_evm_key()?.to_string());
+                let new_key = provider.new_evm_key()?;
+                println!("Created IPC wallet with address: {new_key}");
             }
             WalletType::Fvm => {
                 let tp = WalletKeyType::from_str(
@@ -37,7 +38,8 @@ impl CommandLineHandler for WalletNew {
                 println!("{:?}", provider.new_fvm_key(tp)?)
             }
             WalletType::Btc => {
-                println!("{:?}", provider.new_btc_key()?)
+                let new_key = provider.new_btc_key()?;
+                println!("Created IPC wallet with address: {new_key}");
             }
         };
 
@@ -46,13 +48,13 @@ impl CommandLineHandler for WalletNew {
 }
 
 #[derive(Debug, Args)]
-#[command(about = "Create new wallet in subnet")]
+#[command(about = "Create new IPC wallet")]
 pub(crate) struct WalletNewArgs {
     #[arg(
         long,
         help = "The fvm key type of the wallet (secp256k1, bls, secp256k1-ledger), only for fvm wallet type"
     )]
     pub key_type: Option<String>,
-    #[arg(long, help = "The type of the wallet, i.e. fvm, evm")]
+    #[arg(long, help = "The type of the wallet, i.e. fvm, evm, btc")]
     pub wallet_type: String,
 }
