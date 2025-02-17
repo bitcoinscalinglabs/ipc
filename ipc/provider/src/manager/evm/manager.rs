@@ -567,13 +567,13 @@ impl SubnetManager for EthSubnetManager {
         Ok(())
     }
 
-    async fn fund(&self, gateway_addr: Address, params: FundParams) -> Result<ChainEpoch> {
+    async fn fund(&self, params: FundParams) -> Result<ChainEpoch> {
         let params: EthFundParams = match params {
             FundParams::Eth(params) => params,
             FundParams::Btc(_) => return Err(anyhow!("Unsupported subnet configuration")),
         };
 
-        self.ensure_same_gateway(&gateway_addr)?;
+        self.ensure_same_gateway(&params.parent_gateway_addr)?;
 
         let value = params
             .amount
@@ -582,7 +582,8 @@ impl SubnetManager for EthSubnetManager {
             .ok_or_else(|| anyhow!("invalid value to fund"))?;
 
         tracing::info!(
-            "fund with evm gateway contract: {gateway_addr:} with value: {value:}, original: {:?}",
+            "fund with evm gateway contract: {:?} with value: {value:}, original: {:?}",
+            params.parent_gateway_addr,
             params.amount
         );
 

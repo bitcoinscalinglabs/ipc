@@ -142,15 +142,21 @@ pub enum PreFundParams {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EthPreFundParams {
+    /// The ID of the subnet where the funds will be sent to (child subnet)
     pub subnet_id: SubnetID,
+    /// The address to be charged in the parent subnet and pre-funded in the child subnet
     pub sender: Address,
+    /// Amount to pre-fund
     pub amount: TokenAmount,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BtcPreFundParams {
+    /// The ID of the subnet where the funds will be sent to (child subnet)
     pub subnet_id: SubnetID,
+    /// The address to be charged in the parent subnet and pre-funded in the child subnet
     pub sender: Address,
+    /// Amount to pre-fund
     pub amount: u64,
 }
 
@@ -161,16 +167,26 @@ pub enum FundParams {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EthFundParams {
+    /// The gateway address of the parent subnet
+    pub parent_gateway_addr: Address,
+    /// Target subnet ID (child subnet)
     pub subnet_id: SubnetID,
+    /// The address to be charged in the parent subnet
     pub sender: Address,
+    /// The address to receive the funds in the child subnet
     pub to: Address,
+    /// The amount to fund
     pub amount: TokenAmount,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BtcFundParams {
+    /// The ID of the subnet where the funds will be sent to (child subnet)
     pub subnet_id: SubnetID,
+    /// The address to be charged in the parent subnet
     pub sender: Address,
+    /// The address to receive the funds in the child subnet
     pub to: Address,
+    /// The amount to fund
     pub amount: u64,
 }

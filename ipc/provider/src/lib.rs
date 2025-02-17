@@ -518,18 +518,20 @@ impl IpcProvider {
         let parent_config = parent_conn.subnet();
         let sender = self.check_sender(parent_config, from)?;
 
-        let parent_gateway_addr = match gateway_addr {
-            None => parent_config.gateway_addr(),
-            Some(addr) => addr,
-        };
-
         let params = match parent_config.config {
-            config::subnet::SubnetConfig::Fevm(_) => FundParams::Eth(EthFundParams {
-                subnet_id: subnet,
-                sender: sender,
-                to: to.unwrap_or(sender),
-                amount: TokenAmount::from_nano(amount as u128),
-            }),
+            config::subnet::SubnetConfig::Fevm(_) => {
+                let parent_gateway_addr = match gateway_addr {
+                    None => parent_config.gateway_addr(),
+                    Some(addr) => addr,
+                };
+                FundParams::Eth(EthFundParams {
+                    parent_gateway_addr,
+                    subnet_id: subnet,
+                    sender: sender,
+                    to: to.unwrap_or(sender),
+                    amount: TokenAmount::from_nano(amount as u128),
+                })
+            }
             config::subnet::SubnetConfig::Btc(_) => FundParams::Btc(BtcFundParams {
                 subnet_id: subnet,
                 sender: sender,
@@ -538,10 +540,7 @@ impl IpcProvider {
             }),
         };
 
-        parent_conn
-            .manager()
-            .fund(parent_gateway_addr, params)
-            .await
+        parent_conn.manager().fund(params).await
     }
 
     /// Funds an account in a child subnet with erc20 token, provided that the supply source kind is

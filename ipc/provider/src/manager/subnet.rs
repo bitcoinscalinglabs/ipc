@@ -77,7 +77,7 @@ pub trait SubnetManager:
 
     /// Fund injects new funds from an account of the parent chain to a subnet.
     /// Returns the epoch that the fund is executed in the parent.
-    async fn fund(&self, gateway_addr: Address, params: FundParams) -> Result<ChainEpoch>;
+    async fn fund(&self, params: FundParams) -> Result<ChainEpoch>;
 
     /// Sends funds to a specified subnet receiver using ERC20 tokens.
     /// This function locks the amount of ERC20 tokens into custody and then mints the supply in the specified subnet.

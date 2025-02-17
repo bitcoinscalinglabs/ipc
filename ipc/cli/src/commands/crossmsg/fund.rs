@@ -32,13 +32,13 @@ impl CommandLineHandler for Fund {
             Some(address) => Some(require_fil_addr_from_str(address)?),
             None => None,
         };
-        let gateway_addr = match &arguments.gateway_address {
-            Some(address) => Some(require_fil_addr_from_str(address)?),
-            None => None,
-        };
 
         match &arguments.network_specific {
-            SpecifiedNetwork::Fevm(fevm_fund_args) => {
+            SubnetFundArgs::Fevm(fevm_fund_args) => {
+                let gateway_addr = match &fevm_fund_args.gateway_address {
+                    Some(address) => Some(require_fil_addr_from_str(address)?),
+                    None => None,
+                };
                 println!(
                     "fund performed in epoch: {:?}",
                     provider
@@ -46,11 +46,11 @@ impl CommandLineHandler for Fund {
                         .await?,
                 );
             }
-            SpecifiedNetwork::Btc(btc_fund_args) => {
+            SubnetFundArgs::Btc(btc_fund_args) => {
                 println!(
                     "fund performed in epoch: {:?}",
                     provider
-                        .fund(subnet, gateway_addr, from, to, btc_fund_args.amount as f64)
+                        .fund(subnet, None, from, to, btc_fund_args.amount as f64)
                         .await?,
                 );
             }
@@ -63,8 +63,6 @@ impl CommandLineHandler for Fund {
 #[derive(Debug, Args)]
 #[command(about = "Send funds from a parent to a child subnet")]
 pub(crate) struct FundArgs {
-    #[arg(long, help = "The gateway address of the subnet")]
-    pub gateway_address: Option<String>,
     #[arg(long, help = "The address to send funds from")]
     pub from: Option<String>,
     #[arg(
@@ -75,7 +73,29 @@ pub(crate) struct FundArgs {
     #[arg(long, help = "The subnet to fund")]
     pub subnet: String,
     #[command(subcommand)]
-    pub network_specific: SpecifiedNetwork,
+    pub network_specific: SubnetFundArgs,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SubnetFundArgs {
+    #[command(name = "fevm")]
+    Fevm(FevmFundArgs),
+    #[command(name = "btc")]
+    Btc(BtcFundArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct FevmFundArgs {
+    #[arg(long, help = "The gateway address of the subnet")]
+    pub gateway_address: Option<String>,
+    #[arg(help = "The amount to fund (in whole FIL)")]
+    pub amount: f64,
+}
+
+#[derive(Debug, Args)]
+pub struct BtcFundArgs {
+    #[arg(help = "The amount to fund (in sats)")]
+    pub amount: u64,
 }
 
 pub struct PreFund;
@@ -95,12 +115,12 @@ impl CommandLineHandler for PreFund {
         };
 
         match &arguments.network_specific {
-            SpecifiedNetwork::Fevm(fevm_fund_args) => {
+            SubnetPreFundArgs::Fevm(fevm_fund_args) => {
                 provider
                     .pre_fund(subnet.clone(), from, fevm_fund_args.amount)
                     .await?;
             }
-            SpecifiedNetwork::Btc(btc_fund_args) => {
+            SubnetPreFundArgs::Btc(btc_fund_args) => {
                 provider
                     .pre_fund(subnet.clone(), from, btc_fund_args.amount as f64)
                     .await?;
@@ -123,7 +143,27 @@ pub struct PreFundArgs {
     #[arg(long, help = "The subnet to add balance to")]
     pub subnet: String,
     #[command(subcommand)]
-    pub network_specific: SpecifiedNetwork,
+    pub network_specific: SubnetPreFundArgs,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SubnetPreFundArgs {
+    #[command(name = "fevm")]
+    Fevm(FevmPreFundArgs),
+    #[command(name = "btc")]
+    Btc(BtcPreFundArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct FevmPreFundArgs {
+    #[arg(help = "The amount to fund (in whole FIL)")]
+    pub amount: f64,
+}
+
+#[derive(Debug, Args)]
+pub struct BtcPreFundArgs {
+    #[arg(help = "The amount to fund (in sats)")]
+    pub amount: u64,
 }
 
 /// The command to send ERC20 tokens to a subnet from parent
@@ -185,24 +225,4 @@ pub(crate) struct FundWithTokenArgs {
     pub amount: String,
     #[arg(long, help = "Approve gateway before funding")]
     pub approve: bool,
-}
-
-#[derive(Debug, Subcommand)]
-pub enum SpecifiedNetwork {
-    #[command(name = "fevm")]
-    Fevm(FevmFundArgs),
-    #[command(name = "btc")]
-    Btc(BtcFundArgs),
-}
-
-#[derive(Debug, Args)]
-pub struct FevmFundArgs {
-    #[arg(help = "The amount to fund (in whole FIL)")]
-    pub amount: f64,
-}
-
-#[derive(Debug, Args)]
-pub struct BtcFundArgs {
-    #[arg(help = "The amount to fund (in sats)")]
-    pub amount: u64,
 }
