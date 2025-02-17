@@ -6,7 +6,9 @@ use std::str::FromStr;
 
 use async_trait::async_trait;
 use ethers::providers::Authorization;
+use ethers::types::H256;
 use http::HeaderValue;
+use ipc_api::address::IPCAddress;
 use ipc_api::evm::payload_to_evm_address;
 use ipc_api::subnet::{
     Asset, AssetKind, BtcConstructParams, BtcFundParams, BtcPreFundParams, ConstructParams,
@@ -37,9 +39,9 @@ use ipc_api::checkpoint::{
     consensus::ValidatorData, BottomUpCheckpoint, BottomUpCheckpointBundle, QuorumReachedEvent,
     Signature,
 };
-use ipc_api::cross::IpcEnvelope;
+use ipc_api::cross::{IpcEnvelope, IpcMsgKind};
 use ipc_api::staking::{StakingChangeRequest, ValidatorInfo};
-use ipc_api::subnet_id::SubnetID;
+use ipc_api::subnet_id::{SubnetID, BTC_NAMESPACE};
 
 pub struct BtcSubnetManager {
     client: Client,
@@ -790,27 +792,152 @@ impl TopDownFinalityQuery for BtcSubnetManager {
         tracing::info!("getting chain head height");
         todo!()
     }
+
     /// Returns the list of top down messages
     async fn get_top_down_msgs(
         &self,
         subnet_id: &SubnetID,
-        _epoch: ChainEpoch,
+        epoch: ChainEpoch,
     ) -> Result<TopDownQueryPayload<Vec<IpcEnvelope>>> {
         tracing::info!("getting top down messages for subnet: {subnet_id:}");
 
-        // Call the "get_postbox" method of bitcoin-ipc
-        let mut messages: Vec<IpcEnvelope> = vec![];
-        messages.push(IpcEnvelope {
-            kind: todo!(),
-            to: todo!(),
-            value: todo!(),
-            from: todo!(),
-            message: todo!(),
-            nonce: todo!(),
+        let body = json!({
+            "jsonrpc": "2.0",
+            "method": "getrootnetmessages",
+            "id": 1,
+            "params": {
+                "subnet_id":        subnet_id.to_string(),
+                "block_height":     epoch,
+            }
         });
+        tracing::info!("Request body: {body:?}");
+
+        let resp = self
+            .client
+            .post(self.rpc_url.clone())
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(anyhow!(
+                "getrootnetmessages request failed with status: {}",
+                resp.status()
+            ));
+        }
+
+        let data = resp.json::<Value>().await?;
+
+        if let Some(err_obj) = data.get("error") {
+            let code = err_obj
+                .get("code")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            let message = err_obj
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("Unknown error");
+            let error_data = err_obj
+                .get("data")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            return Err(anyhow!(
+                "JSON-RPC error: code={}, message={}, details={}",
+                code,
+                message,
+                error_data
+            ));
+        }
+
+        let mut messages: Vec<IpcEnvelope> = vec![];
+        let mut prev_block_hash: Option<H256> = None;
+
+        let results = data
+            .get("result")
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow!("Field result not found"))?;
+        for result in results {
+            // parse kind
+            let kind = match result.get("kind").and_then(Value::as_str) {
+                Some("fund") => IpcMsgKind::Transfer,
+                Some(_) => return Err(anyhow!("Unknown kind in result")),
+                None => return Err(anyhow!("Field kind not found in result")),
+            };
+
+            // parse subnet_id
+            let target_subnet_id = result
+                .get("msg")
+                .and_then(|msg| msg.get("subnet_id"))
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("Field subnet_id not found in result"))?;
+            let target_subnet_id = SubnetID::from_str(target_subnet_id)?;
+
+            // parse value
+            let value = result
+                .get("msg")
+                .and_then(|msg| msg.get("amount"))
+                .and_then(Value::as_i64)
+                .ok_or_else(|| anyhow!("Field amount not found in result"))?;
+
+            // parse address
+            let target_address = result
+                .get("msg")
+                .and_then(|msg| msg.get("address"))
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("Field address not found in result"))?;
+            let address = ethers::types::Address::from_str(target_address)?;
+            let target_address = ethers_address_to_fil_address(&address)?;
+
+            // TODO(Orestis): add "from" argument to RPC
+            // parse from
+            // let from = result
+            //     .get("from")
+            //     .and_then(Value::as_str)
+            //     .ok_or_else(|| anyhow!("No from address found in result"))?;
+            // let from = ethers::types::Address::from_str(from)?;
+            // let from = ethers_address_to_fil_address(&from)?;
+
+            // parse block_hash
+            let block_hash = result
+                .get("block_hash")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("Field block_hash not found in result"))?;
+            let block_hash = H256::from_str(block_hash)?;
+            if prev_block_hash.is_some() && prev_block_hash != Some(block_hash) {
+                return Err(anyhow!("Block hash mismatch in result"));
+            }
+            prev_block_hash = Some(block_hash);
+
+            // parse nonce
+            let nonce = result
+                .get("nonce")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| anyhow!("Field nonce not found in result"))?;
+
+            let envelope = IpcEnvelope {
+                kind,
+                to: IPCAddress::new(&target_subnet_id, &target_address)?,
+                value: TokenAmount::from_whole(value),
+                // TODO(Orestis): The following should only work for fund/prefund messages.
+                // Change when we implement transders.
+                from: IPCAddress::new(
+                    &SubnetID::new_root(subnet_id.root_id()),
+                    &Address::new_delegated(BTC_NAMESPACE, &vec![0; 20])?,
+                )?,
+                message: vec![],
+                nonce,
+            };
+            messages.push(envelope);
+        }
+
+        let block_hash = match prev_block_hash {
+            Some(h) => h.0.to_vec(),
+            None => self.get_block_hash(epoch).await?.block_hash,
+        };
+
         Ok(TopDownQueryPayload {
             value: messages,
-            block_hash: todo!(),
+            block_hash,
         })
     }
     /// Get the block hash

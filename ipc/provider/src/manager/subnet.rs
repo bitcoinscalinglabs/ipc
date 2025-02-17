@@ -233,6 +233,7 @@ pub trait TopDownFinalityQuery: Send + Sync {
     /// Returns the chain head height
     async fn chain_head_height(&self) -> Result<ChainEpoch>;
     /// Returns the list of top down messages
+    /// If the parent subnet is bitcoin, the epoch denotes the block height of the bitcoin network
     async fn get_top_down_msgs(
         &self,
         subnet_id: &SubnetID,
