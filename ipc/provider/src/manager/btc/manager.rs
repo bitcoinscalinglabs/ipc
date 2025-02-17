@@ -347,13 +347,65 @@ impl SubnetManager for BtcSubnetManager {
         todo!()
     }
 
-    async fn fund(&self, _gateway_addr: Address, params: FundParams) -> Result<ChainEpoch> {
+    async fn fund(&self, params: FundParams) -> Result<ChainEpoch> {
         let params: BtcFundParams = match params {
             FundParams::Eth(_) => return Err(anyhow!("Unsupported subnet configuration")),
             FundParams::Btc(params) => params,
         };
         tracing::info!("funding on btc with params: {params:?}");
-        todo!()
+
+        let body = json!({
+            "jsonrpc": "2.0",
+            "method": "fundsubnet",
+            "id": 1,
+            "params": {
+                "subnet_id":        params.subnet_id.to_string(),
+                "amount":           params.amount,
+                "address":          payload_to_evm_address(params.sender.payload())?,
+                // "to":               payload_to_evm_address(params.to.payload())?,
+            }
+        });
+        tracing::info!("Request body: {body:?}");
+
+        let resp = self
+            .client
+            .post(self.rpc_url.clone())
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(anyhow!(
+                "Fund request failed with status: {}",
+                resp.status()
+            ));
+        }
+
+        let data = resp.json::<Value>().await?;
+
+        if let Some(err_obj) = data.get("error") {
+            let code = err_obj
+                .get("code")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            let message = err_obj
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("Unknown error");
+            let error_data = err_obj
+                .get("data")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            return Err(anyhow!(
+                "JSON-RPC error: code={}, message={}, details={}",
+                code,
+                message,
+                error_data
+            ));
+        }
+
+        // TODO(Orestis). Check what block number to return
+        Ok(0)
     }
 
     async fn approve_token(
