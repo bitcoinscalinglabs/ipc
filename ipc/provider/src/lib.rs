@@ -374,23 +374,25 @@ impl IpcProvider {
     pub async fn pre_fund(
         &mut self,
         subnet: SubnetID,
-        from: Option<Address>,
+        address: Option<Address>,
         balance: f64,
     ) -> anyhow::Result<()> {
         let parent = subnet.parent().ok_or_else(|| anyhow!("no parent found"))?;
         let conn = self.get_connection(&parent)?;
         let subnet_config = conn.subnet();
-        let sender = self.check_sender(subnet_config, from)?;
 
         let params = match subnet_config.config {
-            config::subnet::SubnetConfig::Fevm(_) => PreFundParams::Eth(EthPreFundParams {
-                subnet_id: subnet,
-                sender: sender,
-                amount: TokenAmount::from_nano(balance as u128),
-            }),
+            config::subnet::SubnetConfig::Fevm(_) => {
+                let sender = self.check_sender(subnet_config, address)?;
+                PreFundParams::Eth(EthPreFundParams {
+                    subnet_id: subnet,
+                    sender: sender,
+                    amount: TokenAmount::from_nano(balance as u128),
+                })
+            }
             config::subnet::SubnetConfig::Btc(_) => PreFundParams::Btc(BtcPreFundParams {
                 subnet_id: subnet,
-                sender: sender,
+                dst_address: address.ok_or_else(|| anyhow!("dst_address must be provided"))?,
                 amount: balance as u64,
             }),
         };
@@ -514,12 +516,11 @@ impl IpcProvider {
     ) -> anyhow::Result<ChainEpoch> {
         let parent = subnet.parent().ok_or_else(|| anyhow!("no parent found"))?;
         let parent_conn = self.get_connection(&parent)?;
-
         let parent_config = parent_conn.subnet();
-        let sender = self.check_sender(parent_config, from)?;
 
         let params = match parent_config.config {
             config::subnet::SubnetConfig::Fevm(_) => {
+                let sender = self.check_sender(parent_config, from)?;
                 let parent_gateway_addr = match gateway_addr {
                     None => parent_config.gateway_addr(),
                     Some(addr) => addr,
@@ -532,12 +533,14 @@ impl IpcProvider {
                     amount: TokenAmount::from_nano(amount as u128),
                 })
             }
-            config::subnet::SubnetConfig::Btc(_) => FundParams::Btc(BtcFundParams {
-                subnet_id: subnet,
-                sender: sender,
-                to: to.unwrap_or(sender),
-                amount: amount as u64,
-            }),
+            config::subnet::SubnetConfig::Btc(_) => {
+                let dst_address = self.check_sender(parent_config, to)?;
+                FundParams::Btc(BtcFundParams {
+                    subnet_id: subnet,
+                    dst_address,
+                    amount: amount as u64,
+                })
+            }
         };
 
         parent_conn.manager().fund(params).await

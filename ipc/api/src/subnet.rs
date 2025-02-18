@@ -154,8 +154,9 @@ pub struct EthPreFundParams {
 pub struct BtcPreFundParams {
     /// The ID of the subnet where the funds will be sent to (child subnet)
     pub subnet_id: SubnetID,
-    /// The address to be charged in the parent subnet and pre-funded in the child subnet
-    pub sender: Address,
+    /// The address to receive the funds in the child subnet
+    /// (the charged address is determined by the loaded bitcoin wallet and cannot be specified in the ipc codebase)
+    pub dst_address: Address,
     /// Amount to pre-fund
     pub amount: u64,
 }
@@ -183,10 +184,9 @@ pub struct EthFundParams {
 pub struct BtcFundParams {
     /// The ID of the subnet where the funds will be sent to (child subnet)
     pub subnet_id: SubnetID,
-    /// The address to be charged in the parent subnet
-    pub sender: Address,
     /// The address to receive the funds in the child subnet
-    pub to: Address,
+    /// (the charged (sender) address is determined by the loaded bitcoin wallet and cannot be specified in the ipc codebase)
+    pub dst_address: Address,
     /// The amount to fund
     pub amount: u64,
 }
