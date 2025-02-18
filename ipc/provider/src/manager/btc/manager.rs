@@ -251,7 +251,7 @@ impl SubnetManager for BtcSubnetManager {
             "params": {
                 "subnet_id":        params.subnet_id.to_string(),
                 "amount":           params.amount,
-                "address":          payload_to_evm_address(params.sender.payload())?,
+                "address":          payload_to_evm_address(params.dst_address.payload())?,
             }
         });
         tracing::info!("Request body: {body:?}");
@@ -363,8 +363,7 @@ impl SubnetManager for BtcSubnetManager {
             "params": {
                 "subnet_id":        params.subnet_id.to_string(),
                 "amount":           params.amount,
-                "address":          payload_to_evm_address(params.sender.payload())?,
-                // "to":               payload_to_evm_address(params.to.payload())?,
+                "address":          payload_to_evm_address(params.dst_address.payload())?,
             }
         });
         tracing::info!("Request body: {body:?}");
