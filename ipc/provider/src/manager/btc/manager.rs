@@ -83,6 +83,64 @@ impl BtcSubnetManager {
             rpc_url: url.to_string(),
         })
     }
+
+    async fn get_block_hash_inner(&self, height: ChainEpoch) -> Result<H256> {
+        tracing::info!("getting block hash for height: {height:}");
+        let body = json!({
+            "jsonrpc": "2.0",
+            "method": "getblockhash",
+            "id": 1,
+            "params": {
+                "height": height,
+            }
+        });
+        tracing::info!("Request body: {body:?}");
+
+        let resp = self
+            .client
+            .post(self.rpc_url.clone())
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(anyhow!(
+                "getrootnetmessages request failed with status: {}",
+                resp.status()
+            ));
+        }
+
+        let data = resp.json::<Value>().await?;
+
+        if let Some(err_obj) = data.get("error") {
+            let code = err_obj
+                .get("code")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            let message = err_obj
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("Unknown error");
+            let error_data = err_obj
+                .get("data")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            return Err(anyhow!(
+                "JSON-RPC error: code={}, message={}, details={}",
+                code,
+                message,
+                error_data
+            ));
+        }
+
+        let block_hash = data
+            .get("result")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("Field result not found"))?;
+
+        let block_hash = H256::from_str(block_hash)?;
+        Ok(block_hash)
+    }
 }
 #[async_trait]
 impl SubnetManager for BtcSubnetManager {
@@ -798,7 +856,7 @@ impl TopDownFinalityQuery for BtcSubnetManager {
         subnet_id: &SubnetID,
         epoch: ChainEpoch,
     ) -> Result<TopDownQueryPayload<Vec<IpcEnvelope>>> {
-        tracing::info!("getting top down messages for subnet: {subnet_id:}");
+        tracing::info!("getting top down messages for subnet: {subnet_id:} at height: {epoch:}");
 
         let body = json!({
             "jsonrpc": "2.0",
@@ -941,9 +999,15 @@ impl TopDownFinalityQuery for BtcSubnetManager {
     }
     /// Get the block hash
     async fn get_block_hash(&self, height: ChainEpoch) -> Result<GetBlockHashResult> {
-        tracing::info!("getting block hash for height: {height:}");
-        todo!()
+        let block_hash_current = self.get_block_hash_inner(height).await?;
+        let block_hash_parent = self.get_block_hash_inner(height - 1).await?;
+
+        Ok(GetBlockHashResult {
+            block_hash: block_hash_current.0.to_vec(),
+            parent_block_hash: block_hash_parent.0.to_vec(),
+        })
     }
+
     /// Get the validator change set from start to end block.
     async fn get_validator_changeset(
         &self,
