@@ -105,7 +105,7 @@ impl BtcSubnetManager {
 
         if !resp.status().is_success() {
             return Err(anyhow!(
-                "getrootnetmessages request failed with status: {}",
+                "getblockhash request failed with status: {}",
                 resp.status()
             ));
         }
@@ -846,8 +846,57 @@ impl TopDownFinalityQuery for BtcSubnetManager {
     }
     /// Returns the chain head height
     async fn chain_head_height(&self) -> Result<ChainEpoch> {
-        tracing::info!("getting chain head height");
-        todo!()
+        tracing::info!("getting chain head height on btc");
+        let body = json!({
+            "jsonrpc": "2.0",
+            "method": "getconfirmedcount",
+            "id": 1,
+        });
+        tracing::info!("Request body: {body:?}");
+
+        let resp = self
+            .client
+            .post(self.rpc_url.clone())
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(anyhow!(
+                "getconfirmedcount request failed with status: {}",
+                resp.status()
+            ));
+        }
+
+        let data = resp.json::<Value>().await?;
+
+        if let Some(err_obj) = data.get("error") {
+            let code = err_obj
+                .get("code")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            let message = err_obj
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("Unknown error");
+            let error_data = err_obj
+                .get("data")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            return Err(anyhow!(
+                "JSON-RPC error: code={}, message={}, details={}",
+                code,
+                message,
+                error_data
+            ));
+        }
+
+        let height = data
+            .get("result")
+            .and_then(Value::as_i64)
+            .ok_or_else(|| anyhow!("Field result not found"))?;
+
+        Ok(height as ChainEpoch)
     }
 
     /// Returns the list of top down messages
