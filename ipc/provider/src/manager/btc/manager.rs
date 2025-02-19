@@ -459,7 +459,7 @@ impl SubnetManager for BtcSubnetManager {
 
     async fn wallet_balance(&self, address: &Address) -> Result<TokenAmount> {
         tracing::info!("getting wallet balance on btc with params: {address:?}");
-        todo!()
+        unimplemented!("getting balances of addresses on bitcoin is not supported")
     }
 
     async fn get_chain_id(&self) -> Result<String> {
