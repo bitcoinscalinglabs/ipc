@@ -1075,7 +1075,7 @@ impl TopDownFinalityQuery for BtcSubnetManager {
     /// Returns the latest parent finality committed in a child subnet
     async fn latest_parent_finality(&self) -> Result<ChainEpoch> {
         tracing::info!("getting latest parent finality");
-        todo!()
+        unimplemented!("latest_parent_finality is not expected to be called on an L1 subnet")
     }
 }
 
