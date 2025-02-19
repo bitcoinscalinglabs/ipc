@@ -29,8 +29,12 @@ impl CommandLineHandler for WalletBalances {
         let mut errors = Vec::new();
 
         match wallet_type {
-            WalletType::Evm => {
-                let wallet = provider.evm_wallet()?;
+            WalletType::Evm | WalletType::Btc => {
+                let wallet = if wallet_type == WalletType::Evm {
+                    provider.evm_wallet()?
+                } else {
+                    provider.btc_wallet()?
+                };
                 let addresses = wallet.read().unwrap().list()?;
                 let r = addresses
                     .iter()
@@ -99,9 +103,6 @@ impl CommandLineHandler for WalletBalances {
                     println!("{:?} - Balance: {}", addr, balance);
                 }
             }
-            WalletType::Btc => {
-                unimplemented!()
-            }
         };
 
         Ok(())
@@ -113,6 +114,6 @@ impl CommandLineHandler for WalletBalances {
 pub(crate) struct WalletBalancesArgs {
     #[arg(long, help = "The subnet to list wallets from")]
     pub subnet: String,
-    #[arg(long, help = "The type of the wallet, i.e. fvm, evm")]
+    #[arg(long, help = "The type of the wallet, i.e. fvm, evm, btc")]
     pub wallet_type: String,
 }
