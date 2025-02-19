@@ -1061,10 +1061,16 @@ impl TopDownFinalityQuery for BtcSubnetManager {
     async fn get_validator_changeset(
         &self,
         subnet_id: &SubnetID,
-        _epoch: ChainEpoch,
+        epoch: ChainEpoch,
     ) -> Result<TopDownQueryPayload<Vec<StakingChangeRequest>>> {
-        tracing::info!("getting validator changeset for subnet: {subnet_id:}");
-        todo!()
+        tracing::info!("getting validator changeset for subnet: {subnet_id:} at height: {epoch:}");
+
+        //TODO(Orestis): Implement this. The structure of the function is the same as get_top_down_msgs().
+        let block_hash = self.get_block_hash(epoch).await?.block_hash;
+        Ok(TopDownQueryPayload {
+            value: vec![],
+            block_hash,
+        })
     }
     /// Returns the latest parent finality committed in a child subnet
     async fn latest_parent_finality(&self) -> Result<ChainEpoch> {
