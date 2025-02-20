@@ -171,8 +171,8 @@ async fn run(settings: Settings) -> anyhow::Result<()> {
 
     let topdown_enabled = settings.topdown_enabled();
     tracing::info!("topdown_enabled = {topdown_enabled}");
-    tracing::info!("temporarily disabling topdown finality");
-    let topdown_enabled = false;
+    // tracing::info!("temporarily disabling topdown finality");
+    // let topdown_enabled = false;
 
     // If enabled, start a resolver that communicates with the application through the resolve pool.
     if settings.resolver_enabled() {
@@ -429,7 +429,7 @@ fn make_resolver_service(
 fn make_ipc_provider_proxy(settings: &Settings) -> anyhow::Result<IPCProviderProxy> {
     let topdown_config = settings.ipc.topdown_config()?;
 
-    println!("topdown config {topdown_config:#?}");
+    info!("topdown config {topdown_config:#?}");
 
     let subnet_id = settings
         .ipc
@@ -437,7 +437,7 @@ fn make_ipc_provider_proxy(settings: &Settings) -> anyhow::Result<IPCProviderPro
         .parent()
         .ok_or_else(|| anyhow!("subnet has no parent"))?;
 
-    println!("subnet_id {subnet_id:#?}");
+    info!("subnet_id {subnet_id:#?}");
 
     let subnet = ipc_provider::config::Subnet {
         id: subnet_id,

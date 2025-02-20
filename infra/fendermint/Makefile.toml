@@ -52,6 +52,7 @@ TOPDOWN_PROPOSAL_DELAY = { value = "2", condition = { env_not_set = ["TOPDOWN_PR
 TOPDOWN_MAX_PROPOSAL_RANGE = { value = "100", condition = { env_not_set = [
   "TOPDOWN_MAX_PROPOSAL_RANGE",
 ] } }
+PARENT_AUTH_TOKEN = { value = "Please set the parent auth token", condition = { env_not_set = ["PARENT_AUTH_TOKEN"] } }
 # Comma-separated list of bootstrap nodes to be used by the CometBFT node.
 BOOTSTRAPS = { value = "", condition = { env_not_set = ["BOOTSTRAPS"] } }
 # Comma-separate list of addresses that's allowed to deploy contracts to this subnet.
