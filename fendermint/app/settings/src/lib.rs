@@ -303,7 +303,7 @@ impl Settings {
     /// finally parse it into the [Settings] type.
     pub fn new(config_dir: &Path, home_dir: &Path, run_mode: &str) -> Result<Self, ConfigError> {
         let config = Self::config(config_dir, home_dir, run_mode)?;
-        println!("fenderming Settings::new config = {config:#?}");
+        tracing::debug!("fenderming Settings::new config = {config:#?}");
         Self::parse(config)
     }
 

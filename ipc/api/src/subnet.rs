@@ -157,8 +157,8 @@ pub struct BtcPreFundParams {
     /// The address to receive the funds in the child subnet
     /// (the charged address is determined by the loaded bitcoin wallet and cannot be specified in the ipc codebase)
     pub dst_address: Address,
-    /// Amount to pre-fund
-    pub amount: u64,
+    /// Amount to pre-fund, in satoshis (the atto inside the TokenAmount contains the number of satoshis)
+    pub amount: TokenAmount,
 }
 
 pub enum FundParams {
@@ -187,6 +187,6 @@ pub struct BtcFundParams {
     /// The address to receive the funds in the child subnet
     /// (the charged (sender) address is determined by the loaded bitcoin wallet and cannot be specified in the ipc codebase)
     pub dst_address: Address,
-    /// The amount to fund
-    pub amount: u64,
+    /// The amount to fund, in satoshis (the atto inside the TokenAmount contains the number of satoshis)
+    pub amount: TokenAmount,
 }

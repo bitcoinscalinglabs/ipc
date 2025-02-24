@@ -1,6 +1,7 @@
 // Copyright 2022-2024 Protocol Labs
 // SPDX-License-Identifier: MIT
 
+use num_traits::ToPrimitive;
 use std::collections::{BTreeMap, HashMap};
 use std::str::FromStr;
 
@@ -308,7 +309,7 @@ impl SubnetManager for BtcSubnetManager {
             "id": 1,
             "params": {
                 "subnet_id":        params.subnet_id.to_string(),
-                "amount":           params.amount,
+                "amount":           params.amount.atto().to_u64().ok_or_else(|| anyhow!("amount is too large"))?,
                 "address":          payload_to_evm_address(params.dst_address.payload())?,
             }
         });
@@ -420,7 +421,7 @@ impl SubnetManager for BtcSubnetManager {
             "id": 1,
             "params": {
                 "subnet_id":        params.subnet_id.to_string(),
-                "amount":           params.amount,
+                "amount":           params.amount.atto().to_u64().ok_or_else(|| anyhow!("amount is too large"))?,
                 "address":          payload_to_evm_address(params.dst_address.payload())?,
             }
         });
@@ -837,7 +838,7 @@ impl TopDownFinalityQuery for BtcSubnetManager {
             .get("result")
             .ok_or_else(|| anyhow!("No result found"))?;
 
-        dbg!(result);
+        tracing::debug!("btc manager get genesis epoch result: {result:#?}");
 
         result
             .get("genesis_block_height")
@@ -1023,7 +1024,7 @@ impl TopDownFinalityQuery for BtcSubnetManager {
             let envelope = IpcEnvelope {
                 kind,
                 to: IPCAddress::new(&target_subnet_id, &target_address)?,
-                value: TokenAmount::from_whole(value),
+                value: TokenAmount::from_atto(value),
                 // TODO(Orestis): The following should only work for fund/prefund messages.
                 // Change when we implement transders.
                 from: IPCAddress::new(

@@ -375,7 +375,7 @@ impl IpcProvider {
         &mut self,
         subnet: SubnetID,
         address: Option<Address>,
-        balance: f64,
+        balance: TokenAmount,
     ) -> anyhow::Result<()> {
         let parent = subnet.parent().ok_or_else(|| anyhow!("no parent found"))?;
         let conn = self.get_connection(&parent)?;
@@ -387,13 +387,13 @@ impl IpcProvider {
                 PreFundParams::Eth(EthPreFundParams {
                     subnet_id: subnet,
                     sender: sender,
-                    amount: TokenAmount::from_nano(balance as u128),
+                    amount: balance,
                 })
             }
             config::subnet::SubnetConfig::Btc(_) => PreFundParams::Btc(BtcPreFundParams {
                 subnet_id: subnet,
                 dst_address: address.ok_or_else(|| anyhow!("dst_address must be provided"))?,
-                amount: balance as u64,
+                amount: balance,
             }),
         };
 
@@ -512,7 +512,7 @@ impl IpcProvider {
         gateway_addr: Option<Address>,
         from: Option<Address>,
         to: Option<Address>,
-        amount: f64,
+        amount: TokenAmount,
     ) -> anyhow::Result<ChainEpoch> {
         let parent = subnet.parent().ok_or_else(|| anyhow!("no parent found"))?;
         let parent_conn = self.get_connection(&parent)?;
@@ -530,7 +530,7 @@ impl IpcProvider {
                     subnet_id: subnet,
                     sender: sender,
                     to: to.unwrap_or(sender),
-                    amount: TokenAmount::from_nano(amount as u128),
+                    amount,
                 })
             }
             config::subnet::SubnetConfig::Btc(_) => {
@@ -538,7 +538,7 @@ impl IpcProvider {
                 FundParams::Btc(BtcFundParams {
                     subnet_id: subnet,
                     dst_address,
-                    amount: amount as u64,
+                    amount,
                 })
             }
         };

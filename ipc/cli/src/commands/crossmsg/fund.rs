@@ -10,7 +10,10 @@ use ipc_api::subnet_id::SubnetID;
 use num_traits::Num;
 use std::{fmt::Debug, str::FromStr};
 
-use crate::{get_ipc_provider, require_fil_addr_from_str, CommandLineHandler, GlobalArguments};
+use crate::{
+    f64_to_token_amount, get_ipc_provider, require_fil_addr_from_str, CommandLineHandler,
+    GlobalArguments,
+};
 
 /// The command to send funds to a subnet from parent
 pub(crate) struct Fund;
@@ -42,7 +45,13 @@ impl CommandLineHandler for Fund {
                 println!(
                     "fund performed in epoch: {:?}",
                     provider
-                        .fund(subnet, gateway_addr, from, to, fevm_fund_args.amount,)
+                        .fund(
+                            subnet,
+                            gateway_addr,
+                            from,
+                            to,
+                            f64_to_token_amount(fevm_fund_args.amount)?,
+                        )
                         .await?,
                 );
             }
@@ -54,7 +63,13 @@ impl CommandLineHandler for Fund {
                 println!(
                     "fund performed in epoch: {:?}",
                     provider
-                        .fund(subnet, None, None, to, btc_fund_args.amount as f64)
+                        .fund(
+                            subnet,
+                            None,
+                            None,
+                            to,
+                            TokenAmount::from_atto(btc_fund_args.amount),
+                        )
                         .await?,
                 );
             }
@@ -123,7 +138,11 @@ impl CommandLineHandler for PreFund {
                     None => None,
                 };
                 provider
-                    .pre_fund(subnet.clone(), from, fevm_fund_args.amount)
+                    .pre_fund(
+                        subnet.clone(),
+                        from,
+                        f64_to_token_amount(fevm_fund_args.amount)?,
+                    )
                     .await?;
             }
             SubnetPreFundArgs::Btc(btc_fund_args) => {
@@ -132,7 +151,11 @@ impl CommandLineHandler for PreFund {
                     None => None,
                 };
                 provider
-                    .pre_fund(subnet.clone(), dest_address, btc_fund_args.amount as f64)
+                    .pre_fund(
+                        subnet.clone(),
+                        dest_address,
+                        TokenAmount::from_atto(btc_fund_args.amount),
+                    )
                     .await?;
             }
         };
