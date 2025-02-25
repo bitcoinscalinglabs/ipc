@@ -106,6 +106,7 @@ CMT_WAIT_MILLIS = 20000
 # Keep example logs to a minimum.
 VERBOSITY = ""
 # supports info, error, debug, etc.
+LOG_LEVEL = "info,fendermint=debug,cometbft=debug"
 ETHAPI_LOG_LEVEL = { value = "${LOG_LEVEL}", condition = { env_not_set = ["ETHAPI_LOG_LEVEL"] } }
 FM_LOG_LEVEL = { value = "${LOG_LEVEL}", condition = { env_not_set = ["FM_LOG_LEVEL"] } }
 
