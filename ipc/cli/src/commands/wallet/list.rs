@@ -4,6 +4,7 @@
 
 use async_trait::async_trait;
 use clap::Args;
+use ipc_api::ethers_address_to_fil_address;
 use ipc_wallet::{EthKeyAddress, EvmKeyStore, WalletType};
 use std::fmt::Debug;
 use std::str::FromStr;
@@ -78,6 +79,11 @@ impl CommandLineHandler for WalletList {
                     println!("\tSecret key: {}", hex::encode(sk.serialize()));
                     println!("\tPubKey: {}", pub_key);
                     println!("\tXonlyPubKey: {}", x_only_pub_key);
+
+                    let eth_addr: ethers::types::Address = address.clone().into();
+                    // let fvm_address = Address::new_delegated(BTC_NAMESPACE, eth_addr.as_bytes())?;
+                    let fvm_address = ethers_address_to_fil_address(&eth_addr)?;
+                    println!("\tFilAddress: {}", fvm_address);
                 }
                 Ok(())
             }

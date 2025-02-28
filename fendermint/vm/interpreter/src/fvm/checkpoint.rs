@@ -136,6 +136,11 @@ where
         msg_count: num_msgs,
         config_number: next_configuration_number,
     });
+    tracing::debug!(
+        height = height.value(),
+        "created checkpoint at height, checkpoint: {:?}",
+        checkpoint,
+    );
 
     Ok(Some((checkpoint, power_updates)))
 }
@@ -384,7 +389,7 @@ where
     if batch.block_height.as_u64() != 0 {
         tracing::debug!(
             height = height.value(),
-            "bottom up msg batch exists at height"
+            "bottom up msg batch exists at height",
         );
     } else if height.value() % gateway.bottom_up_check_period(state)? == 0 {
         tracing::debug!(
