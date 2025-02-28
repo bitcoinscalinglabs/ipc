@@ -28,6 +28,7 @@ pub type BlockEndEvents = Vec<Event>;
 /// might not be available to the caller, because of the message lookups
 /// and transformations that happen along the way, e.g. where we need
 /// a field, we might just have a CID.
+#[derive(Debug)]
 pub struct FvmApplyRet {
     pub apply_ret: ApplyRet,
     pub from: Address,

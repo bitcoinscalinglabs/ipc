@@ -27,6 +27,13 @@ library LibGateway {
     event NewTopDownMessage(address indexed subnet, IpcEnvelope message);
     /// @dev event emitted when there is a new bottom-up message batch to be signed.
     event NewBottomUpMsgBatch(uint256 indexed epoch);
+    
+    event MustBeHere();
+    event MustNotBeHere1(uint64 indexed appliedTopDownNonce, uint64 indexed nonce);
+    event MustBeHere1();
+    event MustNotBeHere2();
+    event MustBeHere2();
+    event MustNotBeHere3();
 
     /// @notice returns the current bottom-up checkpoint
     /// @return exists - whether the checkpoint exists
@@ -357,7 +364,7 @@ library LibGateway {
     /// @param crossMsg - the cross message to be executed
     function applyMsg(SubnetID memory arrivingFrom, IpcEnvelope memory crossMsg) internal {
         GatewayActorStorage storage s = LibGatewayActorStorage.appStorage();
-
+        emit MustBeHere();
         if (crossMsg.to.subnetId.isEmpty()) {
             sendReceipt(crossMsg, OutcomeType.SystemErr, abi.encodeWithSelector(InvalidXnetMessage.selector, InvalidXnetMessageReason.DstSubnet));
             return;
@@ -375,6 +382,7 @@ library LibGateway {
                 // this means the subnet that sent the bottom up message is not registered,
                 // we cannot send the receipt back as top down because the subnet is not registered
                 // we ignore this message for as it's not valid, and it may be someone trying to forge it.
+               
                 return;
             }
             if (subnet.appliedBottomUpNonce != crossMsg.nonce) {
@@ -387,11 +395,14 @@ library LibGateway {
             // configuration of the subnet.
             supplySource = SubnetActorGetterFacet(subnet.id.getActor()).supplySource();
         } else if (applyType == IPCMsgType.TopDown) {
+            
             // Note: there is no need to load the subnet, as a top-down application means that _we_ are the subnet.
             if (s.appliedTopDownNonce != crossMsg.nonce) {
                 sendReceipt(crossMsg, OutcomeType.SystemErr, abi.encodeWithSelector(InvalidXnetMessage.selector, InvalidXnetMessageReason.Nonce));
+                emit MustNotBeHere1(s.appliedTopDownNonce, crossMsg.nonce);
                 return;
             }
+            emit MustBeHere1();
             s.appliedTopDownNonce += 1;
 
             // The value carried in top-down messages locally maps to the native coin, so we pass over the
@@ -405,6 +416,7 @@ library LibGateway {
         // should increase the appliedNonce to allow the execution of the next message
         // of the batch (this is way we have this after the nonce logic).
         if (!crossMsg.to.subnetId.equals(s.networkName)) {
+            emit MustNotBeHere2();
             bytes32 cid = crossMsg.toHash();
             s.postbox[cid] = crossMsg;
             return;
@@ -413,8 +425,10 @@ library LibGateway {
         // execute the message and get the receipt.
         (bool success, bytes memory ret) = executeCrossMsg(crossMsg, supplySource);
         if (success) {
+            emit MustBeHere2();
             sendReceipt(crossMsg, OutcomeType.Ok, ret);
         } else {
+            emit MustNotBeHere3();
             sendReceipt(crossMsg, OutcomeType.ActorErr, ret);
         }
     }
