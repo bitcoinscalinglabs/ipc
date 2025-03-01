@@ -61,7 +61,7 @@ impl CommandLineHandler for Fund {
                     None => None,
                 };
                 println!(
-                    "fund performed in epoch: {:?}",
+                    "fund transaction submitted at height: {:?}",
                     provider
                         .fund(
                             subnet,

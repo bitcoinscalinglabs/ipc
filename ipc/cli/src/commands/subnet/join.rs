@@ -114,7 +114,7 @@ impl JoinSubnet {
                 Some(btc_args.backup_address.clone()),
             )
             .await?;
-        println!("joined at epoch: {epoch}");
+        println!("join transaction submitted at height: {epoch}");
 
         Ok(())
     }

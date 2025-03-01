@@ -292,8 +292,8 @@ impl SubnetManager for BtcSubnetManager {
 
         tracing::info!("Joined subnet with txid: {tx_id}");
 
-        // TODO(Orestis). Check what block number to return
-        return Ok(0);
+        let current_height = self.chain_head_height().await?;
+        Ok(current_height)
     }
 
     async fn pre_fund(&self, params: PreFundParams) -> Result<()> {
@@ -464,8 +464,8 @@ impl SubnetManager for BtcSubnetManager {
             ));
         }
 
-        // TODO(Orestis). Check what block number to return
-        Ok(0)
+        let current_height = self.chain_head_height().await?;
+        Ok(current_height)
     }
 
     async fn approve_token(
