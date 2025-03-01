@@ -19,6 +19,7 @@ docker run \
   --init \
   --user $(id -u) \
   --network ${NETWORK_NAME} \
+  --add-host=host.docker.internal:host-gateway \
   --volume ${BASE_DIR}:/data \
   --volume fendermint-logs:/fendermint/logs \
   --env-file ${ENV_FILE} \
@@ -50,6 +51,7 @@ docker run \
   --init \
   --user $(id -u) \
   --network ${NETWORK_NAME} \
+  --add-host=host.docker.internal:host-gateway \
   --volume ${BASE_DIR}:/data \
   --publish ${RESOLVER_HOST_PORT}:${RESOLVER_HOST_PORT} \
   --env FM_DATA_DIR=/data/${NODE_NAME}/fendermint/data \
@@ -97,6 +99,7 @@ docker run \
   --init \
   --user $(id -u) \
   --network ${NETWORK_NAME} \
+  --add-host=host.docker.internal:host-gateway \
   --volume ${BASE_DIR}:/data \
   --publish ${RESOLVER_HOST_PORT}:${RESOLVER_HOST_PORT} \
   --env FM_DATA_DIR=/data/${NODE_NAME}/fendermint/data \
@@ -134,6 +137,7 @@ docker run \
   ${FLAGS} \
   --init \
   --user $(id -u) \
+  --add-host=host.docker.internal:host-gateway \
   --volume ${BASE_DIR}:/data \
   --env LOG_LEVEL=${FM_LOG_LEVEL} \
   --env RUST_BACKTRACE=1 \

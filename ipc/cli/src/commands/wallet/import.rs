@@ -75,7 +75,7 @@ impl CommandLineHandler for WalletImport {
 .args(&["path", "private_key"]),
 ))]
 pub(crate) struct WalletImportArgs {
-    #[arg(long, help = "The type of the wallet, i.e. fvm, evm")]
+    #[arg(long, help = "The type of the wallet, i.e. fvm, evm, btc")]
     pub wallet_type: String,
     #[arg(
         long,

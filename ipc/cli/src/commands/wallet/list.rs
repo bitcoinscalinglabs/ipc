@@ -58,7 +58,7 @@ impl CommandLineHandler for WalletList {
                 let wallet = provider.btc_wallet()?;
                 let addresses = wallet.read().unwrap().list()?;
                 for address in addresses.iter() {
-                    print!("Address: {}", address);
+                    println!("Address: {}", address);
 
                     let key_info = wallet.read().unwrap().get(address)?.unwrap();
                     let sk = libsecp256k1::SecretKey::parse_slice(key_info.private_key())?;
@@ -82,6 +82,6 @@ impl CommandLineHandler for WalletList {
 #[derive(Debug, Args)]
 #[command(about = "List addresses and pubkeys in the wallet")]
 pub(crate) struct WalletListArgs {
-    #[arg(long, help = "The type of the wallet, i.e. fvm, evm")]
+    #[arg(long, help = "The type of the wallet, i.e. fvm, evm, btc")]
     pub wallet_type: String,
 }

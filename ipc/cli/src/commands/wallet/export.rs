@@ -115,7 +115,7 @@ pub(crate) struct WalletExportArgs {
         help = "Optional parameter that outputs the address key into the file specified"
     )]
     pub output: Option<String>,
-    #[arg(long, help = "The type of the wallet, i.e. fvm, evm")]
+    #[arg(long, help = "The type of the wallet, i.e. fvm, evm, btc")]
     pub wallet_type: String,
     #[arg(
         long,
@@ -202,6 +202,6 @@ impl CommandLineHandler for WalletPublicKey {
 pub(crate) struct WalletPublicKeyArgs {
     #[arg(long, help = "Address of the key to export")]
     pub address: String,
-    #[arg(long, help = "The type of the wallet, i.e. fvm, evm")]
+    #[arg(long, help = "The type of the wallet, i.e. fvm, evm, btc")]
     pub wallet_type: String,
 }

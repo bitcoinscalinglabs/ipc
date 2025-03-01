@@ -50,6 +50,6 @@ impl CommandLineHandler for WalletRemove {
 pub(crate) struct WalletRemoveArgs {
     #[arg(long, help = "Address of the key to remove")]
     pub address: String,
-    #[arg(long, help = "The type of the wallet, i.e. fvm, evm")]
+    #[arg(long, help = "The type of the wallet, i.e. fvm, evm, btc")]
     pub wallet_type: String,
 }
