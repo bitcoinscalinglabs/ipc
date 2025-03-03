@@ -1020,10 +1020,6 @@ impl TopDownFinalityQuery for BtcSubnetManager {
                 .get("nonce")
                 .and_then(Value::as_u64)
                 .ok_or_else(|| anyhow!("Field nonce not found in result"))?;
-            // TODO(Orestis): This should be removed
-            if nonce == 0 {
-                return Err(anyhow!("Nonce is 0"));
-            }
 
             let envelope = IpcEnvelope {
                 kind,
@@ -1035,10 +1031,8 @@ impl TopDownFinalityQuery for BtcSubnetManager {
                     &SubnetID::new_root(subnet_id.root_id()),
                     &Address::new_delegated(BTC_NAMESPACE, &vec![0; 20])?,
                 )?,
-                // from: IPCAddress::new(&subnet_id, &target_address)?,
                 message: vec![],
-                // TODO(Orestis): This should be removed
-                nonce: nonce - 1,
+                nonce,
             };
             messages.push(envelope);
         }
