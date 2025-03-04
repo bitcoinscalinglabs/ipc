@@ -17,5 +17,8 @@ COPY . .
 RUN --mount=type=cache,target=target \
   --mount=type=cache,target=$RUSTUP_HOME,from=rust,source=$RUSTUP_HOME \
   --mount=type=cache,target=$CARGO_HOME,from=rust,source=$CARGO_HOME \
+  rustup install 1.81.0 && \
+  rustup target add aarch64-unknown-linux-gnu --toolchain 1.81.0 && \
+  rustup component add --toolchain 1.81.0-aarch64-unknown-linux-gnu rustfmt && \
   RUST_LOG=trace cargo install --locked --root output --path fendermint/app &&\
   RUST_LOG=trace cargo install --locked --root output --path ipc/cli
