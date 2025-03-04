@@ -606,14 +606,22 @@ impl IpcProvider {
         let subnet_config = conn.subnet();
         let sender = self.check_sender(subnet_config, from)?;
 
-        let gateway_addr = match gateway_addr {
-            None => subnet_config.gateway_addr(),
-            Some(addr) => addr,
-        };
-
-        conn.manager()
-            .release(gateway_addr, sender, to.unwrap_or(sender), amount)
-            .await
+        match &subnet_config.config {
+            config::subnet::SubnetConfig::Fevm(_) => {
+                let gateway_addr = match gateway_addr {
+                    None => Some(subnet_config.gateway_addr()),
+                    Some(addr) => Some(addr),
+                };
+                conn.manager()
+                    .release(gateway_addr, sender, to.unwrap_or(sender), amount)
+                    .await
+            }
+            config::subnet::SubnetConfig::Btc(_) => {
+                conn.manager()
+                    .release(gateway_addr, sender, to.unwrap_or(sender), amount)
+                    .await
+            }
+        }
     }
 
     /// Propagate a cross-net message forward. For `postbox_msg_key`, we are using bytes because different

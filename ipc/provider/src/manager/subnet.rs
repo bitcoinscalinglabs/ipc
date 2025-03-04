@@ -127,7 +127,7 @@ pub trait SubnetManager:
     /// Returns the epoch that the released is executed in the child.
     async fn release(
         &self,
-        gateway_addr: Address,
+        gateway_addr: Option<Address>,
         from: Address,
         to: Address,
         amount: TokenAmount,

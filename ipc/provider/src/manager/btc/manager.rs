@@ -491,13 +491,15 @@ impl SubnetManager for BtcSubnetManager {
 
     async fn release(
         &self,
-        _gateway_addr: Address,
+        _gateway_addr: Option<Address>,
         _from: Address,
         _to: Address,
         _amount: TokenAmount,
     ) -> Result<ChainEpoch> {
         tracing::info!("releasing on btc");
-        todo!()
+        unimplemented!(
+            "release on bitcoin is not supported, it is not meant to be used as a child subnet"
+        )
     }
 
     async fn propagate(

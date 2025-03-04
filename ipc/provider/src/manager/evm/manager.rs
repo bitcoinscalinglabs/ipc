@@ -676,11 +676,13 @@ impl SubnetManager for EthSubnetManager {
 
     async fn release(
         &self,
-        gateway_addr: Address,
+        gateway_addr: Option<Address>,
         from: Address,
         to: Address,
         amount: TokenAmount,
     ) -> Result<ChainEpoch> {
+        let gateway_addr =
+            gateway_addr.ok_or_else(|| anyhow!("gateway address must be provided"))?;
         self.ensure_same_gateway(&gateway_addr)?;
 
         let value = amount
