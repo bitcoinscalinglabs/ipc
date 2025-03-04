@@ -68,7 +68,6 @@ pub struct IpcProvider {
     config: Arc<Config>,
     fvm_wallet: Option<Arc<RwLock<Wallet>>>,
     evm_keystore: Option<Arc<RwLock<PersistentKeyStore<EthKeyAddress>>>>,
-    btc_keystore: Option<Arc<RwLock<PersistentKeyStore<EthKeyAddress>>>>,
 }
 
 impl IpcProvider {
@@ -76,15 +75,12 @@ impl IpcProvider {
         config: Arc<Config>,
         fvm_wallet: Arc<RwLock<Wallet>>,
         evm_keystore: Arc<RwLock<PersistentKeyStore<EthKeyAddress>>>,
-        // TODO(Orestis): See if we have to change EthKeyAddress to something else
-        btc_keystore: Arc<RwLock<PersistentKeyStore<EthKeyAddress>>>,
     ) -> Self {
         Self {
             sender: None,
             config,
             fvm_wallet: Some(fvm_wallet),
             evm_keystore: Some(evm_keystore),
-            btc_keystore: Some(btc_keystore),
         }
     }
 
@@ -96,8 +92,7 @@ impl IpcProvider {
             config.clone(),
         )?)));
         let evm_keystore = Arc::new(RwLock::new(new_evm_keystore_from_config(config.clone())?));
-        let btc_keystore = Arc::new(RwLock::new(new_btc_keystore_from_config(config.clone())?));
-        Ok(Self::new(config, fvm_wallet, evm_keystore, btc_keystore))
+        Ok(Self::new(config, fvm_wallet, evm_keystore))
     }
 
     /// Initializes a new `IpcProvider` configured to interact with
@@ -115,15 +110,13 @@ impl IpcProvider {
                 &repo_path,
             )?)));
             let evm_keystore = Arc::new(RwLock::new(new_evm_keystore_from_path(&repo_path)?));
-            let btc_keystore = Arc::new(RwLock::new(new_btc_keystore_from_path(&repo_path)?));
-            Ok(Self::new(config, fvm_wallet, evm_keystore, btc_keystore))
+            Ok(Self::new(config, fvm_wallet, evm_keystore))
         } else {
             Ok(Self {
                 sender: None,
                 config,
                 fvm_wallet: None,
                 evm_keystore: None,
-                btc_keystore: None,
             })
         }
     }
@@ -209,19 +202,7 @@ impl IpcProvider {
         }
     }
 
-    pub fn btc_wallet(&self) -> anyhow::Result<Arc<RwLock<PersistentKeyStore<EthKeyAddress>>>> {
-        if let Some(wallet) = &self.btc_keystore {
-            Ok(wallet.clone())
-        } else {
-            Err(anyhow!("No btc keystore found in provider"))
-        }
-    }
-
-    fn check_sender(
-        &mut self,
-        subnet: &config::Subnet,
-        from: Option<Address>,
-    ) -> anyhow::Result<Address> {
+    fn check_sender(&mut self, from: Option<Address>) -> anyhow::Result<Address> {
         // if there is from use that.
         if let Some(from) = from {
             return Ok(from);
@@ -234,36 +215,19 @@ impl IpcProvider {
 
         // and finally, if there is no sender, use the default and
         // set it as the default sender.
-        match &subnet.config {
-            config::subnet::SubnetConfig::Fevm(_) => {
-                if self.sender.is_none() {
-                    let wallet = self.evm_wallet()?;
-                    let addr = match wallet.write().unwrap().get_default()? {
-                        None => return Err(anyhow!("no default evm account configured")),
-                        Some(addr) => Address::try_from(addr)?,
-                    };
-                    self.sender = Some(addr);
-                    return Ok(addr);
-                }
-            }
-            config::subnet::SubnetConfig::Btc(_) => {
-                if self.sender.is_none() {
-                    let wallet = self.btc_wallet()?;
-                    let addr = match wallet
-                        .write()
-                        .map_err(|e| {
-                            anyhow::anyhow!("Failed to get the lock for btc keystore: {}", e)
-                        })?
-                        .get_default()?
-                    {
-                        None => return Err(anyhow!("no default btc key configured")),
-                        Some(addr) => Address::try_from(addr)?,
-                    };
-                    self.sender = Some(addr);
-                    return Ok(addr);
-                }
-            }
-        };
+        if self.sender.is_none() {
+            let wallet = self.evm_wallet()?;
+            let addr = match wallet
+                .write()
+                .map_err(|e| anyhow::anyhow!("Failed to get the lock for evm keystore: {}", e))?
+                .get_default()?
+            {
+                None => return Err(anyhow!("no default evm account configured")),
+                Some(addr) => Address::try_from(addr)?,
+            };
+            self.sender = Some(addr);
+            return Ok(addr);
+        }
 
         Err(anyhow!("error fetching a valid sender"))
     }
@@ -291,7 +255,7 @@ impl IpcProvider {
 
         match parent.config {
             config::subnet::SubnetConfig::Fevm(_) => {
-                let sender = self.check_sender(parent, from)?;
+                let sender = self.check_sender(from)?;
                 conn.manager().create_subnet(Some(sender), params).await
             }
             config::subnet::SubnetConfig::Btc(_) => {
@@ -312,18 +276,19 @@ impl IpcProvider {
         let parent_conn = self.get_connection(&parent_id)?;
 
         let parent_config = parent_conn.subnet();
-        let sender = self.check_sender(parent_config, from)?;
+        let sender = self.check_sender(from)?;
         let addr_payload = sender.payload();
         let addr = payload_to_evm_address(addr_payload)?;
 
+        let keystore = self.evm_wallet()?;
+        let key_info = keystore
+            .read()
+            .map_err(|e| anyhow::anyhow!("Failed to get the lock for evm keystore: {}", e))?
+            .get(&addr.into())?
+            .ok_or_else(|| anyhow!("key does not exist"))?;
+
         let params = match parent_config.config {
             config::subnet::SubnetConfig::Fevm(_) => {
-                let keystore = self.evm_wallet()?;
-                let key_info = keystore
-                    .read()
-                    .unwrap()
-                    .get(&addr.into())?
-                    .ok_or_else(|| anyhow!("key does not exist"))?;
                 let sk = libsecp256k1::SecretKey::parse_slice(key_info.private_key())?;
                 let public_key = libsecp256k1::PublicKey::from_secret_key(&sk);
                 let hex_public_key = hex::encode(public_key.serialize());
@@ -337,12 +302,6 @@ impl IpcProvider {
                 })
             }
             config::subnet::SubnetConfig::Btc(_) => {
-                let keystore = self.btc_wallet()?;
-                let key_info = keystore
-                    .read()
-                    .map_err(|e| anyhow::anyhow!("Failed to get the lock for btc keystore: {}", e))?
-                    .get(&addr.into())?
-                    .ok_or_else(|| anyhow!("btc key does not exist"))?;
                 let sk = ipc_wallet::parse_and_validate_secret_key(key_info.private_key())?;
                 let public_key = ipc_wallet::get_xonly_public_key_serialized(&sk)?;
                 let hex_public_key = hex::encode(public_key);
@@ -383,7 +342,7 @@ impl IpcProvider {
 
         let params = match subnet_config.config {
             config::subnet::SubnetConfig::Fevm(_) => {
-                let sender = self.check_sender(subnet_config, address)?;
+                let sender = self.check_sender(address)?;
                 PreFundParams::Eth(EthPreFundParams {
                     subnet_id: subnet,
                     sender: sender,
@@ -409,8 +368,7 @@ impl IpcProvider {
         let parent = subnet.parent().ok_or_else(|| anyhow!("no parent found"))?;
         let conn = self.get_connection(&parent)?;
 
-        let subnet_config = conn.subnet();
-        let sender = self.check_sender(subnet_config, from)?;
+        let sender = self.check_sender(from)?;
 
         conn.manager().pre_release(subnet, sender, amount).await
     }
@@ -424,8 +382,7 @@ impl IpcProvider {
         let parent = subnet.parent().ok_or_else(|| anyhow!("no parent found"))?;
         let conn = self.get_connection(&parent)?;
 
-        let subnet_config = conn.subnet();
-        let sender = self.check_sender(subnet_config, from)?;
+        let sender = self.check_sender(from)?;
 
         conn.manager().stake(subnet, sender, collateral).await
     }
@@ -439,8 +396,7 @@ impl IpcProvider {
         let parent = subnet.parent().ok_or_else(|| anyhow!("no parent found"))?;
         let conn = self.get_connection(&parent)?;
 
-        let subnet_config = conn.subnet();
-        let sender = self.check_sender(subnet_config, from)?;
+        let sender = self.check_sender(from)?;
 
         conn.manager().unstake(subnet, sender, collateral).await
     }
@@ -453,8 +409,7 @@ impl IpcProvider {
         let parent = subnet.parent().ok_or_else(|| anyhow!("no parent found"))?;
         let conn = self.get_connection(&parent)?;
 
-        let subnet_config = conn.subnet();
-        let sender = self.check_sender(subnet_config, from)?;
+        let sender = self.check_sender(from)?;
 
         conn.manager().leave_subnet(subnet, sender).await
     }
@@ -467,8 +422,7 @@ impl IpcProvider {
         let parent = subnet.parent().ok_or_else(|| anyhow!("no parent found"))?;
         let conn = self.get_connection(&parent)?;
 
-        let subnet_config = conn.subnet();
-        let sender = self.check_sender(subnet_config, from)?;
+        let sender = self.check_sender(from)?;
 
         conn.manager().claim_collateral(subnet, sender).await
     }
@@ -481,8 +435,7 @@ impl IpcProvider {
         let parent = subnet.parent().ok_or_else(|| anyhow!("no parent found"))?;
         let conn = self.get_connection(&parent)?;
 
-        let subnet_config = conn.subnet();
-        let sender = self.check_sender(subnet_config, from)?;
+        let sender = self.check_sender(from)?;
 
         conn.manager().kill_subnet(subnet, sender).await
     }
@@ -520,7 +473,7 @@ impl IpcProvider {
 
         let params = match parent_config.config {
             config::subnet::SubnetConfig::Fevm(_) => {
-                let sender = self.check_sender(parent_config, from)?;
+                let sender = self.check_sender(from)?;
                 let parent_gateway_addr = match gateway_addr {
                     None => parent_config.gateway_addr(),
                     Some(addr) => addr,
@@ -534,7 +487,7 @@ impl IpcProvider {
                 })
             }
             config::subnet::SubnetConfig::Btc(_) => {
-                let dst_address = self.check_sender(parent_config, to)?;
+                let dst_address = self.check_sender(to)?;
                 FundParams::Btc(BtcFundParams {
                     subnet_id: subnet,
                     dst_address,
@@ -559,8 +512,7 @@ impl IpcProvider {
         let parent = subnet.parent().ok_or_else(|| anyhow!("no parent found"))?;
         let conn = self.get_connection(&parent)?;
 
-        let subnet_config = conn.subnet();
-        let sender = self.check_sender(subnet_config, from)?;
+        let sender = self.check_sender(from)?;
 
         conn.manager()
             .fund_with_token(subnet, sender, to.unwrap_or(sender), amount)
@@ -581,9 +533,7 @@ impl IpcProvider {
             None => return Err(anyhow!("target parent subnet not found")),
             Some(conn) => conn,
         };
-
-        let subnet_config = conn.subnet();
-        let sender = self.check_sender(subnet_config, from)?;
+        let sender = self.check_sender(from)?;
 
         conn.manager().approve_token(subnet, sender, amount).await
     }
@@ -604,7 +554,7 @@ impl IpcProvider {
         };
 
         let subnet_config = conn.subnet();
-        let sender = self.check_sender(subnet_config, from)?;
+        let sender = self.check_sender(from)?;
 
         match &subnet_config.config {
             config::subnet::SubnetConfig::Fevm(_) => {
@@ -647,8 +597,7 @@ impl IpcProvider {
     ) -> anyhow::Result<()> {
         let conn = self.get_connection(subnet)?;
 
-        let subnet_config = conn.subnet();
-        let sender = self.check_sender(subnet_config, from)?;
+        let sender = self.check_sender(from)?;
 
         // FIXME: This limits that only value to f-addresses can be sent
         // with the provider (which requires translating eth-addresses into
@@ -816,8 +765,7 @@ impl IpcProvider {
         let parent = subnet.parent().ok_or_else(|| anyhow!("no parent found"))?;
         let conn = self.get_connection(&parent)?;
 
-        let subnet_config = conn.subnet();
-        let sender = self.check_sender(subnet_config, from)?;
+        let sender = self.check_sender(from)?;
 
         conn.manager()
             .add_bootstrap(subnet, &sender, endpoint)
@@ -978,7 +926,7 @@ impl IpcProvider {
 
     pub fn new_btc_key(&self) -> anyhow::Result<EthKeyAddress> {
         let key_info = ipc_wallet::random_btc_secret_key();
-        let keystore: Arc<RwLock<PersistentKeyStore<EthKeyAddress>>> = self.btc_wallet()?;
+        let keystore = self.evm_wallet()?;
 
         let out = keystore
             .write()
@@ -988,7 +936,7 @@ impl IpcProvider {
     }
 
     pub fn import_btc_key_from_privkey(&self, private_key: &str) -> anyhow::Result<EthKeyAddress> {
-        let keystore = self.btc_wallet()?;
+        let keystore = self.evm_wallet()?;
         let mut keystore = keystore
             .write()
             .map_err(|_| anyhow!("Poisoned lock while writing to btc keystore"))?;

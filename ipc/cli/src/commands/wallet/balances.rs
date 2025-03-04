@@ -30,11 +30,7 @@ impl CommandLineHandler for WalletBalances {
 
         match wallet_type {
             WalletType::Evm | WalletType::Btc => {
-                let wallet = if wallet_type == WalletType::Evm {
-                    provider.evm_wallet()?
-                } else {
-                    provider.btc_wallet()?
-                };
+                let wallet = provider.evm_wallet()?;
                 let addresses = wallet.read().unwrap().list()?;
                 let r = addresses
                     .iter()
