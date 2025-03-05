@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: MIT
 //! Bottom up checkpoint manager
 
+use crate::config::subnet::SubnetConfig;
 use crate::config::Subnet;
-use crate::manager::{BottomUpCheckpointRelayer, EthSubnetManager};
+use crate::manager::{BottomUpCheckpointRelayer, BtcSubnetManager, EthSubnetManager};
 use crate::observe::CheckpointSubmitted;
 use anyhow::{anyhow, Result};
 use futures_util::future::try_join_all;
@@ -29,21 +30,21 @@ pub struct CheckpointConfig {
 /// Manages the submission of bottom up checkpoint. It checks if the submitter has already
 /// submitted in the `last_checkpoint_height`, if not, it will submit the checkpoint at that height.
 /// Then it will submit at the next submission height for the new checkpoint.
-pub struct BottomUpCheckpointManager<T> {
+pub struct BottomUpCheckpointManager {
     metadata: CheckpointConfig,
-    parent_handler: Arc<T>,
-    child_handler: T,
+    parent_handler: Arc<Box<dyn BottomUpCheckpointRelayer>>,
+    child_handler: Arc<Box<dyn BottomUpCheckpointRelayer>>,
     /// The number of blocks away from the chain head that is considered final
     finalization_blocks: ChainEpoch,
     submission_semaphore: Arc<Semaphore>,
 }
 
-impl<T: BottomUpCheckpointRelayer> BottomUpCheckpointManager<T> {
+impl BottomUpCheckpointManager {
     pub async fn new(
         parent: Subnet,
         child: Subnet,
-        parent_handler: T,
-        child_handler: T,
+        parent_handler: Arc<Box<dyn BottomUpCheckpointRelayer>>,
+        child_handler: Arc<Box<dyn BottomUpCheckpointRelayer>>,
         max_parallelism: usize,
     ) -> Result<Self> {
         let period = parent_handler
@@ -56,7 +57,7 @@ impl<T: BottomUpCheckpointRelayer> BottomUpCheckpointManager<T> {
                 child,
                 period,
             },
-            parent_handler: Arc::new(parent_handler),
+            parent_handler,
             child_handler,
             finalization_blocks: 0,
             submission_semaphore: Arc::new(Semaphore::new(max_parallelism)),
@@ -69,29 +70,43 @@ impl<T: BottomUpCheckpointRelayer> BottomUpCheckpointManager<T> {
     }
 }
 
-impl BottomUpCheckpointManager<EthSubnetManager> {
-    pub async fn new_evm_manager(
+impl BottomUpCheckpointManager {
+    pub async fn new_manager(
         parent: Subnet,
         child: Subnet,
         keystore: Arc<RwLock<PersistentKeyStore<EthKeyAddress>>>,
         max_parallelism: usize,
     ) -> Result<Self> {
-        let parent_handler =
-            EthSubnetManager::from_subnet_with_wallet_store(&parent, Some(keystore.clone()))?;
-        let child_handler =
-            EthSubnetManager::from_subnet_with_wallet_store(&child, Some(keystore))?;
+        println!("parent: {:?}", parent.config);
+        println!("child: {:?}", child.config);
+        let parent_handler: Box<dyn BottomUpCheckpointRelayer> = match &parent.config {
+            SubnetConfig::Fevm(_) => Box::new(EthSubnetManager::from_subnet_with_wallet_store(
+                &parent,
+                Some(keystore.clone()),
+            )?),
+            SubnetConfig::Btc(_) => Box::new(BtcSubnetManager::new(&parent)?),
+        };
+
+        let child_handler: Box<dyn BottomUpCheckpointRelayer> = match &child.config {
+            SubnetConfig::Fevm(_) => Box::new(EthSubnetManager::from_subnet_with_wallet_store(
+                &child,
+                Some(keystore),
+            )?),
+            SubnetConfig::Btc(_) => Box::new(BtcSubnetManager::new(&child)?),
+        };
+
         Self::new(
             parent,
             child,
-            parent_handler,
-            child_handler,
+            Arc::new(parent_handler),
+            Arc::new(child_handler),
             max_parallelism,
         )
         .await
     }
 }
 
-impl<T: BottomUpCheckpointRelayer> Display for BottomUpCheckpointManager<T> {
+impl Display for BottomUpCheckpointManager {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -101,7 +116,7 @@ impl<T: BottomUpCheckpointRelayer> Display for BottomUpCheckpointManager<T> {
     }
 }
 
-impl<T: BottomUpCheckpointRelayer + Send + Sync + 'static> BottomUpCheckpointManager<T> {
+impl BottomUpCheckpointManager {
     /// Getter for the parent subnet this checkpoint manager is handling
     pub fn parent_subnet(&self) -> &Subnet {
         &self.metadata.parent
@@ -142,8 +157,7 @@ impl<T: BottomUpCheckpointRelayer + Send + Sync + 'static> BottomUpCheckpointMan
 
         let current_height = self.child_handler.current_epoch().await?;
         let finalized_height = max(1, current_height - self.finalization_blocks);
-
-        tracing::debug!("last submission height: {last_checkpoint_epoch}, current height: {current_height}, finalized_height: {finalized_height}");
+        tracing::info!("last submission height: {last_checkpoint_epoch}, current height: {current_height}, finalized_height: {finalized_height}");
 
         if finalized_height <= last_checkpoint_epoch {
             return Ok(());
@@ -236,7 +250,7 @@ impl<T: BottomUpCheckpointRelayer + Send + Sync + 'static> BottomUpCheckpointMan
     }
 
     async fn submit_checkpoint(
-        parent_handler: Arc<T>,
+        parent_handler: Arc<Box<dyn BottomUpCheckpointRelayer>>,
         submitter: Address,
         bundle: BottomUpCheckpointBundle,
         event: QuorumReachedEvent,
