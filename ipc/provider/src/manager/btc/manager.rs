@@ -763,18 +763,18 @@ impl BottomUpCheckpointRelayer for BtcSubnetManager {
         &self,
         height: ChainEpoch,
     ) -> Result<Option<BottomUpCheckpointBundle>> {
-        tracing::info!("getting checkpoint bundle at height: {height:}");
-        todo!()
+        tracing::info!("getting checkpoint bundle on bitcoin at height: {height:}");
+        anyhow::bail!("not supported on btc, it is not meant to be a child subnet")
     }
     /// Queries the signature quorum reached events at target height.
-    async fn quorum_reached_events(&self, height: ChainEpoch) -> Result<Vec<QuorumReachedEvent>> {
-        tracing::info!("getting quorum reached events at height: {height:}");
-        todo!()
+    async fn quorum_reached_events(&self, _height: ChainEpoch) -> Result<Vec<QuorumReachedEvent>> {
+        tracing::info!("getting quorum reached events on bitcoin at height: {_height:}");
+        anyhow::bail!("not supported on btc, it is not meant to be a child subnet")
     }
     /// Get the current epoch in the current subnet
     async fn current_epoch(&self) -> Result<ChainEpoch> {
-        tracing::info!("getting current epoch");
-        todo!()
+        tracing::info!("getting current epoch on bitcoin");
+        anyhow::bail!("not supported on btc, it is not meant to be a child subnet")
     }
 }
 
