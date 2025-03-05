@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::str::FromStr;
 
 use async_trait::async_trait;
-use ethers::providers::{Authorization, Http, Provider};
+use ethers::providers::Authorization;
 use ethers::types::H256;
 use http::HeaderValue;
 use ipc_api::address::IPCAddress;
