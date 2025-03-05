@@ -76,7 +76,7 @@ impl CommandLineHandler for BottomUpRelayer {
         let child = get_subnet_config(&config_path, &subnet)?;
         let parent = get_subnet_config(&config_path, &parent)?;
 
-        let mut manager = BottomUpCheckpointManager::new_evm_manager(
+        let mut manager = BottomUpCheckpointManager::new_manager(
             parent.clone(),
             child.clone(),
             Arc::new(RwLock::new(keystore)),
