@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use clap::{Args, Subcommand};
 use fvm_shared::bigint::BigInt;
 use fvm_shared::econ::TokenAmount;
-use ipc_api::subnet_id::SubnetID;
+use ipc_api::{subnet_id::SubnetID, token_amount_from_satoshi};
 use num_traits::Num;
 use std::{fmt::Debug, str::FromStr};
 
@@ -68,7 +68,7 @@ impl CommandLineHandler for Fund {
                             None,
                             None,
                             to,
-                            TokenAmount::from_atto(btc_fund_args.amount),
+                            token_amount_from_satoshi(btc_fund_args.amount),
                         )
                         .await?,
                 );
@@ -154,7 +154,7 @@ impl CommandLineHandler for PreFund {
                     .pre_fund(
                         subnet.clone(),
                         dest_address,
-                        TokenAmount::from_atto(btc_fund_args.amount),
+                        token_amount_from_satoshi(btc_fund_args.amount),
                     )
                     .await?;
             }

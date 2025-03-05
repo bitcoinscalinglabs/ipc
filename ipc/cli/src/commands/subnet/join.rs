@@ -5,8 +5,7 @@
 use async_trait::async_trait;
 use clap::{Args, Subcommand};
 
-use fvm_shared::econ::TokenAmount;
-use ipc_api::subnet_id::SubnetID;
+use ipc_api::{subnet_id::SubnetID, token_amount_from_satoshi};
 use ipc_provider::{config::subnet::NetworkType, IpcProvider};
 
 use num_traits::Zero;
@@ -76,7 +75,13 @@ impl JoinSubnet {
         };
 
         let epoch = provider
-            .join_subnet(subnet_id, from, fevm_args.collateral, None, None)
+            .join_subnet(
+                subnet_id,
+                from,
+                f64_to_token_amount(fevm_args.collateral)?,
+                None,
+                None,
+            )
             .await?;
         println!("joined at epoch: {epoch}");
 
@@ -100,7 +105,7 @@ impl JoinSubnet {
                 .pre_fund(
                     subnet_id.clone(),
                     from,
-                    TokenAmount::from_atto(initial_balance),
+                    token_amount_from_satoshi(initial_balance),
                 )
                 .await?;
         };
@@ -109,7 +114,7 @@ impl JoinSubnet {
             .join_subnet(
                 subnet_id,
                 from,
-                btc_args.collateral as f64,
+                token_amount_from_satoshi(btc_args.collateral),
                 Some(btc_args.ip.clone()),
                 Some(btc_args.backup_address.clone()),
             )

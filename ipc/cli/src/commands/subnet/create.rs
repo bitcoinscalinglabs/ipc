@@ -15,6 +15,7 @@ use ipc_api::subnet::{
     PermissionMode,
 };
 use ipc_api::subnet_id::SubnetID;
+use ipc_api::token_amount_from_satoshi;
 use ipc_provider::config::subnet::NetworkType;
 use ipc_provider::config::Subnet;
 use ipc_provider::IpcProvider;
@@ -133,12 +134,12 @@ impl CreateSubnet {
         let construct_params = ConstructParams::Btc(BtcConstructParams {
             parent: parent.clone(),
             min_validators: arguments.min_validators,
-            min_validator_stake: btc_args.min_validator_stake,
+            min_validator_stake: token_amount_from_satoshi(btc_args.min_validator_stake),
             bottomup_check_period: arguments.bottomup_check_period,
             active_validators_limit: arguments
                 .active_validators_limit
                 .unwrap_or(DEFAULT_ACTIVE_VALIDATORS),
-            min_cross_msg_fee: btc_args.min_cross_msg_fee,
+            min_cross_msg_fee: token_amount_from_satoshi(btc_args.min_cross_msg_fee),
             validator_whitelist: whitelist,
         });
 
@@ -292,7 +293,7 @@ pub struct BtcArgs {
     #[arg(
         long,
         default_value = "1",
-        help = "Minimum fee for cross-net messages in subnet (in satoshis, the minimum is 1 satoshi)"
+        help = "Minimum fee for cross-net messages in subnet (in satoshis, the default is 1 satoshi)"
     )]
     pub min_cross_msg_fee: u64,
 

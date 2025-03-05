@@ -1,7 +1,6 @@
 // Copyright 2022-2024 Protocol Labs
 // SPDX-License-Identifier: MIT
 
-use num_traits::ToPrimitive;
 use std::collections::{BTreeMap, HashMap};
 use std::str::FromStr;
 
@@ -12,12 +11,12 @@ use http::HeaderValue;
 use ipc_api::address::IPCAddress;
 use ipc_api::evm::payload_to_evm_address;
 use ipc_api::subnet::{
-    Asset, AssetKind, BtcConstructParams, BtcFundParams, BtcPreFundParams, ConstructParams,
-    FundParams, PermissionMode, PreFundParams,
+    Asset, AssetKind, BtcConstructParams, BtcFundParams, ConstructParams, FundParams,
+    PermissionMode, PreFundParams,
 };
 use ipc_api::subnet::{BtcJoinParams, JoinParams};
 use ipc_api::validator::Validator;
-use ipc_api::{ethers_address_to_fil_address, token_amount_from_satoshi};
+use ipc_api::{ethers_address_to_fil_address, token_amount_from_satoshi, token_amount_to_satoshi};
 use reqwest::Client;
 use serde_json::{json, Value};
 
@@ -161,11 +160,11 @@ impl SubnetManager for BtcSubnetManager {
             "method": "createsubnet",
             "id": 1,
             "params": {
-                "min_validator_stake":     params.min_validator_stake,
+                "min_validator_stake":     token_amount_to_satoshi(params.min_validator_stake)?,
                 "min_validators":          params.min_validators,
                 "bottomup_check_period":   params.bottomup_check_period,
                 "active_validators_limit": params.active_validators_limit,
-                "min_cross_msg_fee":       params.min_cross_msg_fee,
+                "min_cross_msg_fee":       token_amount_to_satoshi(params.min_cross_msg_fee)?,
                 "whitelist":               params.validator_whitelist,
             }
         });
@@ -240,7 +239,7 @@ impl SubnetManager for BtcSubnetManager {
             "params": {
                 "subnet_id":        params.subnet_id.to_string(),
                 "pubkey":           params.sender_public_key,
-                "collateral":       params.collateral,
+                "collateral":       token_amount_to_satoshi(params.collateral)?,
                 "ip":               params.ip,
                 "backup_address":   params.backup_address,
             }
@@ -297,10 +296,6 @@ impl SubnetManager for BtcSubnetManager {
     }
 
     async fn pre_fund(&self, params: PreFundParams) -> Result<()> {
-        let params: BtcPreFundParams = match params {
-            PreFundParams::Eth(_) => return Err(anyhow!("Unsupported subnet configuration")),
-            PreFundParams::Btc(params) => params,
-        };
         tracing::info!("pre-fund subnet on btc with params: {params:?}");
 
         let body = json!({
@@ -309,7 +304,7 @@ impl SubnetManager for BtcSubnetManager {
             "id": 1,
             "params": {
                 "subnet_id":        params.subnet_id.to_string(),
-                "amount":           params.amount.atto().to_u64().ok_or_else(|| anyhow!("amount is too large"))?,
+                "amount":           token_amount_to_satoshi(params.amount)?,
                 "address":          payload_to_evm_address(params.dst_address.payload())?,
             }
         });
@@ -421,7 +416,7 @@ impl SubnetManager for BtcSubnetManager {
             "id": 1,
             "params": {
                 "subnet_id":        params.subnet_id.to_string(),
-                "amount":           params.amount.atto().to_u64().ok_or_else(|| anyhow!("amount is too large"))?,
+                "amount":           token_amount_to_satoshi(params.amount)?,
                 "address":          payload_to_evm_address(params.dst_address.payload())?,
             }
         });
@@ -1026,9 +1021,9 @@ impl TopDownFinalityQuery for BtcSubnetManager {
             let envelope = IpcEnvelope {
                 kind,
                 to: IPCAddress::new(&target_subnet_id, &target_address)?,
-                value: TokenAmount::from_atto(value),
+                value: token_amount_from_satoshi(value),
                 // TODO(Orestis): The following should only work for fund/prefund messages.
-                // Change when we implement transders.
+                // Change when we implement transfers.
                 from: IPCAddress::new(
                     &SubnetID::new_root(subnet_id.root_id()),
                     &Address::new_delegated(BTC_NAMESPACE, &vec![0; 20])?,

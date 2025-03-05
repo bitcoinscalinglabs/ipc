@@ -14,8 +14,8 @@ use ipc_api::checkpoint::{BottomUpCheckpointBundle, QuorumReachedEvent};
 use ipc_api::evm::payload_to_evm_address;
 use ipc_api::staking::{StakingChangeRequest, ValidatorInfo};
 use ipc_api::subnet::{
-    BtcFundParams, BtcJoinParams, BtcPreFundParams, ConstructParams, EthFundParams, EthJoinParams,
-    EthPreFundParams, FundParams, JoinParams, PreFundParams,
+    BtcFundParams, BtcJoinParams, ConstructParams, EthFundParams, EthJoinParams, FundParams,
+    JoinParams, PreFundParams,
 };
 use ipc_api::{cross::IpcEnvelope, subnet_id::SubnetID};
 use ipc_wallet::{
@@ -268,7 +268,7 @@ impl IpcProvider {
         &mut self,
         subnet: SubnetID,
         from: Option<Address>,
-        collateral: f64,
+        collateral: TokenAmount,
         validator_ip: Option<String>,
         backup_address: Option<String>,
     ) -> anyhow::Result<ChainEpoch> {
@@ -297,7 +297,7 @@ impl IpcProvider {
                 JoinParams::Eth(EthJoinParams {
                     subnet_id: subnet,
                     sender: sender,
-                    collateral: TokenAmount::from_nano(collateral as u128),
+                    collateral,
                     metadata: public_key.serialize().to_vec(),
                 })
             }
@@ -320,7 +320,7 @@ impl IpcProvider {
                 JoinParams::Btc(BtcJoinParams {
                     subnet_id: subnet,
                     sender_public_key: hex_public_key,
-                    collateral: collateral as u64,
+                    collateral,
                     ip,
                     backup_address,
                 })
@@ -338,22 +338,12 @@ impl IpcProvider {
     ) -> anyhow::Result<()> {
         let parent = subnet.parent().ok_or_else(|| anyhow!("no parent found"))?;
         let conn = self.get_connection(&parent)?;
-        let subnet_config = conn.subnet();
 
-        let params = match subnet_config.config {
-            config::subnet::SubnetConfig::Fevm(_) => {
-                let sender = self.check_sender(address)?;
-                PreFundParams::Eth(EthPreFundParams {
-                    subnet_id: subnet,
-                    sender: sender,
-                    amount: balance,
-                })
-            }
-            config::subnet::SubnetConfig::Btc(_) => PreFundParams::Btc(BtcPreFundParams {
-                subnet_id: subnet,
-                dst_address: address.ok_or_else(|| anyhow!("dst_address must be provided"))?,
-                amount: balance,
-            }),
+        let sender = self.check_sender(address)?;
+        let params = PreFundParams {
+            subnet_id: subnet,
+            dst_address: sender,
+            amount: balance,
         };
 
         conn.manager().pre_fund(params).await

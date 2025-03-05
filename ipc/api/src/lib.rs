@@ -7,6 +7,9 @@ use serde::de::Error as SerdeError;
 use serde::{Deserialize, Serialize, Serializer};
 use std::str::FromStr;
 
+use anyhow::anyhow;
+use num_traits::ToPrimitive;
+
 pub mod address;
 pub mod checkpoint;
 pub mod cross;
@@ -39,6 +42,15 @@ pub fn ethers_address_to_fil_address(addr: &ethers::types::Address) -> anyhow::R
 pub fn token_amount_from_satoshi(sats: impl Into<fvm_shared::bigint::BigInt>) -> TokenAmount {
     const SATOSHI_TO_ATTO: u64 = 10u64.pow((TokenAmount::DECIMALS as u32) - 8);
     TokenAmount::from_atto(sats.into() * SATOSHI_TO_ATTO)
+}
+
+pub fn token_amount_to_satoshi(amount: TokenAmount) -> anyhow::Result<u128> {
+    const SATOSHI_TO_ATTO: u64 = 10u64.pow((TokenAmount::DECIMALS as u32) - 8);
+    let sat = amount.atto() / SATOSHI_TO_ATTO;
+    match sat.to_u128() {
+        Some(sat) => Ok(sat),
+        None => Err(anyhow!("token amount is too large to represent as integer")),
+    }
 }
 
 /// Marker type for serialising data to/from string
