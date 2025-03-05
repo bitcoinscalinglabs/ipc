@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::str::FromStr;
 
 use async_trait::async_trait;
-use ethers::providers::Authorization;
+use ethers::providers::{Authorization, Http, Provider};
 use ethers::types::H256;
 use http::HeaderValue;
 use ipc_api::address::IPCAddress;
@@ -544,7 +544,6 @@ impl SubnetManager for BtcSubnetManager {
                 "subnet_id": subnet_id.to_string(),
             }
         });
-        println!("Request body: {body:?}");
 
         let resp = self
             .client
@@ -660,8 +659,6 @@ impl SubnetManager for BtcSubnetManager {
 
         let min_collateral = token_amount_from_satoshi(min_validator_stake);
 
-        println!("validators = {validators:#?}");
-
         Ok(SubnetGenesisInfo {
             active_validators_limit: active_validators_limit as u16,
             bottom_up_checkpoint_period: bottomup_check_period,
@@ -751,12 +748,69 @@ impl BottomUpCheckpointRelayer for BtcSubnetManager {
         tracing::info!(
             "getting last bottom up checkpoint height on btc with params: {subnet_id:?}"
         );
-        todo!()
+
+        let body = json!({
+            "jsonrpc": "2.0",
+            "method": "getlastcheckpointheight",
+            "id": 1,
+            "params": {
+                "subnet_id": subnet_id.to_string(),
+            }
+        });
+
+        let resp = self
+            .client
+            .post(self.rpc_url.clone())
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(anyhow!(
+                "btc getlastcheckpointheight request failed with status: {}",
+                resp.status()
+            ));
+        }
+
+        let data = resp.json::<Value>().await?;
+
+        if let Some(err_obj) = data.get("error") {
+            let code = err_obj
+                .get("code")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            let message = err_obj
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("Unknown error");
+            let error_data = err_obj
+                .get("data")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            return Err(anyhow!(
+                "JSON-RPC error: code={}, message={}, details={}",
+                code,
+                message,
+                error_data
+            ));
+        }
+
+        let result = data
+            .get("result")
+            .ok_or_else(|| anyhow!("No result found"))?;
+
+        let height = result
+            .get("height")
+            .ok_or_else(|| anyhow!("No height found"))?
+            .as_u64();
+
+        Ok(height.unwrap_or_default() as ChainEpoch)
     }
 
     async fn checkpoint_period(&self, subnet_id: &SubnetID) -> anyhow::Result<ChainEpoch> {
         tracing::info!("getting checkpoint period on btc with params: {subnet_id:?}");
-        todo!()
+        let genesis_info = self.get_genesis_info(subnet_id).await?;
+        Ok(genesis_info.bottom_up_checkpoint_period as ChainEpoch)
     }
 
     async fn checkpoint_bundle_at(
