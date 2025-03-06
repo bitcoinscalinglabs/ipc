@@ -17,7 +17,7 @@ fn main() {
         .expect("No parent directory above 'contracts/binding'?");
 
     let status = Command::new("make")
-        .arg("gen")
+        .arg("compile-abi")
         .current_dir(parent_dir) // run in the parent folder (contracts/)
         .status()
         .expect("Failed to run `make gen` in the parent folder");
