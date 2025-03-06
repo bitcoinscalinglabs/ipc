@@ -3,13 +3,27 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 /// Generate Rust bindings from the IPC Solidity Actors ABI artifacts.
 ///
 /// These are built by `make ipc-actors-abi`, here we just add the final step
 /// so we have better code completion with Rust Analyzer.
 fn main() {
-    // Run with `cargo build -vv` to see output from any `eprintln!` or `println!`.
+    let crate_dir =
+        std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set by Cargo");
+    let parent_dir = Path::new(&crate_dir)
+        .parent()
+        .expect("No parent directory above 'contracts/binding'?");
+
+    let status = Command::new("make")
+        .arg("gen")
+        .current_dir(parent_dir) // run in the parent folder (contracts/)
+        .status()
+        .expect("Failed to run `make gen` in the parent folder");
+    if !status.success() {
+        panic!("`make gen` failed in parent folder");
+    }
 
     // Maybe we want to skip the build and use the files as-is, could be imported as crate.
     // Enabled by default so that in the monorepo we don't have to worry about stale code.
