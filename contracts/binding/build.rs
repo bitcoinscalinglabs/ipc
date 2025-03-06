@@ -20,9 +20,9 @@ fn main() {
         .arg("compile-abi")
         .current_dir(parent_dir) // run in the parent folder (contracts/)
         .status()
-        .expect("Failed to run `make gen` in the parent folder");
+        .expect("Failed to run `make compile-abi` in the parent folder");
     if !status.success() {
-        panic!("`make gen` failed in parent folder");
+        panic!("`make compile-abi` failed in parent folder");
     }
 
     // Maybe we want to skip the build and use the files as-is, could be imported as crate.
