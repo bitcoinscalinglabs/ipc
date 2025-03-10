@@ -273,6 +273,11 @@ where
                 },
             };
 
+            // TODO(themis):
+            // step 1: get checkpoint PSBT from provider
+            // step 2: sign PSBT
+            // step 3: submit signature on some smart contract that stores map between checkpoint and signatures
+
             // We mustn't do these in parallel because of how nonces are fetched.
             broadcast_signature(
                 &validator_ctx.broadcaster,

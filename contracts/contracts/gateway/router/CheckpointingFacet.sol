@@ -120,6 +120,8 @@ contract CheckpointingFacet is GatewayActorModifiers {
             weight: weight,
             signature: signature
         });
+
+        // TODO(themis): store btc signature
     }
 
     /// @notice submit a batch of cross-net messages for execution.
