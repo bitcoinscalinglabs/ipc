@@ -201,6 +201,10 @@ impl BottomUpCheckpointManager {
                         )
                     })?;
 
+                // TODO(themis): get PSBT for this checkpoint
+                // TODO(themis): get PSBT signatures
+                // TODO(themis): potentially update bundle to contain BTC signatures
+
                 log::debug!("bottom up bundle: {bundle:?}");
 
                 // We support parallel checkpoint submission using FIFO order with a limited parallelism (controlled by
