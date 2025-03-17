@@ -31,6 +31,8 @@ use tendermint::block::Height;
 use tendermint_rpc::endpoint::commit;
 use tendermint_rpc::{endpoint::validators, Client, Paging};
 
+use serde_json::json;
+
 /// Validator voting power snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PowerTable(pub Vec<Validator<Power>>);
@@ -211,6 +213,7 @@ pub async fn broadcast_incomplete_signatures<C, DB>(
     gateway: &GatewayCaller<DB>,
     chain_id: ChainID,
     incomplete_checkpoints: Vec<getter::BottomUpCheckpoint>,
+    subnet_id: Option<ipc_api::subnet_id::SubnetID>,
 ) -> anyhow::Result<()>
 where
     C: Client + Clone + Send + Sync + 'static,
@@ -277,6 +280,14 @@ where
             // step 1: get checkpoint PSBT from provider
             // step 2: sign PSBT
             // step 3: submit signature on some smart contract that stores map between checkpoint and signatures
+            // TODO(Orestis):
+            // Getting self.subnet_id here is a hack, because the subnet_id that comes in the BottomUpCheckpoint
+            // cannot give us the information about the parent network type, nor the the root id of the parent
+            // with a "/b" prefix. If we change that, we can get rid of the subnet_id parameter in the function.
+
+            if parent_is_bitcoin(&subnet_id) {
+                broadcast_bitcoin_signature(&subnet_id, checkpoint.clone()).await?;
+            };
 
             // We mustn't do these in parallel because of how nonces are fetched.
             broadcast_signature(
@@ -301,6 +312,115 @@ where
             tracing::debug!(?height, "submitted checkpoint signature");
         }
     }
+    Ok(())
+}
+
+fn parent_is_bitcoin(subnet_id: &Option<ipc_api::subnet_id::SubnetID>) -> bool {
+    if let Some(subnet_id) = subnet_id {
+        return subnet_id.parent_network_type() == Some(ipc_api::subnet_id::NetworkType::Btc);
+    }
+    false
+}
+
+async fn broadcast_bitcoin_signature(
+    subnet_id: &Option<ipc_api::subnet_id::SubnetID>,
+    checkpoint: checkpoint::BottomUpCheckpoint,
+) -> anyhow::Result<()> {
+    let subnet_id = match subnet_id {
+        Some(subnet_id) => subnet_id,
+        None => {
+            return Err(anyhow!(
+                "broadcast_bitcoin_signature called without a subnet_id"
+            ))
+        }
+    };
+    let checkpoint = ipc_api::checkpoint::BottomUpCheckpoint::try_from(checkpoint)?;
+    tracing::trace!("Creating bitcoin signatures for checkpoint: {checkpoint:?}");
+
+    // collect all withdrawals and transfers from the checkpoint msgs
+    // let withdrawals: vec![];
+    // let transfers: vec![];
+
+    // checkpoint
+    //     .msgs
+    //     .iter()
+    //     .map(|msg| {
+    //         match msg.kind {
+    //             checkpoint::IpcEnvelope::Withdrawal(withdrawal) => {
+    //                 withdrawals.push(json!({
+    //                     "amount": withdrawal.amount, // Assuming `msg` has an `amount` field
+    //                     "address": withdrawal.address // Assuming `msg` has an `address` field
+    //                 }));
+    //             }
+    //             checkpoint::IpcEnvelope::Transfer(transfer) => {
+    //                 transfers.push(json!({
+    //                     "amount": transfer.amount, // Assuming `msg` has an `amount` field
+    //                     "destination_subnet_id": transfer.destination_subnet_id, // Assuming `msg` has this field
+    //                     "subnet_multisig_address": transfer.subnet_multisig_address, // Assuming `msg` has this field
+    //                     "subnet_user_address": transfer.subnet_user_address // Assuming `msg` has this field
+    //                 }));
+    //             }
+    //         }
+    //     })
+    //     .collect();
+
+    let body = json!({
+        "jsonrpc": "2.0",
+        "method": "gencheckpointpsbt",
+        "id": 1,
+        "params": {
+            "subnet_id":            subnet_id.to_string(),
+            "checkpoint_hash":      checkpoint.block_hash, //TODO(Orestis) Why abi_hash()?,
+            "change_address":       "bcrt1p5a03k4m8hj026twhkucm8ue6zemrkq62zj3pwkhg95jst3jtdt0scnwz3s",
+        }
+    });
+
+    tracing::info!("Request body: {body:?}");
+
+    // let resp = self
+    //     .client
+    //     .post(self.rpc_url.clone())
+    //     .json(&body)
+    //     .send()
+    //     .await?;
+
+    // if !resp.status().is_success() {
+    //     return Err(anyhow!(
+    //         "Create Subnet request failed with status: {}",
+    //         resp.status()
+    //     ));
+    // }
+
+    // let data = resp.json::<Value>().await?;
+
+    // if let Some(err_obj) = data.get("error") {
+    //     let code = err_obj
+    //         .get("code")
+    //         .and_then(Value::as_i64)
+    //         .unwrap_or_default();
+    //     let message = err_obj
+    //         .get("message")
+    //         .and_then(Value::as_str)
+    //         .unwrap_or("Unknown error");
+    //     let error_data = err_obj
+    //         .get("data")
+    //         .and_then(Value::as_str)
+    //         .unwrap_or_default();
+    //     return Err(anyhow!(
+    //         "JSON-RPC error: code={}, message={}, details={}",
+    //         code,
+    //         message,
+    //         error_data
+    //     ));
+    // }
+
+    // let subnet_id = data
+    //     .get("result")
+    //     .and_then(|r| r.get("subnet_id"))
+    //     .and_then(Value::as_str)
+    //     .ok_or_else(|| anyhow!("Missing 'result.subnet_id' in JSON-RPC response"))?;
+
+    // tracing::info!("New subnet created with ID: {subnet_id}");
     Ok(())
 }
 

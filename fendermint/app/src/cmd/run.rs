@@ -138,6 +138,8 @@ async fn run(settings: Settings) -> anyhow::Result<()> {
         other => other,
     };
 
+    let own_subnet_id = settings.ipc.subnet_id.clone();
+
     let interpreter = FvmMessageInterpreter::<NamespaceBlockstore, _>::new(
         tendermint_client.clone(),
         validator_ctx,
@@ -145,8 +147,10 @@ async fn run(settings: Settings) -> anyhow::Result<()> {
         settings.fvm.gas_search_step,
         settings.fvm.exec_in_check,
         UpgradeScheduler::new(),
+        Some(own_subnet_id.clone()),
     )
     .with_push_chain_meta(testing_settings.map_or(true, |t| t.push_chain_meta));
+    tracing::info!("created interpreter with subnet_id: {:?}", own_subnet_id);
 
     let interpreter = SignedMessageInterpreter::new(interpreter);
     let interpreter = ChainMessageInterpreter::<_, NamespaceBlockstore>::new(interpreter);
@@ -187,8 +191,6 @@ async fn run(settings: Settings) -> anyhow::Result<()> {
         }
 
         let client = service.client();
-
-        let own_subnet_id = settings.ipc.subnet_id.clone();
 
         client
             .add_provided_subnet(own_subnet_id.clone())

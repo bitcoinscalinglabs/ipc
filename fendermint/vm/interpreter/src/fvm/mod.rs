@@ -86,6 +86,9 @@ where
     gateway: GatewayCaller<DB>,
     /// Upgrade scheduler stores all the upgrades to be executed at given heights.
     upgrade_scheduler: UpgradeScheduler<DB>,
+    /// The subnet-id of the chain (in the IPC Address format).
+    /// It is an Option because we allow the interpreter to not have context about the subnet-id.
+    subnet_id: Option<ipc_api::subnet_id::SubnetID>,
 }
 
 impl<DB, C> FvmMessageInterpreter<DB, C>
@@ -99,6 +102,7 @@ where
         gas_search_step: f64,
         exec_in_check: bool,
         upgrade_scheduler: UpgradeScheduler<DB>,
+        subnet_id: Option<ipc_api::subnet_id::SubnetID>,
     ) -> Self {
         Self {
             client,
@@ -109,6 +113,7 @@ where
             push_chain_meta: true,
             gateway: GatewayCaller::default(),
             upgrade_scheduler,
+            subnet_id,
         }
     }
 

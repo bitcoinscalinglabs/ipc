@@ -194,8 +194,15 @@ async fn test_applying_upgrades() {
         )
         .unwrap();
 
-    let interpreter: FvmMessageInterpreter<MemoryBlockstore, _> =
-        FvmMessageInterpreter::new(NeverCallClient, None, 1.05, 1.05, false, upgrade_scheduler);
+    let interpreter: FvmMessageInterpreter<MemoryBlockstore, _> = FvmMessageInterpreter::new(
+        NeverCallClient,
+        None,
+        1.05,
+        1.05,
+        false,
+        upgrade_scheduler,
+        None,
+    );
 
     let genesis = Genesis {
         chain_name: CHAIN_NAME.to_string(),
