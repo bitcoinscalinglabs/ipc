@@ -245,6 +245,7 @@ where
                     let chain_id = state.chain_id();
                     let height = checkpoint.block_height;
                     let validator_ctx = ctx.clone();
+                    let subnet_id = self.subnet_id.clone();
 
                     tokio::spawn(async move {
                         let res = checkpoint::broadcast_incomplete_signatures(
@@ -253,6 +254,7 @@ where
                             &gateway,
                             chain_id,
                             incomplete_checkpoints,
+                            subnet_id,
                         )
                         .await;
 
