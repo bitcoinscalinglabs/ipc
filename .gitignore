@@ -6,3 +6,6 @@ node_modules/
 # we migrated from npm to pnpm.
 package-lock.json
 .vscode
+
+my_deploy.sh
+output/*
