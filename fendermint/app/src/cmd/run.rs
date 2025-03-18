@@ -1,6 +1,5 @@
 // Copyright 2022-2024 Protocol Labs
 // SPDX-License-Identifier: Apache-2.0, MIT
-
 use anyhow::{anyhow, bail, Context};
 use async_stm::atomically_or_err;
 use fendermint_abci::ApplicationService;
@@ -138,19 +137,62 @@ async fn run(settings: Settings) -> anyhow::Result<()> {
         other => other,
     };
 
+    // TODO(btc): the following where moved in the code
     let own_subnet_id = settings.ipc.subnet_id.clone();
 
-    let interpreter = FvmMessageInterpreter::<NamespaceBlockstore, _>::new(
-        tendermint_client.clone(),
-        validator_ctx,
-        settings.fvm.gas_overestimation_rate,
-        settings.fvm.gas_search_step,
-        settings.fvm.exec_in_check,
-        UpgradeScheduler::new(),
-        Some(own_subnet_id.clone()),
-    )
-    .with_push_chain_meta(testing_settings.map_or(true, |t| t.push_chain_meta));
-    tracing::info!("created interpreter with subnet_id: {:?}", own_subnet_id);
+    let ipc_provider = make_ipc_provider(&settings)?;
+    let ipc_provider_proxy =
+        IPCProviderProxy::new(ipc_provider.clone(), settings.ipc.subnet_id.clone())?;
+    let ipc_provider_proxy_with_latency =
+        Arc::new(IPCProviderProxyWithLatency::new(ipc_provider_proxy));
+
+    let interpreter = match own_subnet_id.parent_network_type() {
+        // If the parent subnet is a bitcoin, we need to give the interpreter
+        // the manager to use for the bitcoin parent.
+        Some(ipc_api::subnet_id::NetworkType::Btc) => {
+            let connection = ipc_provider
+                .get_connection(
+                    &own_subnet_id
+                        .parent()
+                        .ok_or_else(|| anyhow!("parent subnet not found"))?,
+                )
+                .context("failed to get connection to bitcoin parent")?;
+            let manager = connection
+                .manager()
+                .as_any()
+                .downcast_ref::<ipc_provider::manager::BtcSubnetManager>()
+                .context("a manager other than BtcSubnetManager was used for bitcoin parent")?
+                .clone();
+            let interpreter =
+                FvmMessageInterpreter::<NamespaceBlockstore, _>::new_for_bitcoin_parent(
+                    tendermint_client.clone(),
+                    validator_ctx,
+                    settings.fvm.gas_overestimation_rate,
+                    settings.fvm.gas_search_step,
+                    settings.fvm.exec_in_check,
+                    UpgradeScheduler::new(),
+                    own_subnet_id.clone(),
+                    manager,
+                )
+                .with_push_chain_meta(testing_settings.map_or(true, |t| t.push_chain_meta));
+            tracing::info!("created interpreter with subnet_id: {:?}", own_subnet_id);
+            interpreter
+        }
+        // If the parent subnet is not bitcoin, we can use the standard interpreter.
+        _ => {
+            let interpreter = FvmMessageInterpreter::<NamespaceBlockstore, _>::new(
+                tendermint_client.clone(),
+                validator_ctx,
+                settings.fvm.gas_overestimation_rate,
+                settings.fvm.gas_search_step,
+                settings.fvm.exec_in_check,
+                UpgradeScheduler::new(),
+            )
+            .with_push_chain_meta(testing_settings.map_or(true, |t| t.push_chain_meta));
+            tracing::info!("created interpreter with subnet_id: {:?}", own_subnet_id);
+            interpreter
+        }
+    };
 
     let interpreter = SignedMessageInterpreter::new(interpreter);
     let interpreter = ChainMessageInterpreter::<_, NamespaceBlockstore>::new(interpreter);
@@ -264,16 +306,14 @@ async fn run(settings: Settings) -> anyhow::Result<()> {
             config = config.with_max_cache_blocks(v);
         }
 
-        let ipc_provider = {
-            let p = make_ipc_provider_proxy(&settings)?;
-            Arc::new(IPCProviderProxyWithLatency::new(p))
-        };
-
-        let finality_provider =
-            CachedFinalityProvider::uninitialized(config.clone(), ipc_provider.clone()).await?;
+        let finality_provider = CachedFinalityProvider::uninitialized(
+            config.clone(),
+            ipc_provider_proxy_with_latency.clone(),
+        )
+        .await?;
 
         let p = Arc::new(Toggle::enabled(finality_provider));
-        (p, Some((ipc_provider, config)))
+        (p, Some((ipc_provider_proxy_with_latency, config)))
     } else {
         info!("topdown finality disabled");
         (Arc::new(Toggle::disabled()), None)
@@ -428,7 +468,7 @@ fn make_resolver_service(
     Ok(service)
 }
 
-fn make_ipc_provider_proxy(settings: &Settings) -> anyhow::Result<IPCProviderProxy> {
+fn make_ipc_provider(settings: &Settings) -> anyhow::Result<IpcProvider> {
     let topdown_config = settings.ipc.topdown_config()?;
 
     info!("topdown config {topdown_config:#?}");
@@ -457,7 +497,7 @@ fn make_ipc_provider_proxy(settings: &Settings) -> anyhow::Result<IPCProviderPro
     info!("init ipc provider with subnet: {}", subnet.id);
 
     let ipc_provider = IpcProvider::new_with_subnet(None, subnet)?;
-    IPCProviderProxy::new(ipc_provider, settings.ipc.subnet_id.clone())
+    Ok(ipc_provider)
 }
 
 fn to_resolver_config(settings: &Settings) -> anyhow::Result<ipc_ipld_resolver::Config> {

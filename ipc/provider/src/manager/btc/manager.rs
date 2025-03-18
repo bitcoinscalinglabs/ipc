@@ -1,6 +1,7 @@
 // Copyright 2022-2024 Protocol Labs
 // SPDX-License-Identifier: MIT
 
+use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
 use std::str::FromStr;
 
@@ -11,8 +12,8 @@ use http::HeaderValue;
 use ipc_api::address::IPCAddress;
 use ipc_api::evm::payload_to_evm_address;
 use ipc_api::subnet::{
-    Asset, AssetKind, BtcConstructParams, BtcFundParams, ConstructParams, FundParams,
-    PermissionMode, PreFundParams,
+    Asset, AssetKind, BtcConstructParams, BtcFundParams, CheckpointPsbt, ConstructParams,
+    FundParams, PermissionMode, PreFundParams,
 };
 use ipc_api::subnet::{BtcJoinParams, JoinParams};
 use ipc_api::validator::Validator;
@@ -43,6 +44,7 @@ use ipc_api::cross::{IpcEnvelope, IpcMsgKind};
 use ipc_api::staking::{StakingChangeRequest, ValidatorInfo};
 use ipc_api::subnet_id::{SubnetID, BTC_NAMESPACE};
 
+#[derive(Clone)]
 pub struct BtcSubnetManager {
     client: Client,
     rpc_url: String,
@@ -725,6 +727,137 @@ impl SubnetManager for BtcSubnetManager {
     async fn get_subnet_collateral_source(&self, subnet: &SubnetID) -> Result<Asset> {
         tracing::info!("setting subnet collateral source on btc with params: {subnet:?}");
         todo!()
+    }
+
+    /// This function asks the parent subnet (bitcoin) to generate the required transaction for the given `checkpoint` and `subnet_id`.
+    /// It returns a Partially Signed Bitcoin Transaction (PSBT)
+    async fn generate_and_sign_checkpoint_tx(
+        &self,
+        subnet_id: &SubnetID,
+        checkpoint: BottomUpCheckpoint,
+    ) -> Result<CheckpointPsbt> {
+        tracing::debug!("Creating bitcoin signatures for checkpoint: {checkpoint:?}");
+
+        // collect all withdrawals and transfers from the checkpoint msgs
+        let mut releases = Vec::new();
+        let mut transfers = Vec::new();
+
+        for msg in checkpoint.msgs {
+            match msg.kind {
+                ipc_api::cross::IpcMsgKind::Transfer => {
+                    let destination_subnet = msg.to.subnet()?;
+                    if destination_subnet.is_root() {
+                        // Release
+                        releases.push(json!({
+                            "amount": ipc_api::token_amount_to_satoshi(msg.value)?,
+                            "address": ipc_api::address::bitcoin_address_from_fvm_address(&msg.to.raw_addr()?)?,
+                        }));
+                    } else {
+                        // Transfer
+                        transfers.push(json!({
+                            "amount": ipc_api::token_amount_to_satoshi(msg.value)?,
+                            "destination_subnet_id": destination_subnet.to_string(),
+                            "subnet_user_address": ipc_api::address::to_eth_address(&msg.to.raw_addr()?)?
+                        }));
+                    }
+                }
+                ipc_api::cross::IpcMsgKind::Call => {
+                    tracing::info!("ignoring call messages: unsupported on bitcoin")
+                }
+                //TODO(btc): add receipt handling
+                ipc_api::cross::IpcMsgKind::Receipt => {}
+            }
+        }
+
+        let body = json!({
+            "jsonrpc": "2.0",
+            "method": "gencheckpointpsbt",
+            "id": 1,
+            "params": {
+                // TODO(btc): should we get the subnet_id from the checkpoint?
+                "subnet_id":            subnet_id.to_string(),
+                "checkpoint_hash":      hex::encode(checkpoint.block_hash),
+                "change_address":       "bcrt1p5a03k4m8hj026twhkucm8ue6zemrkq62zj3pwkhg95jst3jtdt0scnwz3s",
+                "withdrawals":          releases,
+                "transfers":            transfers,
+            }
+        });
+
+        tracing::info!("Request body: {body:?}");
+
+        let resp = self
+            .client
+            .post(self.rpc_url.clone())
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(anyhow!(
+                "gencheckpointpsbt request failed with status: {}",
+                resp.status()
+            ));
+        }
+
+        let data = resp.json::<Value>().await?;
+
+        if let Some(err_obj) = data.get("error") {
+            let code = err_obj
+                .get("code")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            let message = err_obj
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("Unknown error");
+            let error_data = err_obj
+                .get("data")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            return Err(anyhow!(
+                "JSON-RPC error: code={}, message={}, details={}",
+                code,
+                message,
+                error_data
+            ));
+        }
+
+        let unsigned_psbt_hash = data
+            .get("result")
+            .and_then(|r| r.get("unsigned_psbt_hash"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("Missing 'result.unsigned_psbt_hash' in JSON-RPC response"))?;
+        let unsigned_psbt_base64 = data
+            .get("result")
+            .and_then(|r| r.get("unsigned_psbt_base64"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("Missing 'result.unsigned_psbt_base64' in JSON-RPC response"))?;
+        let psbt_signatures =
+            data.get("result")
+                .and_then(|r| r.get("psbt_inputs_signatures"))
+                .and_then(Value::as_array)
+                .ok_or_else(|| {
+                    anyhow!("Missing 'result.psbt_inputs_signatures' in JSON-RPC response")
+                })?
+                .iter()
+                .map(|v| {
+                    v.as_str().ok_or_else(|| {
+                    anyhow!("Invalid entry in 'result.psbt_inputs_signatures' in JSON-RPC response")
+                })
+                .map(|s| s.to_string())
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+        tracing::info!("New subnet created with ID: {subnet_id}");
+        Ok(CheckpointPsbt {
+            unsigned_psbt_hash: unsigned_psbt_hash.to_string(),
+            unsigned_psbt_base64: unsigned_psbt_base64.to_string(),
+            psbt_signatures,
+        })
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 

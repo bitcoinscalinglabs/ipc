@@ -1,6 +1,7 @@
 // Copyright 2022-2024 Protocol Labs
 // SPDX-License-Identifier: MIT
 
+use std::any::Any;
 use std::borrow::Borrow;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, RwLock};
@@ -991,6 +992,20 @@ impl SubnetManager for EthSubnetManager {
         let pending_tx = txn.send().await?;
         let receipt = pending_tx.retries(TRANSACTION_RECEIPT_RETRIES).await?;
         block_number_from_receipt(receipt)
+    }
+
+    async fn generate_and_sign_checkpoint_tx(
+        &self,
+        _subnet_id: &SubnetID,
+        _checkpoint: BottomUpCheckpoint,
+    ) -> Result<ipc_api::subnet::CheckpointPsbt> {
+        unimplemented!(
+            "Checkpointing on evm parent subnets does not need to contact the parent subnet"
+        )
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 

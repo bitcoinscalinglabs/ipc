@@ -17,6 +17,7 @@ use ipc_api::subnet::{
 };
 use ipc_api::subnet_id::SubnetID;
 use ipc_api::validator::Validator;
+use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
 
 use crate::lotus::message::ipc::SubnetInfo;
@@ -24,7 +25,7 @@ use crate::lotus::message::ipc::SubnetInfo;
 /// Trait to interact with a subnet and handle its lifecycle.
 #[async_trait]
 pub trait SubnetManager:
-    Send + Sync + TopDownFinalityQuery + BottomUpCheckpointRelayer + ValidatorRewarder
+    Send + Sync + TopDownFinalityQuery + BottomUpCheckpointRelayer + ValidatorRewarder + Any
 {
     /// Deploys a new subnet actor on the `parent` subnet and with the
     /// configuration passed in `ConstructParams`.
@@ -196,6 +197,16 @@ pub trait SubnetManager:
         public_keys: &[Vec<u8>],
         federated_power: &[u128],
     ) -> Result<ChainEpoch>;
+
+    /// This function asks the parent subnet (bitcoin) to generate the required transaction for the given `checkpoint` and `subnet_id`.
+    /// It is only required when the parent subnet is bitcoin.
+    async fn generate_and_sign_checkpoint_tx(
+        &self,
+        subnet_id: &SubnetID,
+        checkpoint: BottomUpCheckpoint,
+    ) -> Result<ipc_api::subnet::CheckpointPsbt>;
+
+    fn as_any(&self) -> &dyn Any;
 }
 
 #[derive(Debug)]

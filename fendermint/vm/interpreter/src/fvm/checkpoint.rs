@@ -25,13 +25,12 @@ use ipc_actors_abis::checkpointing_facet as checkpoint;
 use ipc_actors_abis::gateway_getter_facet as getter;
 use ipc_api::staking::ConfigurationNumber;
 use ipc_observability::{emit, serde::HexEncodableBlockHash};
+use ipc_provider::manager::SubnetManager;
 use std::collections::HashMap;
 use std::time::Duration;
 use tendermint::block::Height;
 use tendermint_rpc::endpoint::commit;
 use tendermint_rpc::{endpoint::validators, Client, Paging};
-
-use serde_json::json;
 
 /// Validator voting power snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -214,6 +213,7 @@ pub async fn broadcast_incomplete_signatures<C, DB>(
     chain_id: ChainID,
     incomplete_checkpoints: Vec<getter::BottomUpCheckpoint>,
     subnet_id: Option<ipc_api::subnet_id::SubnetID>,
+    parent_manager: Option<ipc_provider::manager::BtcSubnetManager>,
 ) -> anyhow::Result<()>
 where
     C: Client + Clone + Send + Sync + 'static,
@@ -281,12 +281,30 @@ where
             // step 2: sign PSBT
             // step 3: submit signature on some smart contract that stores map between checkpoint and signatures
             // TODO(Orestis):
-            // Getting self.subnet_id here is a hack, because the subnet_id that comes in the BottomUpCheckpoint
+            // Getting self.subnet_id here is a workaround, because the subnet_id that comes in the BottomUpCheckpoint
             // cannot give us the information about the parent network type, nor the the root id of the parent
             // with a "/b" prefix. If we change that, we can get rid of the subnet_id parameter in the function.
 
             if parent_is_bitcoin(&subnet_id) {
-                broadcast_bitcoin_signature(&subnet_id, checkpoint.clone()).await?;
+                let subnet_id = match &subnet_id {
+                    Some(subnet_id) => subnet_id,
+                    None => {
+                        return Err(anyhow!(
+                            "broadcast_incomplete_signatures needs the subnet_id of the current subnet when the parent is bitcoin"
+                        ))
+                    }
+                };
+                let parent_manager = match &parent_manager {
+                    Some(parent_manager) => parent_manager,
+                    None => {
+                        return Err(anyhow!(
+                            "broadcast_incomplete_signatures needs the parent manager when the parent is bitcoin"
+                        ))
+                    }
+                };
+                broadcast_bitcoin_signature(subnet_id, parent_manager, checkpoint.clone())
+                    .await
+                    .context("failed to broadcast bitcoin signature")?;
             };
 
             // We mustn't do these in parallel because of how nonces are fetched.
@@ -319,108 +337,22 @@ fn parent_is_bitcoin(subnet_id: &Option<ipc_api::subnet_id::SubnetID>) -> bool {
     if let Some(subnet_id) = subnet_id {
         return subnet_id.parent_network_type() == Some(ipc_api::subnet_id::NetworkType::Btc);
     }
+    tracing::debug!("will not create bitcoin signature for this checkpoint");
     false
 }
 
 async fn broadcast_bitcoin_signature(
-    subnet_id: &Option<ipc_api::subnet_id::SubnetID>,
+    subnet_id: &ipc_api::subnet_id::SubnetID,
+    parent_manager: &ipc_provider::manager::BtcSubnetManager,
     checkpoint: checkpoint::BottomUpCheckpoint,
 ) -> anyhow::Result<()> {
-    let subnet_id = match subnet_id {
-        Some(subnet_id) => subnet_id,
-        None => {
-            return Err(anyhow!(
-                "broadcast_bitcoin_signature called without a subnet_id"
-            ))
-        }
-    };
     let checkpoint = ipc_api::checkpoint::BottomUpCheckpoint::try_from(checkpoint)?;
-    tracing::trace!("Creating bitcoin signatures for checkpoint: {checkpoint:?}");
+    let checkpoint_psbt = parent_manager
+        .generate_and_sign_checkpoint_tx(subnet_id, checkpoint)
+        .await?;
+    tracing::info!("obtained checkpoint PSBT from bitcoin provider: {checkpoint_psbt:?}");
 
-    // collect all withdrawals and transfers from the checkpoint msgs
-    // let withdrawals: vec![];
-    // let transfers: vec![];
-
-    // checkpoint
-    //     .msgs
-    //     .iter()
-    //     .map(|msg| {
-    //         match msg.kind {
-    //             checkpoint::IpcEnvelope::Withdrawal(withdrawal) => {
-    //                 withdrawals.push(json!({
-    //                     "amount": withdrawal.amount, // Assuming `msg` has an `amount` field
-    //                     "address": withdrawal.address // Assuming `msg` has an `address` field
-    //                 }));
-    //             }
-    //             checkpoint::IpcEnvelope::Transfer(transfer) => {
-    //                 transfers.push(json!({
-    //                     "amount": transfer.amount, // Assuming `msg` has an `amount` field
-    //                     "destination_subnet_id": transfer.destination_subnet_id, // Assuming `msg` has this field
-    //                     "subnet_multisig_address": transfer.subnet_multisig_address, // Assuming `msg` has this field
-    //                     "subnet_user_address": transfer.subnet_user_address // Assuming `msg` has this field
-    //                 }));
-    //             }
-    //         }
-    //     })
-    //     .collect();
-
-    let body = json!({
-        "jsonrpc": "2.0",
-        "method": "gencheckpointpsbt",
-        "id": 1,
-        "params": {
-            "subnet_id":            subnet_id.to_string(),
-            "checkpoint_hash":      checkpoint.block_hash, //TODO(Orestis) Why abi_hash()?,
-            "change_address":       "bcrt1p5a03k4m8hj026twhkucm8ue6zemrkq62zj3pwkhg95jst3jtdt0scnwz3s",
-        }
-    });
-
-    tracing::info!("Request body: {body:?}");
-
-    // let resp = self
-    //     .client
-    //     .post(self.rpc_url.clone())
-    //     .json(&body)
-    //     .send()
-    //     .await?;
-
-    // if !resp.status().is_success() {
-    //     return Err(anyhow!(
-    //         "Create Subnet request failed with status: {}",
-    //         resp.status()
-    //     ));
-    // }
-
-    // let data = resp.json::<Value>().await?;
-
-    // if let Some(err_obj) = data.get("error") {
-    //     let code = err_obj
-    //         .get("code")
-    //         .and_then(Value::as_i64)
-    //         .unwrap_or_default();
-    //     let message = err_obj
-    //         .get("message")
-    //         .and_then(Value::as_str)
-    //         .unwrap_or("Unknown error");
-    //     let error_data = err_obj
-    //         .get("data")
-    //         .and_then(Value::as_str)
-    //         .unwrap_or_default();
-    //     return Err(anyhow!(
-    //         "JSON-RPC error: code={}, message={}, details={}",
-    //         code,
-    //         message,
-    //         error_data
-    //     ));
-    // }
-
-    // let subnet_id = data
-    //     .get("result")
-    //     .and_then(|r| r.get("subnet_id"))
-    //     .and_then(Value::as_str)
-    //     .ok_or_else(|| anyhow!("Missing 'result.subnet_id' in JSON-RPC response"))?;
-
-    // tracing::info!("New subnet created with ID: {subnet_id}");
+    //TODO(btc): Store PSBT and signatures in smart contract
     Ok(())
 }
 

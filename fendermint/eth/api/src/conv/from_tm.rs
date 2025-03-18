@@ -22,7 +22,7 @@ use tendermint::crypto::sha256::Sha256;
 use tendermint_rpc::endpoint;
 
 use super::from_eth;
-use super::from_fvm::{to_eth_address, to_eth_signature, to_eth_tokens};
+use super::from_fvm::{to_eth_signature, to_eth_tokens};
 
 // Values taken from https://github.com/filecoin-project/lotus/blob/6e7dc9532abdb3171427347710df4c860f1957a2/chain/types/ethtypes/eth_types.go#L199
 
@@ -294,8 +294,11 @@ pub async fn to_eth_receipt(
         transaction_index,
         block_hash: Some(block_hash),
         block_number: Some(block_number),
-        from: to_eth_address(&msg.from).ok().flatten().unwrap_or_default(),
-        to: to_eth_address(&msg.to).ok().flatten(),
+        from: ipc_api::address::to_eth_address(&msg.from)
+            .ok()
+            .flatten()
+            .unwrap_or_default(),
+        to: ipc_api::address::to_eth_address(&msg.to).ok().flatten(),
         cumulative_gas_used,
         gas_used: Some(et::U256::from(result.tx_result.gas_used)),
         contract_address,
@@ -461,7 +464,7 @@ pub fn to_logs(
             .ok_or_else(|| anyhow!("cannot find the 'emitter.id' key"))?;
 
         let address = addr
-            .and_then(|a| to_eth_address(&a).ok())
+            .and_then(|a| ipc_api::address::to_eth_address(&a).ok())
             .flatten()
             .unwrap_or_else(|| et::H160::from(EthAddress::from_id(actor_id).0));
 

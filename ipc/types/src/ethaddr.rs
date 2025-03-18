@@ -7,7 +7,7 @@ use fvm_ipld_encoding::{serde, strict_bytes};
 use fvm_shared::address::Address;
 use fvm_shared::ActorID;
 
-const EAM_ACTOR_ID: u64 = 10;
+pub const EAM_ACTOR_ID: u64 = 10;
 
 /// A Filecoin address as represented in the FEVM runtime (also called EVM-form).
 #[derive(serde::Deserialize, serde::Serialize, PartialEq, Eq, Clone, Copy)]
