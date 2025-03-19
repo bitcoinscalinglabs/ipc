@@ -10,10 +10,11 @@ use ethers::providers::Authorization;
 use ethers::types::H256;
 use http::HeaderValue;
 use ipc_api::address::IPCAddress;
+use ipc_api::checkpoint::CheckpointPsbt;
 use ipc_api::evm::payload_to_evm_address;
 use ipc_api::subnet::{
-    Asset, AssetKind, BtcConstructParams, BtcFundParams, CheckpointPsbt, ConstructParams,
-    FundParams, PermissionMode, PreFundParams,
+    Asset, AssetKind, BtcConstructParams, BtcFundParams, ConstructParams, FundParams,
+    PermissionMode, PreFundParams,
 };
 use ipc_api::subnet::{BtcJoinParams, JoinParams};
 use ipc_api::validator::Validator;
@@ -822,11 +823,11 @@ impl SubnetManager for BtcSubnetManager {
             ));
         }
 
-        let unsigned_psbt_hash = data
-            .get("result")
-            .and_then(|r| r.get("unsigned_psbt_hash"))
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow!("Missing 'result.unsigned_psbt_hash' in JSON-RPC response"))?;
+        // let unsigned_psbt_hash = data
+        //     .get("result")
+        //     .and_then(|r| r.get("unsigned_psbt_hash"))
+        //     .and_then(Value::as_str)
+        //     .ok_or_else(|| anyhow!("Missing 'result.unsigned_psbt_hash' in JSON-RPC response"))?;
         let unsigned_psbt_base64 = data
             .get("result")
             .and_then(|r| r.get("unsigned_psbt_base64"))
@@ -847,12 +848,20 @@ impl SubnetManager for BtcSubnetManager {
                 .map(|s| s.to_string())
                 })
                 .collect::<Result<Vec<_>>>()?;
+        let transfer_tx_hex = data
+            .get("result")
+            .and_then(|r| r.get("batch_transfer_tx_hex"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                anyhow!("Missing 'result.batch_transfer_tx_hex' in JSON-RPC response")
+            })?;
 
-        tracing::info!("New subnet created with ID: {subnet_id}");
+        tracing::info!("Bitcoin signatures created.");
+
         Ok(CheckpointPsbt {
-            unsigned_psbt_hash: unsigned_psbt_hash.to_string(),
             unsigned_psbt_base64: unsigned_psbt_base64.to_string(),
             psbt_signatures,
+            transfer_tx_hex: transfer_tx_hex.to_string(),
         })
     }
 
@@ -869,9 +878,78 @@ impl BottomUpCheckpointRelayer for BtcSubnetManager {
         checkpoint: BottomUpCheckpoint,
         _signatures: Vec<Signature>,
         _signatories: Vec<Address>,
+        bitcoin_signatures: Option<CheckpointPsbt>,
     ) -> anyhow::Result<ChainEpoch> {
         tracing::info!("submitting checkpoint on btc with params: {checkpoint:?}");
-        todo!()
+        let bitcoin_signatures = match bitcoin_signatures {
+            Some(signatures) => signatures,
+            None => {
+                return Err(anyhow!(
+                    "Submitting checkpoint on bitcoin requires bitcoin_signatures"
+                ));
+            }
+        };
+
+        let mut signatures = Vec::new();
+        for signature in bitcoin_signatures.psbt_signatures.iter() {
+            // fetch the XOnlyPubKey from the signature
+            signatures.push(signature.to_string());
+        }
+
+        let body = json!({
+            "jsonrpc": "2.0",
+            "method": "finalizecheckpointpsbt",
+            "id": 1,
+            "params": {
+                "subnet_id":            checkpoint.subnet_id.to_string(),
+                "unsigned_psbt_base64": bitcoin_signatures.unsigned_psbt_base64,
+                "signatures":           bitcoin_signatures.psbt_signatures,
+                // "transfer_tx_hex":      bitcoin_signatures.transfer_tx_hex,
+            }
+        });
+        //TODO(btc): call rpc method for submitting the transfer tx, or merget the two
+
+        tracing::info!("Request body: {body:?}");
+
+        let resp = self
+            .client
+            .post(self.rpc_url.clone())
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(anyhow!(
+                "gencheckpointpsbt request failed with status: {}",
+                resp.status()
+            ));
+        }
+
+        let data = resp.json::<Value>().await?;
+
+        if let Some(err_obj) = data.get("error") {
+            let code = err_obj
+                .get("code")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            let message = err_obj
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("Unknown error");
+            let error_data = err_obj
+                .get("data")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            return Err(anyhow!(
+                "JSON-RPC error: code={}, message={}, details={}",
+                code,
+                message,
+                error_data
+            ));
+        }
+
+        //TODO(btc): return the epoch of the checkpoint
+        Ok(0)
     }
 
     async fn last_bottom_up_checkpoint_height(

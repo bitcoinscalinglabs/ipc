@@ -305,7 +305,10 @@ where
                 broadcast_bitcoin_signature(subnet_id, parent_manager, checkpoint.clone())
                     .await
                     .context("failed to broadcast bitcoin signature")?;
-            };
+                tracing::debug!("broadcasted bitcoin signature for this checkpoint");
+            } else {
+                tracing::debug!("will not create bitcoin signature for this checkpoint");
+            }
 
             // We mustn't do these in parallel because of how nonces are fetched.
             broadcast_signature(
@@ -337,7 +340,6 @@ fn parent_is_bitcoin(subnet_id: &Option<ipc_api::subnet_id::SubnetID>) -> bool {
     if let Some(subnet_id) = subnet_id {
         return subnet_id.parent_network_type() == Some(ipc_api::subnet_id::NetworkType::Btc);
     }
-    tracing::debug!("will not create bitcoin signature for this checkpoint");
     false
 }
 

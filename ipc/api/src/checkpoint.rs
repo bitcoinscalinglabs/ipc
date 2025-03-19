@@ -63,6 +63,19 @@ pub struct BottomUpCheckpointBundle {
     pub signatures: Vec<Signature>,
     /// The list of addresses that have signed the checkpoint hash
     pub signatories: Vec<Address>,
+    /// The bitcoin data for the checkpoint
+    pub bitcoin_signatures: Option<CheckpointPsbt>,
+}
+
+/// A Partially Signed Bitcoin Transaction (PSBT)
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CheckpointPsbt {
+    /// The base64 encoded unsigned PSBT
+    pub unsigned_psbt_base64: String,
+    /// The signatures for the PSBT inputs
+    pub psbt_signatures: Vec<String>,
+    /// The hex encoded transfer transaction
+    pub transfer_tx_hex: String,
 }
 
 /// The collection of items for the bottom up checkpoint submission

@@ -11,6 +11,7 @@ use futures_util::future::try_join_all;
 use fvm_shared::address::Address;
 use fvm_shared::clock::ChainEpoch;
 use ipc_api::checkpoint::{BottomUpCheckpointBundle, QuorumReachedEvent};
+use ipc_api::subnet_id::NetworkType;
 use ipc_observability::{emit, serde::HexEncodableBlockHash};
 use ipc_wallet::{EthKeyAddress, PersistentKeyStore};
 use std::cmp::max;
@@ -201,9 +202,9 @@ impl BottomUpCheckpointManager {
                         )
                     })?;
 
-                // TODO(themis): get PSBT for this checkpoint
-                // TODO(themis): get PSBT signatures
-                // TODO(themis): potentially update bundle to contain BTC signatures
+                // TODO(themis): get PSBT for this checkpoint -> in the bundle
+                // TODO(themis): get PSBT signatures -> in the bundle
+                // TODO(themis): potentially update bundle to contain BTC signatures -> done
 
                 log::debug!("bottom up bundle: {bundle:?}");
 
@@ -259,12 +260,30 @@ impl BottomUpCheckpointManager {
         bundle: BottomUpCheckpointBundle,
         event: QuorumReachedEvent,
     ) -> Result<(), anyhow::Error> {
+        // sanity checks and debug logs
+        if bundle.checkpoint.subnet_id.parent_network_type() == Some(NetworkType::Btc) {
+            if bundle.bitcoin_signatures == None {
+                tracing::debug!(
+                    "parent subnet is bitcoin but bitcoin signatures were not found for checkpoint at height {}",
+                    event.height
+                );
+            }
+        } else {
+            if bundle.bitcoin_signatures != None {
+                tracing::debug!(
+                    "parent subnet is evm but bitcoin signatures were found for checkpoint at height {}",
+                    event.height
+                );
+            }
+        };
+
         let epoch = parent_handler
             .submit_checkpoint(
                 &submitter,
                 bundle.checkpoint,
                 bundle.signatures,
                 bundle.signatories,
+                bundle.bitcoin_signatures,
             )
             .await
             .map_err(|e| {

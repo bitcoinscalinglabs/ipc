@@ -204,7 +204,7 @@ pub trait SubnetManager:
         &self,
         subnet_id: &SubnetID,
         checkpoint: BottomUpCheckpoint,
-    ) -> Result<ipc_api::subnet::CheckpointPsbt>;
+    ) -> Result<ipc_api::checkpoint::CheckpointPsbt>;
 
     fn as_any(&self) -> &dyn Any;
 }
@@ -275,6 +275,7 @@ pub trait BottomUpCheckpointRelayer: Send + Sync {
         checkpoint: BottomUpCheckpoint,
         signatures: Vec<Signature>,
         signatories: Vec<Address>,
+        bitcoin_signatures: Option<ipc_api::checkpoint::CheckpointPsbt>,
     ) -> Result<ChainEpoch>;
     /// The last confirmed/submitted checkpoint height.
     async fn last_bottom_up_checkpoint_height(&self, subnet_id: &SubnetID) -> Result<ChainEpoch>;

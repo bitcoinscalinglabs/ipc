@@ -14,6 +14,7 @@ use ipc_actors_abis::{
     subnet_actor_activity_facet, subnet_actor_checkpointing_facet, subnet_actor_getter_facet,
     subnet_actor_manager_facet, subnet_actor_reward_facet,
 };
+use ipc_api::checkpoint::{BottomUpCheckpointBundle, CheckpointPsbt};
 use ipc_api::evm::{fil_to_eth_amount, payload_to_evm_address, subnet_id_to_evm_addresses};
 use ipc_api::validator::from_contract_validators;
 use reqwest::header::HeaderValue;
@@ -51,14 +52,14 @@ use fvm_shared::clock::ChainEpoch;
 use fvm_shared::{address::Address, econ::TokenAmount};
 use ipc_actors_abis::subnet_actor_activity_facet::ValidatorClaim;
 use ipc_api::checkpoint::{
-    consensus::ValidatorData, BottomUpCheckpoint, BottomUpCheckpointBundle, QuorumReachedEvent,
-    Signature, VALIDATOR_REWARD_FIELDS,
+    consensus::ValidatorData, BottomUpCheckpoint, QuorumReachedEvent, Signature,
+    VALIDATOR_REWARD_FIELDS,
 };
 use ipc_api::cross::IpcEnvelope;
 use ipc_api::merkle::MerkleGen;
 use ipc_api::staking::{StakingChangeRequest, ValidatorInfo, ValidatorStakingInfo};
 use ipc_api::subnet::EthConstructParams;
-use ipc_api::subnet_id::SubnetID;
+use ipc_api::subnet_id::{NetworkType, SubnetID};
 use ipc_observability::lazy_static;
 use ipc_wallet::{EthKeyAddress, EvmKeyStore, PersistentKeyStore};
 use num_traits::ToPrimitive;
@@ -998,7 +999,7 @@ impl SubnetManager for EthSubnetManager {
         &self,
         _subnet_id: &SubnetID,
         _checkpoint: BottomUpCheckpoint,
-    ) -> Result<ipc_api::subnet::CheckpointPsbt> {
+    ) -> Result<ipc_api::checkpoint::CheckpointPsbt> {
         unimplemented!(
             "Checkpointing on evm parent subnets does not need to contact the parent subnet"
         )
@@ -1251,7 +1252,14 @@ impl BottomUpCheckpointRelayer for EthSubnetManager {
         checkpoint: BottomUpCheckpoint,
         signatures: Vec<Signature>,
         signatories: Vec<Address>,
+        bitcoin_signatures: Option<CheckpointPsbt>,
     ) -> anyhow::Result<ChainEpoch> {
+        if bitcoin_signatures != None {
+            return Err(anyhow!(
+                "Submitting checkpoint on an EVM subnet does not need bitcoin_signatures"
+            ));
+        }
+
         let address = contract_address_from_subnet(&checkpoint.subnet_id)?;
         tracing::debug!(
             "submit bottom up checkpoint: {checkpoint:?} in evm subnet contract: {address:}"
@@ -1333,10 +1341,22 @@ impl BottomUpCheckpointRelayer for EthSubnetManager {
             .map(|s| s.to_vec())
             .collect::<Vec<_>>();
 
+        let bitcoin_signatures =
+            if checkpoint.subnet_id.parent_network_type() == Some(NetworkType::Btc) {
+                Some(CheckpointPsbt {
+                    unsigned_psbt_base64: "".to_string(),
+                    psbt_signatures: vec![],
+                    transfer_tx_hex: "".to_string(),
+                })
+            } else {
+                None
+            };
+
         Ok(Some(BottomUpCheckpointBundle {
             checkpoint,
             signatures,
             signatories,
+            bitcoin_signatures,
         }))
     }
 

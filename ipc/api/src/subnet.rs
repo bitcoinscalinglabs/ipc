@@ -174,14 +174,3 @@ pub struct BtcFundParams {
     /// The amount to fund
     pub amount: TokenAmount,
 }
-
-/// A Partially Signed Bitcoin Transaction (PSBT)
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct CheckpointPsbt {
-    /// The hash of the unsigned PSBT
-    pub unsigned_psbt_hash: String,
-    /// The base64 encoded unsigned PSBT
-    pub unsigned_psbt_base64: String,
-    /// The signatures for the PSBT inputs
-    pub psbt_signatures: Vec<String>,
-}
