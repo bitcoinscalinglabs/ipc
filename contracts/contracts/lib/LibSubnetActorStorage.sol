@@ -4,6 +4,7 @@ pragma solidity ^0.8.23;
 import {ConsensusType} from "../enums/ConsensusType.sol";
 import {NotGateway, SubnetAlreadyKilled} from "../errors/IPCErrors.sol";
 import {BottomUpCheckpoint, BottomUpMsgBatchInfo} from "../structs/CrossNet.sol";
+import {BottomUpCheckpoint, BottomUpMsgBatchInfo} from "../structs/CrossNet.sol";
 import {SubnetID, ValidatorSet, StakingChangeLog, StakingReleaseQueue, Asset, Validator, PermissionMode} from "../structs/Subnet.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
@@ -65,6 +66,7 @@ import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet
         address[] genesisBalanceKeys;
         /// @notice The validator gater, if address(0), no validator gating is performed
         address validatorGater;
+        
     }
 
 library LibSubnetActorStorage {

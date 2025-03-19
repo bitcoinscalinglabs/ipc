@@ -6,10 +6,11 @@ import {BottomUpCheckpoint} from "../../structs/CrossNet.sol";
 import {LibGateway} from "../../lib/LibGateway.sol";
 import {LibQuorum} from "../../lib/LibQuorum.sol";
 import {Subnet} from "../../structs/Subnet.sol";
+import {BitcoinCheckpoint} from "../../structs/Bitcoin.sol";
 import {QuorumObjKind} from "../../structs/Quorum.sol";
 import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 
-import {InvalidBatchSource, NotEnoughBalance, MaxMsgsPerBatchExceeded, InvalidCheckpointSource, CheckpointAlreadyExists} from "../../errors/IPCErrors.sol";
+import {InvalidBatchSource, NotEnoughBalance, MaxMsgsPerBatchExceeded, InvalidCheckpointSource, CheckpointAlreadyExists, NotAuthorized, SignatureReplay} from "../../errors/IPCErrors.sol";
 import {NotRegisteredSubnet, SubnetNotActive, SubnetNotFound, InvalidSubnet, CheckpointNotCreated} from "../../errors/IPCErrors.sol";
 import {BatchNotCreated, InvalidBatchEpoch, BatchAlreadyExists, NotEnoughSubnetCircSupply, InvalidCheckpointEpoch} from "../../errors/IPCErrors.sol";
 
@@ -19,9 +20,12 @@ import {SubnetIDHelper} from "../../lib/SubnetIDHelper.sol";
 
 import {ActivityRollupRecorded, FullActivityRollup} from "../../structs/Activity.sol";
 
+import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
+
 contract CheckpointingFacet is GatewayActorModifiers {
     using SubnetIDHelper for SubnetID;
     using CrossMsgHelper for IpcEnvelope;
+    using EnumerableSet for EnumerableSet.AddressSet;
 
     /// @notice submit a verified checkpoint in the gateway to trigger side-effects.
     /// @dev this method is called by the corresponding subnet actor.
@@ -84,6 +88,7 @@ contract CheckpointingFacet is GatewayActorModifiers {
         for (uint256 h = s.checkpointQuorumMap.retentionHeight; h < newRetentionHeight; ) {
             delete s.bottomUpCheckpoints[h];
             delete s.bottomUpMsgBatches[h];
+            delete s.bitcoinCheckpoints[h];
             unchecked {
                 ++h;
             }
@@ -122,6 +127,103 @@ contract CheckpointingFacet is GatewayActorModifiers {
         });
 
         // TODO(themis): store btc signature
+    }
+
+    function addBitcoinCheckpointSignature(
+        uint256 height,
+        bytes calldata psbt,
+        bytes calldata signatures,
+        bytes calldata batchTransferTx
+    ) external {
+        // check if the checkpoint was already pruned before getting checkpoint
+        // and triggering the signature
+        LibQuorum.isHeightAlreadyProcessed(s.checkpointQuorumMap, height);
+
+        // slither-disable-next-line unused-return
+        (bool exists, ) = LibGateway.getBottomUpCheckpoint(height);
+        if (!exists) {
+            revert CheckpointNotCreated();
+        }
+
+        address signatory = msg.sender;
+
+        // Check if the signatory was included in the quorum signature senders
+        bool ok = s.checkpointQuorumMap.quorumSignatureSenders[height].contains(signatory);
+        if (!ok) {
+            revert NotAuthorized(signatory);
+        }
+
+        BitcoinCheckpoint storage btcCheckpoint = s.bitcoinCheckpoints[height];
+        // Set the PSBT if it hasn't been set yet
+        if (btcCheckpoint.psbt.length == 0) {
+            btcCheckpoint.psbt = psbt;
+        }
+        // Set the batch transfer transaction if provided
+        if (batchTransferTx.length > 0 && btcCheckpoint.batchTransferTx.length == 0) {
+            btcCheckpoint.batchTransferTx = batchTransferTx;
+        }
+
+        // Check if sender is already a signatory
+        bool alreadySigned = false;
+        for (uint i = 0; i < btcCheckpoint.signatories.length; i++) {
+            if (btcCheckpoint.signatories[i] == signatory) {
+                alreadySigned = true;
+                break;
+            }
+        }
+
+        // Add the signature to the Bitcoin checkpoint if not already a signatory
+        if (alreadySigned) {
+            revert SignatureReplay();
+        } else {
+            btcCheckpoint.signatories.push(signatory);
+            btcCheckpoint.signatures[signatory] = signatures;
+        }
+    }
+
+    /// @notice Get signatures of validators for a Bitcoin checkpoint at a specific height.
+    /// @param height - The height of the block in the checkpoint.
+    /// @return psbt - The base64 of the PSBT.
+    /// @return batchTransferTx - The hex of the batch transfer transaction, if present.
+    /// @return signatories - The list of validators who signed.
+    /// @return signatures - The list of signatures corresponding to the signatories.
+    function getBitcoinCheckpointSignatures(
+        uint256 height
+    )
+        external
+        view
+        returns (
+            bytes memory psbt,
+            bytes memory batchTransferTx,
+            address[] memory signatories,
+            bytes[] memory signatures
+        )
+    {
+        // Check if height is below retention height (already processed)
+        LibQuorum.isHeightAlreadyProcessed(s.checkpointQuorumMap, height);
+
+        // Check if the checkpoint exists
+        (bool exists, ) = LibGateway.getBottomUpCheckpoint(height);
+        if (!exists) {
+            revert CheckpointNotCreated();
+        }
+
+        BitcoinCheckpoint storage btcCheckpoint = s.bitcoinCheckpoints[height];
+
+        // Return the PSBT and batch transfer tx
+        psbt = btcCheckpoint.psbt;
+        batchTransferTx = btcCheckpoint.batchTransferTx;
+
+        // Return signatories
+        signatories = btcCheckpoint.signatories;
+
+        // Map signatories to their signatures
+        signatures = new bytes[](signatories.length);
+        for (uint256 i = 0; i < signatories.length; i++) {
+            signatures[i] = btcCheckpoint.signatures[signatories[i]];
+        }
+
+        return (psbt, batchTransferTx, signatories, signatures);
     }
 
     /// @notice submit a batch of cross-net messages for execution.
