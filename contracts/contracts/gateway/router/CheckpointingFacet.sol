@@ -199,9 +199,6 @@ contract CheckpointingFacet is GatewayActorModifiers {
             bytes[] memory signatures
         )
     {
-        // Check if height is below retention height (already processed)
-        LibQuorum.isHeightAlreadyProcessed(s.checkpointQuorumMap, height);
-
         // Check if the checkpoint exists
         (bool exists, ) = LibGateway.getBottomUpCheckpoint(height);
         if (!exists) {

@@ -226,6 +226,10 @@ impl<DB: Blockstore + Clone> GatewayCaller<DB> {
         Ok(calldata)
     }
 
+    // TODO(btc) add bitcoin signature collection function
+    //
+    // self.checkpointing.contract().add_bitcoin_checkpoint_signature(height, psbt, signatures, batch_transfer_tx)
+
     /// Commit the parent finality to the gateway and returns the previously committed finality.
     /// None implies there is no previously committed finality.
     pub fn commit_parent_finality(
