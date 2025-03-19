@@ -1,6 +1,7 @@
 // Copyright 2022-2024 Protocol Labs
 // SPDX-License-Identifier: MIT
-
+use base64::engine::general_purpose;
+use base64::Engine as _;
 use std::any::Any;
 use std::borrow::Borrow;
 use std::collections::{BTreeMap, HashMap};
@@ -1341,16 +1342,45 @@ impl BottomUpCheckpointRelayer for EthSubnetManager {
             .map(|s| s.to_vec())
             .collect::<Vec<_>>();
 
-        let bitcoin_signatures =
-            if checkpoint.subnet_id.parent_network_type() == Some(NetworkType::Btc) {
-                Some(CheckpointPsbt {
-                    unsigned_psbt_base64: "".to_string(),
-                    psbt_signatures: vec![],
-                    transfer_tx_hex: "".to_string(),
-                })
-            } else {
-                None
-            };
+        let bitcoin_signatures = if checkpoint.subnet_id.parent_network_type()
+            == Some(NetworkType::Btc)
+        {
+            let contract = checkpointing_facet::CheckpointingFacet::new(
+                self.ipc_contract_info.gateway_addr,
+                Arc::new(self.ipc_contract_info.provider.clone()),
+            );
+
+            let (psbt, batch_transfer_tx, signatories, signatures) = contract
+                .get_bitcoin_checkpoint_signatures(U256::from(height))
+                .call()
+                .await?;
+
+            let psbt = general_purpose::STANDARD.encode(psbt);
+            let transfer_tx = general_purpose::STANDARD.encode(batch_transfer_tx);
+            if signatories.len() != signatures.len() {
+                return Err(anyhow!(
+                        "signatories and signatures length mismatch for bitcoin checkpoint at height: {}",
+                        height
+                    ));
+            }
+            let psbt_signatures = signatures
+                .into_iter()
+                .map(|s| hex::encode(s))
+                .collect::<Vec<_>>();
+            let psbt_signatories = signatories
+                .into_iter()
+                .map(|s| ethers_address_to_fil_address(&s))
+                .collect::<Result<Vec<_>, _>>()?;
+
+            Some(CheckpointPsbt {
+                unsigned_psbt_base64: psbt,
+                psbt_signatories,
+                psbt_signatures,
+                transfer_tx_hex: transfer_tx,
+            })
+        } else {
+            None
+        };
 
         Ok(Some(BottomUpCheckpointBundle {
             checkpoint,

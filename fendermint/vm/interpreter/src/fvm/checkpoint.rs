@@ -302,10 +302,16 @@ where
                         ))
                     }
                 };
-                broadcast_bitcoin_signature(gateway, subnet_id, parent_manager, checkpoint.clone())
-                    .await
-                    .context("failed to broadcast bitcoin signature")?;
-                tracing::debug!("broadcasted bitcoin signature for this checkpoint");
+                broadcast_bitcoin_signature(
+                    &validator_ctx.broadcaster,
+                    gateway,
+                    subnet_id,
+                    parent_manager,
+                    checkpoint.clone(),
+                    chain_id,
+                )
+                .await
+                .context("failed to broadcast bitcoin signature")?;
             } else {
                 tracing::debug!("will not create bitcoin signature for this checkpoint");
             }
@@ -343,23 +349,39 @@ fn parent_is_bitcoin(subnet_id: &Option<ipc_api::subnet_id::SubnetID>) -> bool {
     false
 }
 
-async fn broadcast_bitcoin_signature<DB>(
+async fn broadcast_bitcoin_signature<C, DB>(
+    broadcaster: &Broadcaster<C>,
     gateway: &GatewayCaller<DB>,
     subnet_id: &ipc_api::subnet_id::SubnetID,
     parent_manager: &ipc_provider::manager::BtcSubnetManager,
     checkpoint: checkpoint::BottomUpCheckpoint,
+    chain_id: ChainID,
 ) -> anyhow::Result<()>
 where
+    C: Client + Clone + Send + Sync + 'static,
     DB: Blockstore + Send + Sync + Clone + 'static,
 {
-    let checkpoint = ipc_api::checkpoint::BottomUpCheckpoint::try_from(checkpoint)?;
     let checkpoint_psbt = parent_manager
-        .generate_and_sign_checkpoint_tx(subnet_id, checkpoint)
+        .generate_and_sign_checkpoint_tx(
+            subnet_id,
+            ipc_api::checkpoint::BottomUpCheckpoint::try_from(checkpoint.clone())?,
+        )
         .await?;
     tracing::info!("obtained checkpoint PSBT from bitcoin provider: {checkpoint_psbt:?}");
 
-    // TODO(btc): Store PSBT and signatures in smart contract
-    // use gateway
+    let calldata = gateway
+        .add_bitcoin_checkpoint_signature_calldata(&checkpoint, &checkpoint_psbt)
+        .context("failed to produce bitcoin checkpoint signature calldata")?;
+
+    let tx_hash = broadcaster
+        .fevm_invoke(Address::from(gateway.addr()), calldata, chain_id)
+        .await
+        .context("failed to broadcast bitcoin checkpoint signature")?;
+
+    tracing::info!(
+        tx_hash = tx_hash.to_string(),
+        "broadcasted bitcoin checkpoint signature"
+    );
 
     Ok(())
 }

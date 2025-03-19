@@ -22,6 +22,8 @@ import {ActivityRollupRecorded, FullActivityRollup} from "../../structs/Activity
 
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
+event BitcoinCheckpointAdded(uint256 indexed height, address indexed signatory, bytes32 indexed psbtHash);
+
 contract CheckpointingFacet is GatewayActorModifiers {
     using SubnetIDHelper for SubnetID;
     using CrossMsgHelper for IpcEnvelope;
@@ -130,8 +132,6 @@ contract CheckpointingFacet is GatewayActorModifiers {
             weight: weight,
             signature: signature
         });
-
-        // TODO(themis): store btc signature
     }
 
     function addBitcoinCheckpointSignature(
@@ -199,6 +199,7 @@ contract CheckpointingFacet is GatewayActorModifiers {
         } else {
             btcCheckpoint.signatories.push(signatory);
             btcCheckpoint.signatures[signatory] = signatures;
+            emit BitcoinCheckpointAdded(height, signatory, keccak256(psbt));
         }
     }
 

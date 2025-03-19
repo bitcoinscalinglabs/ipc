@@ -1,7 +1,7 @@
 // Copyright 2022-2024 Protocol Labs
 // SPDX-License-Identifier: Apache-2.0, MIT
-
 use anyhow::{anyhow, Context};
+use base64::{engine::general_purpose, Engine as _};
 use ethers::types as et;
 
 use fvm_ipld_blockstore::Blockstore;
@@ -226,9 +226,36 @@ impl<DB: Blockstore + Clone> GatewayCaller<DB> {
         Ok(calldata)
     }
 
-    // TODO(btc) add bitcoin signature collection function
-    //
-    // self.checkpointing.contract().add_bitcoin_checkpoint_signature(height, psbt, signatures, batch_transfer_tx)
+    pub fn add_bitcoin_checkpoint_signature_calldata(
+        &self,
+        checkpoint: &checkpointing_facet::BottomUpCheckpoint,
+        checkpoint_psbt: &ipc_api::checkpoint::CheckpointPsbt,
+    ) -> anyhow::Result<et::Bytes> {
+        let unsigned_psbt =
+            general_purpose::STANDARD.decode(&checkpoint_psbt.unsigned_psbt_base64)?;
+        let signatures = checkpoint_psbt
+            .psbt_signatures
+            .iter()
+            .map(|s| general_purpose::STANDARD.decode(s).unwrap())
+            .collect::<Vec<_>>();
+        let transfer_tx_hex = general_purpose::STANDARD.decode(&checkpoint_psbt.transfer_tx_hex)?;
+
+        let call = self
+            .checkpointing
+            .contract()
+            .add_bitcoin_checkpoint_signature(
+                checkpoint.block_height,
+                et::Bytes::from(unsigned_psbt),
+                et::Bytes::from(signatures[0].clone()),
+                et::Bytes::from(transfer_tx_hex),
+            );
+
+        let calldata = call
+            .calldata()
+            .ok_or_else(|| anyhow!("no calldata for adding bitcoin signature"))?;
+
+        Ok(calldata)
+    }
 
     /// Commit the parent finality to the gateway and returns the previously committed finality.
     /// None implies there is no previously committed finality.

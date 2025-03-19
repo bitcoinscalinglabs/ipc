@@ -860,6 +860,7 @@ impl SubnetManager for BtcSubnetManager {
 
         Ok(CheckpointPsbt {
             unsigned_psbt_base64: unsigned_psbt_base64.to_string(),
+            psbt_signatories: Vec::new(),
             psbt_signatures,
             transfer_tx_hex: transfer_tx_hex.to_string(),
         })
@@ -890,10 +891,27 @@ impl BottomUpCheckpointRelayer for BtcSubnetManager {
             }
         };
 
-        let mut signatures = Vec::new();
-        for signature in bitcoin_signatures.psbt_signatures.iter() {
-            // fetch the XOnlyPubKey from the signature
-            signatures.push(signature.to_string());
+        // let mut signatures = Vec::new();
+        // for signature in bitcoin_signatures.psbt_signatures.iter() {
+        //     // fetch the XOnlyPubKey from the signature
+        //     signatures.push(signature.to_string());
+        // }
+        // Replace the IPC addresses with the XOnlyPubKey, as the RPC expects the XOnlyPubKey
+        let psbt_signatories = bitcoin_signatures
+            .psbt_signatories
+            .iter()
+            .map(|s| s.to_string()) //TODO(Orestis): Use wallet to get the XOnlyPubKey
+            .collect::<Vec<_>>();
+
+        // Construct the JSON array
+        let mut signatures_json = Vec::new();
+
+        for (signatory, signatures) in psbt_signatories
+            .iter()
+            .zip(bitcoin_signatures.psbt_signatures.iter())
+        {
+            let json_entry = json!([signatory, signatures]);
+            signatures_json.push(json_entry);
         }
 
         let body = json!({
@@ -903,11 +921,10 @@ impl BottomUpCheckpointRelayer for BtcSubnetManager {
             "params": {
                 "subnet_id":            checkpoint.subnet_id.to_string(),
                 "unsigned_psbt_base64": bitcoin_signatures.unsigned_psbt_base64,
-                "signatures":           bitcoin_signatures.psbt_signatures,
-                // "transfer_tx_hex":      bitcoin_signatures.transfer_tx_hex,
+                "signatures":           signatures_json,
+                "transfer_tx_hex":      bitcoin_signatures.transfer_tx_hex,
             }
         });
-        //TODO(btc): call rpc method for submitting the transfer tx, or merget the two
 
         tracing::info!("Request body: {body:?}");
 

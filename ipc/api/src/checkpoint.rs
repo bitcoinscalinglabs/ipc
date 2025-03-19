@@ -72,7 +72,9 @@ pub struct BottomUpCheckpointBundle {
 pub struct CheckpointPsbt {
     /// The base64 encoded unsigned PSBT
     pub unsigned_psbt_base64: String,
-    /// The signatures for the PSBT inputs
+    /// The signatories
+    pub psbt_signatories: Vec<Address>,
+    /// The signature of each signatory
     pub psbt_signatures: Vec<String>,
     /// The hex encoded transfer transaction
     pub transfer_tx_hex: String,
