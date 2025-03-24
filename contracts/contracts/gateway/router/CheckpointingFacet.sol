@@ -88,7 +88,12 @@ contract CheckpointingFacet is GatewayActorModifiers {
         for (uint256 h = s.checkpointQuorumMap.retentionHeight; h < newRetentionHeight; ) {
             delete s.bottomUpCheckpoints[h];
             delete s.bottomUpMsgBatches[h];
-            delete s.bitcoinCheckpoints[h];
+            // Delete each BitcoinCheckpoint using the tracked hashes
+            bytes32[] storage hashes = s.bitcoinCheckpointPsbtHashes[h];
+            for (uint i = 0; i < hashes.length; i++) {
+                delete s.bitcoinCheckpoints[h][hashes[i]];
+            }
+            delete s.bitcoinCheckpointPsbtHashes[h];
             unchecked {
                 ++h;
             }
@@ -153,11 +158,27 @@ contract CheckpointingFacet is GatewayActorModifiers {
             revert NotAuthorized(signatory);
         }
 
-        BitcoinCheckpoint storage btcCheckpoint = s.bitcoinCheckpoints[height];
+        bytes32 psbtHash = keccak256(psbt);
+
+        // Check if this is a new PSBT hash for this height
+        bool hashExists = false;
+        bytes32[] storage hashes = s.bitcoinCheckpointPsbtHashes[height];
+        for (uint i = 0; i < hashes.length; i++) {
+            if (hashes[i] == psbtHash) {
+                hashExists = true;
+                break;
+            }
+        }
+        if (!hashExists) {
+            s.bitcoinCheckpointPsbtHashes[height].push(psbtHash);
+        }
+
+        BitcoinCheckpoint storage btcCheckpoint = s.bitcoinCheckpoints[height][psbtHash];
         // Set the PSBT if it hasn't been set yet
         if (btcCheckpoint.psbt.length == 0) {
             btcCheckpoint.psbt = psbt;
         }
+
         // Set the batch transfer transaction if provided
         if (batchTransferTx.length > 0 && btcCheckpoint.batchTransferTx.length == 0) {
             btcCheckpoint.batchTransferTx = batchTransferTx;
@@ -181,9 +202,9 @@ contract CheckpointingFacet is GatewayActorModifiers {
         }
     }
 
-    /// @notice Get signatures of validators for a Bitcoin checkpoint at a specific height.
+    /// @notice Get the Bitcoin checkpoint with the most signatures for a specific height.
     /// @param height - The height of the block in the checkpoint.
-    /// @return psbt - The base64 of the PSBT.
+    /// @return psbt - The base64 of the PSBT with the most signatures.
     /// @return batchTransferTx - The hex of the batch transfer transaction, if present.
     /// @return signatories - The list of validators who signed.
     /// @return signatures - The list of signatures corresponding to the signatories.
@@ -205,7 +226,31 @@ contract CheckpointingFacet is GatewayActorModifiers {
             revert CheckpointNotCreated();
         }
 
-        BitcoinCheckpoint storage btcCheckpoint = s.bitcoinCheckpoints[height];
+        bytes32[] storage hashes = s.bitcoinCheckpointPsbtHashes[height];
+        if (hashes.length == 0) {
+            // No Bitcoin checkpoints found for this height
+            return (new bytes(0), new bytes(0), new address[](0), new bytes[](0));
+        }
+
+        // Find the checkpoint with the most signatures
+        bytes32 mostSignedPsbtHash;
+        uint256 maxSignatures = 0;
+
+        for (uint256 i = 0; i < hashes.length; i++) {
+            bytes32 currentHash = hashes[i];
+            BitcoinCheckpoint storage currentCheckpoint = s.bitcoinCheckpoints[height][currentHash];
+
+            uint256 signatureCount = currentCheckpoint.signatories.length;
+
+            // When multiple PSBTs have the same number of signatures,
+            if (signatureCount > maxSignatures) {
+                maxSignatures = signatureCount;
+                mostSignedPsbtHash = currentHash;
+            }
+        }
+
+        // Get the checkpoint with the most signatures
+        BitcoinCheckpoint storage btcCheckpoint = s.bitcoinCheckpoints[height][mostSignedPsbtHash];
 
         // Return the PSBT and batch transfer tx
         psbt = btcCheckpoint.psbt;

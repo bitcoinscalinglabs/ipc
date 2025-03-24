@@ -75,7 +75,8 @@ struct GatewayActorStorage {
     /// @notice Keys of the registered subnets. Useful to iterate through them
     EnumerableSet.Bytes32Set subnetKeys;
     // =========== Bitcoin ===========
-    mapping(uint256 => BitcoinCheckpoint) bitcoinCheckpoints;
+    mapping(uint256 => mapping(bytes32 => BitcoinCheckpoint)) bitcoinCheckpoints;
+    mapping(uint256 => bytes32[]) bitcoinCheckpointPsbtHashes;
 }
 
 library LibGatewayActorStorage {
