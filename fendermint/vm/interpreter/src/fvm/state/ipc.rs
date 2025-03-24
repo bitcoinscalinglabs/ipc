@@ -1,7 +1,6 @@
 // Copyright 2022-2024 Protocol Labs
 // SPDX-License-Identifier: Apache-2.0, MIT
 use anyhow::{anyhow, Context};
-use base64::{engine::general_purpose, Engine as _};
 use ethers::types as et;
 
 use fvm_ipld_blockstore::Blockstore;
@@ -229,25 +228,33 @@ impl<DB: Blockstore + Clone> GatewayCaller<DB> {
     pub fn add_bitcoin_checkpoint_signature_calldata(
         &self,
         checkpoint: &checkpointing_facet::BottomUpCheckpoint,
-        checkpoint_psbt: &ipc_api::checkpoint::CheckpointPsbt,
+        checkpoint_psbt: ipc_api::checkpoint::PsbtSignature,
     ) -> anyhow::Result<et::Bytes> {
-        let unsigned_psbt =
-            general_purpose::STANDARD.decode(&checkpoint_psbt.unsigned_psbt_base64)?;
-        let signatures = checkpoint_psbt
-            .psbt_signatures
-            .iter()
-            .map(|s| general_purpose::STANDARD.decode(s).unwrap())
-            .collect::<Vec<_>>();
-        let transfer_tx_hex = general_purpose::STANDARD.decode(&checkpoint_psbt.transfer_tx_hex)?;
+        let unsigned_psbt = checkpoint_psbt.unsigned_psbt.clone().decode()?;
+        let transfer_tx = checkpoint_psbt.transfer_tx.clone().decode()?;
 
+        tracing::debug!(
+            "Encoded arguments to add_bitcoin_checkpoint_signature(): {:?}, {:?}, {:?}, {:?}",
+            checkpoint.block_height,
+            checkpoint_psbt.unsigned_psbt.0,
+            hex::encode(checkpoint_psbt.signature.clone()),
+            checkpoint_psbt.transfer_tx.0
+        );
+        tracing::debug!(
+            "Arguments to add_bitcoin_checkpoint_signature(): {:?}, {:?}, {:?}, {:?}",
+            checkpoint.block_height,
+            unsigned_psbt,
+            checkpoint_psbt.signature.clone(),
+            transfer_tx
+        );
         let call = self
             .checkpointing
             .contract()
             .add_bitcoin_checkpoint_signature(
                 checkpoint.block_height,
                 et::Bytes::from(unsigned_psbt),
-                et::Bytes::from(signatures[0].clone()),
-                et::Bytes::from(transfer_tx_hex),
+                et::Bytes::from(checkpoint_psbt.signature.clone()),
+                et::Bytes::from(transfer_tx),
             );
 
         let calldata = call

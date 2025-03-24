@@ -1,10 +1,10 @@
 // Copyright 2022-2024 Protocol Labs
 // SPDX-License-Identifier: MIT
 //! Cross network messages related struct and utility functions.
-
 use crate::cross::IpcEnvelope;
 use crate::subnet_id::SubnetID;
 use crate::HumanReadable;
+use base64::{engine::general_purpose, Engine as _};
 use cid::multihash::Code;
 use cid::multihash::MultihashDigest;
 use cid::Cid;
@@ -64,21 +64,69 @@ pub struct BottomUpCheckpointBundle {
     /// The list of addresses that have signed the checkpoint hash
     pub signatories: Vec<Address>,
     /// The bitcoin data for the checkpoint
-    pub bitcoin_signatures: Option<CheckpointPsbt>,
+    pub bitcoin_signatures: Option<PsbtSignatureQuorum>,
 }
 
-/// A Partially Signed Bitcoin Transaction (PSBT)
+/// A Partially Signed Bitcoin Transaction (PSBT) and a set of signatures
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct CheckpointPsbt {
-    /// The base64 encoded unsigned PSBT
-    pub unsigned_psbt_base64: String,
+pub struct PsbtSignatureQuorum {
+    /// The unsigned PSBT
+    pub unsigned_psbt: UnsignedPsbt,
     /// The signatories
-    pub psbt_signatories: Vec<Address>,
-    /// The signature of each signatory
-    pub psbt_signatures: Vec<String>,
-    /// The hex encoded transfer transaction
-    pub transfer_tx_hex: String,
+    pub signatories: Vec<ethers::types::Address>,
+    /// The signatures of each signatory.
+    /// `signatures[i]` contains the signature of `signatories[i]`.
+    pub signatures: Vec<BitcoinSignature>,
+    /// The transfer transaction
+    pub transfer_tx: BitcoinTx,
 }
+
+/// A Partially Signed Bitcoin Transaction (PSBT) with a single signature
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PsbtSignature {
+    /// The unsigned PSBT
+    pub unsigned_psbt: UnsignedPsbt,
+    /// The signature of a single signatory.
+    pub signature: BitcoinSignature,
+    /// The transfer transaction
+    pub transfer_tx: BitcoinTx,
+}
+
+/// A base64-encoded unsigned PSBT
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UnsignedPsbt(pub String);
+
+impl UnsignedPsbt {
+    pub fn decode(self) -> Result<Vec<u8>, anyhow::Error> {
+        let unsigned_psbt = general_purpose::STANDARD.decode(&self.0)?;
+        Ok(unsigned_psbt)
+    }
+
+    pub fn encode(psbt: &[u8]) -> Result<Self, anyhow::Error> {
+        let unsigned_psbt = general_purpose::STANDARD.encode(psbt);
+        Ok(Self(unsigned_psbt))
+    }
+}
+
+/// A hex-encoded transfer transaction
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BitcoinTx(pub String);
+
+impl BitcoinTx {
+    pub fn decode(self) -> Result<Vec<u8>, anyhow::Error> {
+        let bitcoin_tx = hex::decode(self.0)?;
+        Ok(bitcoin_tx)
+    }
+
+    pub fn encode(tx: &[u8]) -> Result<Self, anyhow::Error> {
+        let bitcoin_tx = hex::encode(tx);
+        Ok(Self(bitcoin_tx))
+    }
+}
+
+/// A bitcoin signature, or multiple signatures concatenated together
+/// (if a signatory must create multiple signatures for a single bitcoin transaction)
+pub type BitcoinSignature = Vec<u8>;
 
 /// The collection of items for the bottom up checkpoint submission
 #[serde_as]

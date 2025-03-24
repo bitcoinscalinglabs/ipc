@@ -1,7 +1,5 @@
 // Copyright 2022-2024 Protocol Labs
 // SPDX-License-Identifier: MIT
-use base64::engine::general_purpose;
-use base64::Engine as _;
 use std::any::Any;
 use std::borrow::Borrow;
 use std::collections::{BTreeMap, HashMap};
@@ -15,7 +13,7 @@ use ipc_actors_abis::{
     subnet_actor_activity_facet, subnet_actor_checkpointing_facet, subnet_actor_getter_facet,
     subnet_actor_manager_facet, subnet_actor_reward_facet,
 };
-use ipc_api::checkpoint::{BottomUpCheckpointBundle, CheckpointPsbt};
+use ipc_api::checkpoint::{BottomUpCheckpointBundle, PsbtSignatureQuorum};
 use ipc_api::evm::{fil_to_eth_amount, payload_to_evm_address, subnet_id_to_evm_addresses};
 use ipc_api::validator::from_contract_validators;
 use reqwest::header::HeaderValue;
@@ -996,11 +994,11 @@ impl SubnetManager for EthSubnetManager {
         block_number_from_receipt(receipt)
     }
 
-    async fn generate_and_sign_checkpoint_tx(
+    async fn get_checkpoint_signatures(
         &self,
         _subnet_id: &SubnetID,
         _checkpoint: BottomUpCheckpoint,
-    ) -> Result<ipc_api::checkpoint::CheckpointPsbt> {
+    ) -> Result<ipc_api::checkpoint::PsbtSignature> {
         unimplemented!(
             "Checkpointing on evm parent subnets does not need to contact the parent subnet"
         )
@@ -1249,11 +1247,12 @@ impl EthSubnetManager {
 impl BottomUpCheckpointRelayer for EthSubnetManager {
     async fn submit_checkpoint(
         &self,
+        _keystore: Arc<RwLock<PersistentKeyStore<EthKeyAddress>>>,
         submitter: &Address,
         checkpoint: BottomUpCheckpoint,
         signatures: Vec<Signature>,
         signatories: Vec<Address>,
-        bitcoin_signatures: Option<CheckpointPsbt>,
+        bitcoin_signatures: Option<PsbtSignatureQuorum>,
     ) -> anyhow::Result<ChainEpoch> {
         if bitcoin_signatures != None {
             return Err(anyhow!(
@@ -1355,28 +1354,23 @@ impl BottomUpCheckpointRelayer for EthSubnetManager {
                 .call()
                 .await?;
 
-            let psbt = general_purpose::STANDARD.encode(psbt);
-            let transfer_tx = general_purpose::STANDARD.encode(batch_transfer_tx);
             if signatories.len() != signatures.len() {
                 return Err(anyhow!(
-                        "signatories and signatures length mismatch for bitcoin checkpoint at height: {}",
-                        height
-                    ));
+                    "signatories and signatures length mismatch for bitcoin checkpoint at height: {}",
+                    height
+                ));
             }
-            let psbt_signatures = signatures
-                .into_iter()
-                .map(|s| hex::encode(s))
-                .collect::<Vec<_>>();
-            let psbt_signatories = signatories
-                .into_iter()
-                .map(|s| ethers_address_to_fil_address(&s))
-                .collect::<Result<Vec<_>, _>>()?;
 
-            Some(CheckpointPsbt {
-                unsigned_psbt_base64: psbt,
-                psbt_signatories,
-                psbt_signatures,
-                transfer_tx_hex: transfer_tx,
+            let signatures = signatures
+                .into_iter()
+                .map(|s| s.to_vec())
+                .collect::<Vec<_>>();
+
+            Some(PsbtSignatureQuorum {
+                unsigned_psbt: ipc_api::checkpoint::UnsignedPsbt::encode(&psbt)?,
+                signatories,
+                signatures,
+                transfer_tx: ipc_api::checkpoint::BitcoinTx::encode(&batch_transfer_tx)?,
             })
         } else {
             None

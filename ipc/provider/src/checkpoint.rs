@@ -38,48 +38,49 @@ pub struct BottomUpCheckpointManager {
     /// The number of blocks away from the chain head that is considered final
     finalization_blocks: ChainEpoch,
     submission_semaphore: Arc<Semaphore>,
+    keystore: Arc<RwLock<PersistentKeyStore<EthKeyAddress>>>,
 }
+
+// impl BottomUpCheckpointManager {
+//     pub async fn new(
+//         parent: Subnet,
+//         child: Subnet,
+//         parent_handler: Arc<Box<dyn BottomUpCheckpointRelayer>>,
+//         child_handler: Arc<Box<dyn BottomUpCheckpointRelayer>>,
+//         max_parallelism: usize,
+//     ) -> Result<Self> {
+//         let period = parent_handler
+//             .checkpoint_period(&child.id)
+//             .await
+//             .map_err(|e| anyhow!("cannot get bottom up checkpoint period: {e}"))?;
+//         Ok(Self {
+//             metadata: CheckpointConfig {
+//                 parent,
+//                 child,
+//                 period,
+//             },
+//             parent_handler,
+//             child_handler,
+//             finalization_blocks: 0,
+//             submission_semaphore: Arc::new(Semaphore::new(max_parallelism)),
+//         })
+//     }
+
+// pub fn with_finalization_blocks(mut self, finalization_blocks: ChainEpoch) -> Self {
+//     self.finalization_blocks = finalization_blocks;
+//     self
+// }
+// }
 
 impl BottomUpCheckpointManager {
     pub async fn new(
         parent: Subnet,
         child: Subnet,
-        parent_handler: Arc<Box<dyn BottomUpCheckpointRelayer>>,
-        child_handler: Arc<Box<dyn BottomUpCheckpointRelayer>>,
         max_parallelism: usize,
-    ) -> Result<Self> {
-        let period = parent_handler
-            .checkpoint_period(&child.id)
-            .await
-            .map_err(|e| anyhow!("cannot get bottom up checkpoint period: {e}"))?;
-        Ok(Self {
-            metadata: CheckpointConfig {
-                parent,
-                child,
-                period,
-            },
-            parent_handler,
-            child_handler,
-            finalization_blocks: 0,
-            submission_semaphore: Arc::new(Semaphore::new(max_parallelism)),
-        })
-    }
-
-    pub fn with_finalization_blocks(mut self, finalization_blocks: ChainEpoch) -> Self {
-        self.finalization_blocks = finalization_blocks;
-        self
-    }
-}
-
-impl BottomUpCheckpointManager {
-    pub async fn new_manager(
-        parent: Subnet,
-        child: Subnet,
         keystore: Arc<RwLock<PersistentKeyStore<EthKeyAddress>>>,
-        max_parallelism: usize,
     ) -> Result<Self> {
-        println!("parent: {:?}", parent.config);
-        println!("child: {:?}", child.config);
+        tracing::info!("parent: {:?}", parent.config);
+        tracing::info!("child: {:?}", child.config);
         let parent_handler: Box<dyn BottomUpCheckpointRelayer> = match &parent.config {
             SubnetConfig::Fevm(_) => Box::new(EthSubnetManager::from_subnet_with_wallet_store(
                 &parent,
@@ -91,19 +92,33 @@ impl BottomUpCheckpointManager {
         let child_handler: Box<dyn BottomUpCheckpointRelayer> = match &child.config {
             SubnetConfig::Fevm(_) => Box::new(EthSubnetManager::from_subnet_with_wallet_store(
                 &child,
-                Some(keystore),
+                Some(keystore.clone()),
             )?),
             SubnetConfig::Btc(_) => Box::new(BtcSubnetManager::new(&child)?),
         };
 
-        Self::new(
-            parent,
-            child,
-            Arc::new(parent_handler),
-            Arc::new(child_handler),
-            max_parallelism,
-        )
-        .await
+        let period = parent_handler
+            .checkpoint_period(&child.id)
+            .await
+            .map_err(|e| anyhow!("cannot get bottom up checkpoint period: {e}"))?;
+
+        Ok(Self {
+            metadata: CheckpointConfig {
+                parent,
+                child,
+                period,
+            },
+            parent_handler: Arc::new(parent_handler),
+            child_handler: Arc::new(child_handler),
+            finalization_blocks: 0,
+            submission_semaphore: Arc::new(Semaphore::new(max_parallelism)),
+            keystore,
+        })
+    }
+
+    pub fn with_finalization_blocks(mut self, finalization_blocks: ChainEpoch) -> Self {
+        self.finalization_blocks = finalization_blocks;
+        self
     }
 }
 
@@ -219,24 +234,29 @@ impl BottomUpCheckpointManager {
                     .acquire_owned()
                     .await
                     .unwrap();
+
+                let keystore = self.keystore.clone();
                 all_submit_tasks.push(tokio::task::spawn(async move {
                     let height = event.height;
                     let hash = bundle.checkpoint.block_hash.clone();
 
-                    let result =
-                        Self::submit_checkpoint(parent_handler_clone, submitter, bundle, event)
-                            .await
-                            .inspect(|_| {
-                                emit(CheckpointSubmitted {
-                                    height,
-                                    hash: HexEncodableBlockHash(hash),
-                                });
-                            })
-                            .inspect_err(|err| {
-                                tracing::error!(
-                                    "Fail to submit checkpoint at height {height}: {err}"
-                                );
-                            });
+                    let result = Self::submit_checkpoint(
+                        keystore,
+                        parent_handler_clone,
+                        submitter,
+                        bundle,
+                        event,
+                    )
+                    .await
+                    .inspect(|_| {
+                        emit(CheckpointSubmitted {
+                            height,
+                            hash: HexEncodableBlockHash(hash),
+                        });
+                    })
+                    .inspect_err(|err| {
+                        tracing::error!("Fail to submit checkpoint at height {height}: {err}");
+                    });
 
                     drop(submission_permit);
                     result
@@ -255,6 +275,7 @@ impl BottomUpCheckpointManager {
     }
 
     async fn submit_checkpoint(
+        keystore: Arc<RwLock<PersistentKeyStore<EthKeyAddress>>>,
         parent_handler: Arc<Box<dyn BottomUpCheckpointRelayer>>,
         submitter: Address,
         bundle: BottomUpCheckpointBundle,
@@ -279,6 +300,7 @@ impl BottomUpCheckpointManager {
 
         let epoch = parent_handler
             .submit_checkpoint(
+                keystore,
                 &submitter,
                 bundle.checkpoint,
                 bundle.signatures,

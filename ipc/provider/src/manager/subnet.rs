@@ -17,8 +17,10 @@ use ipc_api::subnet::{
 };
 use ipc_api::subnet_id::SubnetID;
 use ipc_api::validator::Validator;
+use ipc_wallet::{EthKeyAddress, PersistentKeyStore};
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
+use std::sync::{Arc, RwLock};
 
 use crate::lotus::message::ipc::SubnetInfo;
 
@@ -200,11 +202,11 @@ pub trait SubnetManager:
 
     /// This function asks the parent subnet (bitcoin) to generate the required transaction for the given `checkpoint` and `subnet_id`.
     /// It is only required when the parent subnet is bitcoin.
-    async fn generate_and_sign_checkpoint_tx(
+    async fn get_checkpoint_signatures(
         &self,
         subnet_id: &SubnetID,
         checkpoint: BottomUpCheckpoint,
-    ) -> Result<ipc_api::checkpoint::CheckpointPsbt>;
+    ) -> Result<ipc_api::checkpoint::PsbtSignature>;
 
     fn as_any(&self) -> &dyn Any;
 }
@@ -271,11 +273,12 @@ pub trait BottomUpCheckpointRelayer: Send + Sync {
     /// Returns the epoch that the execution is successful
     async fn submit_checkpoint(
         &self,
+        keystore: Arc<RwLock<PersistentKeyStore<EthKeyAddress>>>,
         submitter: &Address,
         checkpoint: BottomUpCheckpoint,
         signatures: Vec<Signature>,
         signatories: Vec<Address>,
-        bitcoin_signatures: Option<ipc_api::checkpoint::CheckpointPsbt>,
+        bitcoin_signatures: Option<ipc_api::checkpoint::PsbtSignatureQuorum>,
     ) -> Result<ChainEpoch>;
     /// The last confirmed/submitted checkpoint height.
     async fn last_bottom_up_checkpoint_height(&self, subnet_id: &SubnetID) -> Result<ChainEpoch>;

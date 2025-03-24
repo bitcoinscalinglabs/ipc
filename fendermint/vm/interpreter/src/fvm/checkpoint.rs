@@ -362,15 +362,17 @@ where
     DB: Blockstore + Send + Sync + Clone + 'static,
 {
     let checkpoint_psbt = parent_manager
-        .generate_and_sign_checkpoint_tx(
+        .get_checkpoint_signatures(
             subnet_id,
             ipc_api::checkpoint::BottomUpCheckpoint::try_from(checkpoint.clone())?,
         )
         .await?;
-    tracing::info!("obtained checkpoint PSBT from bitcoin provider: {checkpoint_psbt:?}");
+    tracing::info!(
+        "interpreter obtained checkpoint PSBT from bitcoin provider: {checkpoint_psbt:?}"
+    );
 
     let calldata = gateway
-        .add_bitcoin_checkpoint_signature_calldata(&checkpoint, &checkpoint_psbt)
+        .add_bitcoin_checkpoint_signature_calldata(&checkpoint, checkpoint_psbt)
         .context("failed to produce bitcoin checkpoint signature calldata")?;
 
     let tx_hash = broadcaster

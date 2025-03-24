@@ -4,13 +4,14 @@
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
 use std::str::FromStr;
+use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 use ethers::providers::Authorization;
 use ethers::types::H256;
 use http::HeaderValue;
 use ipc_api::address::IPCAddress;
-use ipc_api::checkpoint::CheckpointPsbt;
+use ipc_api::checkpoint::{BitcoinTx, PsbtSignature, PsbtSignatureQuorum, UnsignedPsbt};
 use ipc_api::evm::payload_to_evm_address;
 use ipc_api::subnet::{
     Asset, AssetKind, BtcConstructParams, BtcFundParams, ConstructParams, FundParams,
@@ -19,6 +20,8 @@ use ipc_api::subnet::{
 use ipc_api::subnet::{BtcJoinParams, JoinParams};
 use ipc_api::validator::Validator;
 use ipc_api::{ethers_address_to_fil_address, token_amount_from_satoshi, token_amount_to_satoshi};
+use ipc_wallet::{EthKeyAddress, EvmKeyStore, PersistentKeyStore};
+use libsecp256k1::SecretKey;
 use reqwest::Client;
 use serde_json::{json, Value};
 
@@ -730,13 +733,12 @@ impl SubnetManager for BtcSubnetManager {
         todo!()
     }
 
-    /// This function asks the parent subnet (bitcoin) to generate the required transaction for the given `checkpoint` and `subnet_id`.
-    /// It returns a Partially Signed Bitcoin Transaction (PSBT)
-    async fn generate_and_sign_checkpoint_tx(
+    /// This function asks the parent subnet (bitcoin) to generate the required transaction for the given `checkpoint` and `subnet_id` and sign it.
+    async fn get_checkpoint_signatures(
         &self,
         subnet_id: &SubnetID,
         checkpoint: BottomUpCheckpoint,
-    ) -> Result<CheckpointPsbt> {
+    ) -> Result<PsbtSignature> {
         tracing::debug!("Creating bitcoin signatures for checkpoint: {checkpoint:?}");
 
         // collect all withdrawals and transfers from the checkpoint msgs
@@ -778,7 +780,6 @@ impl SubnetManager for BtcSubnetManager {
                 // TODO(btc): should we get the subnet_id from the checkpoint?
                 "subnet_id":            subnet_id.to_string(),
                 "checkpoint_hash":      hex::encode(checkpoint.block_hash),
-                "change_address":       "bcrt1p5a03k4m8hj026twhkucm8ue6zemrkq62zj3pwkhg95jst3jtdt0scnwz3s",
                 "withdrawals":          releases,
                 "transfers":            transfers,
             }
@@ -823,46 +824,54 @@ impl SubnetManager for BtcSubnetManager {
             ));
         }
 
-        // let unsigned_psbt_hash = data
-        //     .get("result")
-        //     .and_then(|r| r.get("unsigned_psbt_hash"))
-        //     .and_then(Value::as_str)
-        //     .ok_or_else(|| anyhow!("Missing 'result.unsigned_psbt_hash' in JSON-RPC response"))?;
-        let unsigned_psbt_base64 = data
+        let unsigned_psbt = data
             .get("result")
             .and_then(|r| r.get("unsigned_psbt_base64"))
             .and_then(Value::as_str)
-            .ok_or_else(|| anyhow!("Missing 'result.unsigned_psbt_base64' in JSON-RPC response"))?;
-        let psbt_signatures =
-            data.get("result")
-                .and_then(|r| r.get("psbt_inputs_signatures"))
-                .and_then(Value::as_array)
-                .ok_or_else(|| {
-                    anyhow!("Missing 'result.psbt_inputs_signatures' in JSON-RPC response")
-                })?
-                .iter()
-                .map(|v| {
-                    v.as_str().ok_or_else(|| {
-                    anyhow!("Invalid entry in 'result.psbt_inputs_signatures' in JSON-RPC response")
-                })
-                .map(|s| s.to_string())
-                })
-                .collect::<Result<Vec<_>>>()?;
-        let transfer_tx_hex = data
+            .ok_or_else(|| anyhow!("Missing 'result.unsigned_psbt_base64' in JSON-RPC response"))?
+            .to_string();
+
+        // The RPC call returns one signature for each input in the PSBT, hex encoded.
+        // We decode each signature and flatten the result into a single vector of bytes,
+        // which we then store in the `PsbtSignature` struct.
+        // When these signatures are submitted to the `finalize_checkpoint_psbt` RPC call,
+        // they must be split again (see `submit_checkpoint` of `BtcSubnetManager`).
+        let signature = data
+            .get("result")
+            .and_then(|r| r.get("psbt_inputs_signatures"))
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow!("Missing 'result.psbt_inputs_signatures' in JSON-RPC response"))?
+            .iter()
+            .map(|v| {
+                v.as_str()
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "Invalid entry in 'result.psbt_inputs_signatures' in JSON-RPC response"
+                        )
+                    })
+                    .and_then(|s| {
+                        hex::decode(s)
+                            .map_err(|e| anyhow!("decoding bitcoin signature failed: {}", e))
+                    })
+            })
+            .collect::<Result<Vec<Vec<u8>>>>()?
+            .into_iter()
+            .flatten()
+            .collect::<Vec<u8>>();
+
+        let transfer_tx = data
             .get("result")
             .and_then(|r| r.get("batch_transfer_tx_hex"))
-            .and_then(Value::as_str)
-            .ok_or_else(|| {
-                anyhow!("Missing 'result.batch_transfer_tx_hex' in JSON-RPC response")
-            })?;
+            .and_then(|v| if v.is_null() { Some("") } else { v.as_str() })
+            .ok_or_else(|| anyhow!("Missing 'result.batch_transfer_tx_hex' in JSON-RPC response"))?
+            .to_string();
 
-        tracing::info!("Bitcoin signatures created.");
+        tracing::info!("BtcSubnetManager obtained checkpoint PSBT and signatures.");
 
-        Ok(CheckpointPsbt {
-            unsigned_psbt_base64: unsigned_psbt_base64.to_string(),
-            psbt_signatories: Vec::new(),
-            psbt_signatures,
-            transfer_tx_hex: transfer_tx_hex.to_string(),
+        Ok(PsbtSignature {
+            unsigned_psbt: UnsignedPsbt(unsigned_psbt),
+            signature,
+            transfer_tx: BitcoinTx(transfer_tx),
         })
     }
 
@@ -871,15 +880,52 @@ impl SubnetManager for BtcSubnetManager {
     }
 }
 
+// In the `get_checkpoint_signatures` we concatenate the signatures of each signatory,
+// so we need to split them again here.
+// Example of what this code produces:
+// signatories_xonly_pubkey = vec![
+//     "5f0dfed3a527ac740c7d4a594cd3aa1059a936187399fc49e3fc6ea6ae177268",
+//     "67308c2f3915f4c36135f267ed709418c2880025d669e4ada7a206842d53c146",
+// ];
+//
+// split_signatures = vec![
+//     vec![
+//         "f245679ccda14b190213d4115ba8c10d484d5f0d1e0a37a493bd88f9fce3f05b5514debb23e83c693a1fdeb0622970fc3691dbbdee87b7430af41acdca58f44c",
+//         "ce02c09922cde3a671337baa86028a094d456a523286dccfcec015eff78fcf8b666db66c7368fe93f5d75fabf64451b2469931aab4386653194572261586e6dd",
+//     ],
+//     vec![
+//         "41592da0f93d2483ca227a75e36c8898d7097c61f56f2770ca8efe260b3d38011353edd64833cd6b5cc1b6e7c2be0b3a55fc55d5aa9cf34bfd4fa57d4ea551bf",
+//         "3e5f2635a43eab0560a038e300a5e1a4fb11cdfe0da4bf9842ca292db3538ff382d55ff05c2a32c412d558ff4333d0a0d16016b97b58971e16a93f43da01fe89",
+//     ],
+// ];
+//
+// And the resulting json will be:
+// "signatures_json": [
+//     [
+//         "5f0dfed3a527ac740c7d4a594cd3aa1059a936187399fc49e3fc6ea6ae177268",
+//         [
+//             "f245679ccda14b190213d4115ba8c10d484d5f0d1e0a37a493bd88f9fce3f05b5514debb23e83c693a1fdeb0622970fc3691dbbdee87b7430af41acdca58f44c",
+//             "ce02c09922cde3a671337baa86028a094d456a523286dccfcec015eff78fcf8b666db66c7368fe93f5d75fabf64451b2469931aab4386653194572261586e6dd"
+//         ]
+//     ],
+//     [
+//         "67308c2f3915f4c36135f267ed709418c2880025d669e4ada7a206842d53c146",
+//         [
+//             "ce02c09922cde3a671337baa86028a094d456a523286dccfcec015eff78fcf8b666db66c7368fe93f5d75fabf64451b2469931aab4386653194572261586e6dd",
+//             "3e5f2635a43eab0560a038e300a5e1a4fb11cdfe0da4bf9842ca292db3538ff382d55ff05c2a32c412d558ff4333d0a0d16016b97b58971e16a93f43da01fe89"
+//         ]
+//     ]
+// ]
 #[async_trait]
 impl BottomUpCheckpointRelayer for BtcSubnetManager {
     async fn submit_checkpoint(
         &self,
+        keystore: Arc<RwLock<PersistentKeyStore<EthKeyAddress>>>,
         _submitter: &Address,
         checkpoint: BottomUpCheckpoint,
         _signatures: Vec<Signature>,
         _signatories: Vec<Address>,
-        bitcoin_signatures: Option<CheckpointPsbt>,
+        bitcoin_signatures: Option<PsbtSignatureQuorum>,
     ) -> anyhow::Result<ChainEpoch> {
         tracing::info!("submitting checkpoint on btc with params: {checkpoint:?}");
         let bitcoin_signatures = match bitcoin_signatures {
@@ -891,24 +937,38 @@ impl BottomUpCheckpointRelayer for BtcSubnetManager {
             }
         };
 
-        // let mut signatures = Vec::new();
-        // for signature in bitcoin_signatures.psbt_signatures.iter() {
-        //     // fetch the XOnlyPubKey from the signature
-        //     signatures.push(signature.to_string());
-        // }
+        let mut split_signatures = Vec::new();
+        for concatenated_signatures_of_signatory in bitcoin_signatures.signatures.iter() {
+            let split_signatures_of_signatory = concatenated_signatures_of_signatory
+                .chunks(libsecp256k1::util::SIGNATURE_SIZE)
+                .map(|chunk| chunk.to_vec())
+                .collect::<Vec<_>>();
+            split_signatures.push(split_signatures_of_signatory);
+        }
         // Replace the IPC addresses with the XOnlyPubKey, as the RPC expects the XOnlyPubKey
-        let psbt_signatories = bitcoin_signatures
-            .psbt_signatories
+        let signatories_xonly_pubkey = bitcoin_signatures
+            .signatories
             .iter()
-            .map(|s| s.to_string()) //TODO(Orestis): Use wallet to get the XOnlyPubKey
-            .collect::<Vec<_>>();
+            .map(|&s| -> Result<String> {
+                let sk = keystore
+                    .read()
+                    .map_err(|e| anyhow!("failed to read evm wallet: {e}"))?
+                    .get(&s.into())
+                    .map_err(|e| anyhow!("failed to get key from evm wallet: {e}"))?
+                    .ok_or_else(|| anyhow!("key {} does not exist in evm wallet", s))?
+                    .private_key()
+                    .to_vec();
+                let x_only_pub_key = hex::encode(
+                    ipc_wallet::get_xonly_public_key_serialized(&SecretKey::parse_slice(&sk)?)?
+                        .to_vec(),
+                );
+                Ok(x_only_pub_key)
+            })
+            .collect::<Result<Vec<String>>>()?;
 
         // Construct the JSON array
         let mut signatures_json = Vec::new();
-
-        for (signatory, signatures) in psbt_signatories
-            .iter()
-            .zip(bitcoin_signatures.psbt_signatures.iter())
+        for (signatory, signatures) in signatories_xonly_pubkey.iter().zip(split_signatures.iter())
         {
             let json_entry = json!([signatory, signatures]);
             signatures_json.push(json_entry);
@@ -920,9 +980,9 @@ impl BottomUpCheckpointRelayer for BtcSubnetManager {
             "id": 1,
             "params": {
                 "subnet_id":            checkpoint.subnet_id.to_string(),
-                "unsigned_psbt_base64": bitcoin_signatures.unsigned_psbt_base64,
+                "unsigned_psbt_base64": bitcoin_signatures.unsigned_psbt.0,
                 "signatures":           signatures_json,
-                "transfer_tx_hex":      bitcoin_signatures.transfer_tx_hex,
+                "transfer_tx_hex":      bitcoin_signatures.transfer_tx.0,
             }
         });
 
@@ -965,8 +1025,8 @@ impl BottomUpCheckpointRelayer for BtcSubnetManager {
             ));
         }
 
-        //TODO(btc): return the epoch of the checkpoint
-        Ok(0)
+        let current_height = self.chain_head_height().await?;
+        Ok(current_height)
     }
 
     async fn last_bottom_up_checkpoint_height(
@@ -1029,10 +1089,11 @@ impl BottomUpCheckpointRelayer for BtcSubnetManager {
 
         let height = result
             .get("height")
-            .ok_or_else(|| anyhow!("No height found"))?
-            .as_u64();
+            .ok_or_else(|| anyhow!("No height found in getlastcheckpointheight response"))?
+            .as_u64()
+            .ok_or_else(|| anyhow!("Height is not a valid u64"))?;
 
-        Ok(height.unwrap_or_default() as ChainEpoch)
+        Ok(height as ChainEpoch)
     }
 
     async fn checkpoint_period(&self, subnet_id: &SubnetID) -> anyhow::Result<ChainEpoch> {

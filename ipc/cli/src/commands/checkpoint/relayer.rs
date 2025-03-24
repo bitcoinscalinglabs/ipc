@@ -76,11 +76,11 @@ impl CommandLineHandler for BottomUpRelayer {
         let child = get_subnet_config(&config_path, &subnet)?;
         let parent = get_subnet_config(&config_path, &parent)?;
 
-        let mut manager = BottomUpCheckpointManager::new_manager(
+        let mut manager = BottomUpCheckpointManager::new(
             parent.clone(),
             child.clone(),
-            Arc::new(RwLock::new(keystore)),
             arguments.max_parallelism,
+            Arc::new(RwLock::new(keystore)),
         )
         .await?;
 
