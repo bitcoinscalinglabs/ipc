@@ -994,7 +994,7 @@ impl SubnetManager for EthSubnetManager {
         block_number_from_receipt(receipt)
     }
 
-    async fn get_checkpoint_signatures(
+    async fn get_checkpoint_transaction(
         &self,
         _subnet_id: &SubnetID,
         _checkpoint: BottomUpCheckpoint,

@@ -202,7 +202,7 @@ pub trait SubnetManager:
 
     /// This function asks the parent subnet (bitcoin) to generate the required transaction for the given `checkpoint` and `subnet_id`.
     /// It is only required when the parent subnet is bitcoin.
-    async fn get_checkpoint_signatures(
+    async fn get_checkpoint_transaction(
         &self,
         subnet_id: &SubnetID,
         checkpoint: BottomUpCheckpoint,

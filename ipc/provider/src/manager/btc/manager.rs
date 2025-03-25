@@ -734,7 +734,7 @@ impl SubnetManager for BtcSubnetManager {
     }
 
     /// This function asks the parent subnet (bitcoin) to generate the required transaction for the given `checkpoint` and `subnet_id` and sign it.
-    async fn get_checkpoint_signatures(
+    async fn get_checkpoint_transaction(
         &self,
         subnet_id: &SubnetID,
         checkpoint: BottomUpCheckpoint,
@@ -780,6 +780,7 @@ impl SubnetManager for BtcSubnetManager {
                 // TODO(btc): should we get the subnet_id from the checkpoint?
                 "subnet_id":            subnet_id.to_string(),
                 "checkpoint_hash":      hex::encode(checkpoint.block_hash),
+                "checkpoint_height":    checkpoint.block_height,
                 "withdrawals":          releases,
                 "transfers":            transfers,
             }
@@ -885,7 +886,7 @@ impl SubnetManager for BtcSubnetManager {
     }
 }
 
-// In the `get_checkpoint_signatures` we concatenate the signatures of each signatory,
+// In the `get_checkpoint_transaction` we concatenate the signatures of each signatory,
 // so we need to split them again here.
 // Example of what this code produces:
 // signatories_xonly_pubkey = vec![
@@ -1044,7 +1045,7 @@ impl BottomUpCheckpointRelayer for BtcSubnetManager {
 
         let body = json!({
             "jsonrpc": "2.0",
-            "method": "getlastcheckpointheight",
+            "method": "getsubnet",
             "id": 1,
             "params": {
                 "subnet_id": subnet_id.to_string(),
@@ -1093,10 +1094,9 @@ impl BottomUpCheckpointRelayer for BtcSubnetManager {
             .ok_or_else(|| anyhow!("No result found"))?;
 
         let height = result
-            .get("height")
-            .ok_or_else(|| anyhow!("No height found in getlastcheckpointheight response"))?
-            .as_u64()
-            .ok_or_else(|| anyhow!("Height is not a valid u64"))?;
+            .get("last_checkpoint_height")
+            .and_then(Value::as_i64)
+            .ok_or_else(|| anyhow!("No last_checkpoint_height found in getsubnet response"))?;
 
         Ok(height as ChainEpoch)
     }

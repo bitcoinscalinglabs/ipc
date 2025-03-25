@@ -362,7 +362,7 @@ where
     DB: Blockstore + Send + Sync + Clone + 'static,
 {
     let checkpoint_psbt = parent_manager
-        .get_checkpoint_signatures(
+        .get_checkpoint_transaction(
             subnet_id,
             ipc_api::checkpoint::BottomUpCheckpoint::try_from(checkpoint.clone())?,
         )
