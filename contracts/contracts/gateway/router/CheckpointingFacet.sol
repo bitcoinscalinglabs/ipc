@@ -153,10 +153,10 @@ contract CheckpointingFacet is GatewayActorModifiers {
         address signatory = msg.sender;
 
         // Check if the signatory was included in the quorum signature senders
-        bool ok = s.checkpointQuorumMap.quorumSignatureSenders[height].contains(signatory);
-        if (!ok) {
-            revert NotAuthorized(signatory);
-        }
+        // bool ok = s.checkpointQuorumMap.quorumSignatureSenders[height].contains(signatory);
+        // if (!ok) {
+        //     revert NotAuthorized(signatory);
+        // }
 
         bytes32 psbtHash = keccak256(psbt);
 

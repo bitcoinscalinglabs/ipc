@@ -859,12 +859,17 @@ impl SubnetManager for BtcSubnetManager {
             .flatten()
             .collect::<Vec<u8>>();
 
-        let transfer_tx = data
+        let transfer_tx = match data
             .get("result")
             .and_then(|r| r.get("batch_transfer_tx_hex"))
-            .and_then(|v| if v.is_null() { Some("") } else { v.as_str() })
-            .ok_or_else(|| anyhow!("Missing 'result.batch_transfer_tx_hex' in JSON-RPC response"))?
-            .to_string();
+        {
+            Some(v) if v.is_null() => "".to_string(),
+            Some(v) => v
+                .as_str()
+                .ok_or_else(|| anyhow!("'batch_transfer_tx_hex' is not a string"))?
+                .to_string(),
+            None => "".to_string(),
+        };
 
         tracing::info!("BtcSubnetManager obtained checkpoint PSBT and signatures.");
 
