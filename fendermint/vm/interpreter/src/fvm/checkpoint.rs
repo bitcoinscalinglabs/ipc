@@ -276,6 +276,19 @@ where
                 },
             };
 
+            // We mustn't do these in parallel because of how nonces are fetched.
+            broadcast_signature(
+                &validator_ctx.broadcaster,
+                gateway,
+                checkpoint.clone(),
+                &power_table,
+                &validator,
+                &validator_ctx.secret_key,
+                chain_id,
+            )
+            .await
+            .context("failed to broadcast checkpoint signature")?;
+
             // TODO(themis):
             // step 1: get checkpoint PSBT from provider
             // step 2: sign PSBT
@@ -307,7 +320,7 @@ where
                     gateway,
                     subnet_id,
                     parent_manager,
-                    checkpoint.clone(),
+                    checkpoint,
                     chain_id,
                 )
                 .await
@@ -315,19 +328,6 @@ where
             } else {
                 tracing::debug!("will not create bitcoin signature for this checkpoint");
             }
-
-            // We mustn't do these in parallel because of how nonces are fetched.
-            broadcast_signature(
-                &validator_ctx.broadcaster,
-                gateway,
-                checkpoint,
-                &power_table,
-                &validator,
-                &validator_ctx.secret_key,
-                chain_id,
-            )
-            .await
-            .context("failed to broadcast checkpoint signature")?;
 
             emit(CheckpointSigned {
                 role: CheckpointSignedRole::Own,

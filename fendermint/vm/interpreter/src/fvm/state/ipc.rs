@@ -240,13 +240,7 @@ impl<DB: Blockstore + Clone> GatewayCaller<DB> {
             hex::encode(checkpoint_psbt.signature.clone()),
             checkpoint_psbt.transfer_tx.0
         );
-        tracing::debug!(
-            "Arguments to add_bitcoin_checkpoint_signature(): {:?}, {:?}, {:?}, {:?}",
-            checkpoint.block_height,
-            unsigned_psbt,
-            checkpoint_psbt.signature.clone(),
-            transfer_tx
-        );
+
         let call = self
             .checkpointing
             .contract()
