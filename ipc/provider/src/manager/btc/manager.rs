@@ -940,7 +940,7 @@ impl BottomUpCheckpointRelayer for BtcSubnetManager {
     async fn submit_checkpoint(
         &self,
         keystore: Arc<RwLock<PersistentKeyStore<EthKeyAddress>>>,
-        _submitter: &Address,
+        _submitter: &Option<Address>,
         checkpoint: BottomUpCheckpoint,
         _signatures: Vec<Signature>,
         _signatories: Vec<Address>,

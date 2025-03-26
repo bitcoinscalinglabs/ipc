@@ -1286,7 +1286,7 @@ impl BottomUpCheckpointRelayer for EthSubnetManager {
     async fn submit_checkpoint(
         &self,
         _keystore: Arc<RwLock<PersistentKeyStore<EthKeyAddress>>>,
-        submitter: &Address,
+        submitter: &Option<Address>,
         checkpoint: BottomUpCheckpoint,
         signatures: Vec<Signature>,
         signatories: Vec<Address>,
@@ -1297,6 +1297,14 @@ impl BottomUpCheckpointRelayer for EthSubnetManager {
                 "Submitting checkpoint on an EVM subnet does not need bitcoin_signatures"
             ));
         }
+        let submitter = match submitter {
+            Some(submitter) => submitter,
+            None => {
+                return Err(anyhow!(
+                    "submitter address is required for submitting checkpoint on an EVM subnet"
+                ));
+            }
+        };
 
         let address = contract_address_from_subnet(&checkpoint.subnet_id)?;
         tracing::debug!(

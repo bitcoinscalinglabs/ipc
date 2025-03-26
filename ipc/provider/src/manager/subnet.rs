@@ -285,7 +285,7 @@ pub trait BottomUpCheckpointRelayer: Send + Sync {
     async fn submit_checkpoint(
         &self,
         keystore: Arc<RwLock<PersistentKeyStore<EthKeyAddress>>>,
-        submitter: &Address,
+        submitter: &Option<Address>,
         checkpoint: BottomUpCheckpoint,
         signatures: Vec<Signature>,
         signatories: Vec<Address>,

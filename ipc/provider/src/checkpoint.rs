@@ -149,19 +149,19 @@ impl BottomUpCheckpointManager {
     }
 
     /// Run the bottom up checkpoint submission daemon in the foreground
-    pub async fn run(self, submitter: Address, submission_interval: Duration) {
-        tracing::info!("launching {self} for {submitter}");
+    pub async fn run(self, submitter: Option<Address>, submission_interval: Duration) {
+        tracing::info!("launching {self} for {submitter:?}");
 
         loop {
             if let Err(e) = self.submit_next_epoch(submitter).await {
-                tracing::error!("cannot submit checkpoint for submitter: {submitter} due to {e}");
+                tracing::error!("cannot submit checkpoint due to: {e}");
             }
             tokio::time::sleep(submission_interval).await;
         }
     }
 
     /// Checks if the relayer has already submitted at the next submission epoch, if not it submits it.
-    async fn submit_next_epoch(&self, submitter: Address) -> Result<()> {
+    async fn submit_next_epoch(&self, submitter: Option<Address>) -> Result<()> {
         let last_checkpoint_epoch = self
             .parent_handler
             .last_bottom_up_checkpoint_height(&self.metadata.child.id)
@@ -277,7 +277,7 @@ impl BottomUpCheckpointManager {
     async fn submit_checkpoint(
         keystore: Arc<RwLock<PersistentKeyStore<EthKeyAddress>>>,
         parent_handler: Arc<Box<dyn BottomUpCheckpointRelayer>>,
-        submitter: Address,
+        submitter: Option<Address>,
         bundle: BottomUpCheckpointBundle,
         event: QuorumReachedEvent,
     ) -> Result<(), anyhow::Error> {
