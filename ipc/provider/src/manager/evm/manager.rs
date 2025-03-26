@@ -703,6 +703,44 @@ impl SubnetManager for EthSubnetManager {
         block_number_from_receipt(receipt)
     }
 
+    async fn transfer(
+        &self,
+        gateway_addr: Option<Address>,
+        from: Address,
+        to: Address,
+        amount: TokenAmount,
+        dst_subnet: SubnetID,
+    ) -> Result<ChainEpoch> {
+        let gateway_addr =
+            gateway_addr.ok_or_else(|| anyhow!("gateway address must be provided"))?;
+        self.ensure_same_gateway(&gateway_addr)?;
+
+        let value = amount
+            .atto()
+            .to_u128()
+            .ok_or_else(|| anyhow!("invalid value to fund"))?;
+
+        tracing::info!("transfer with evm gateway contract: {gateway_addr:} with value: {value:} to subnet: {dst_subnet:}");
+
+        let evm_subnet_id = gateway_manager_facet::SubnetID::try_from(&dst_subnet)?;
+
+        let signer = Arc::new(self.get_signer_with_fee_estimator(&from)?);
+        let gateway_contract = gateway_manager_facet::GatewayManagerFacet::new(
+            self.ipc_contract_info.gateway_addr,
+            signer.clone(),
+        );
+        let mut txn = gateway_contract.transfer(
+            gateway_manager_facet::FvmAddress::try_from(to)?,
+            evm_subnet_id,
+        );
+        txn.tx.set_value(value);
+        let txn = extend_call_with_pending_block(txn).await?;
+
+        let pending_tx = txn.send().await?;
+        let receipt = pending_tx.retries(TRANSACTION_RECEIPT_RETRIES).await?;
+        block_number_from_receipt(receipt)
+    }
+
     /// Propagate the postbox message key. The key should be `bytes32`.
     async fn propagate(
         &self,
@@ -1331,7 +1369,16 @@ impl BottomUpCheckpointRelayer for EthSubnetManager {
             return Ok(None);
         }
 
-        let checkpoint = BottomUpCheckpoint::try_from(checkpoint)?;
+        tracing::info!(
+            "getting checkpoint bundle at height: {} for subnet: {:?}",
+            height,
+            checkpoint.subnet_id
+        );
+
+        let mut checkpoint = BottomUpCheckpoint::try_from(checkpoint)?;
+        //TODO(Orestis): try_from() does not set the field root_network_type. Fix. Then re-enable the condition and remove the following line and change the field to not pub
+        checkpoint.subnet_id.root_network_type = NetworkType::Btc;
+
         let signatories = signatories
             .into_iter()
             .map(|s| ethers_address_to_fil_address(&s))
@@ -1341,9 +1388,14 @@ impl BottomUpCheckpointRelayer for EthSubnetManager {
             .map(|s| s.to_vec())
             .collect::<Vec<_>>();
 
-        let bitcoin_signatures = if checkpoint.subnet_id.parent_network_type()
-            == Some(NetworkType::Btc)
+        let bitcoin_signatures =
+        // = if checkpoint.subnet_id.parent_network_type()
+        //     == Some(NetworkType::Btc)
         {
+            tracing::debug!(
+                "getting bitcoin checkpoint signatures for checkpoint at height: {}",
+                height
+            );
             let contract = checkpointing_facet::CheckpointingFacet::new(
                 self.ipc_contract_info.gateway_addr,
                 Arc::new(self.ipc_contract_info.provider.clone()),
@@ -1361,6 +1413,8 @@ impl BottomUpCheckpointRelayer for EthSubnetManager {
                 ));
             }
 
+            tracing::debug!("found {} bitcoin signatures", signatures.len());
+
             let signatures = signatures
                 .into_iter()
                 .map(|s| s.to_vec())
@@ -1372,8 +1426,8 @@ impl BottomUpCheckpointRelayer for EthSubnetManager {
                 signatures,
                 transfer_tx: ipc_api::checkpoint::BitcoinTx::encode(&batch_transfer_tx)?,
             })
-        } else {
-            None
+        // } else {
+        //     None
         };
 
         Ok(Some(BottomUpCheckpointBundle {

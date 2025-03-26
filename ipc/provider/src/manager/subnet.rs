@@ -136,6 +136,17 @@ pub trait SubnetManager:
         amount: TokenAmount,
     ) -> Result<ChainEpoch>;
 
+    /// Transfer creates a new message to transfer funds in a subnet
+    /// Returns the epoch that the transfer is executed in the child.
+    async fn transfer(
+        &self,
+        gateway_addr: Option<Address>,
+        from: Address,
+        to: Address,
+        amount: TokenAmount,
+        dst_subnet: SubnetID,
+    ) -> Result<ChainEpoch>;
+
     /// Propagate a cross-net message forward. For `postbox_msg_key`, we are using bytes because different
     /// runtime have different representations. For FVM, it should be `CID` as bytes. For EVM, it is
     /// `bytes32`.

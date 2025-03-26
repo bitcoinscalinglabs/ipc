@@ -503,6 +503,19 @@ impl SubnetManager for BtcSubnetManager {
         )
     }
 
+    async fn transfer(
+        &self,
+        _gateway_addr: Option<Address>,
+        _from: Address,
+        _to: Address,
+        _amount: TokenAmount,
+        _dst_subnet: SubnetID,
+    ) -> Result<ChainEpoch> {
+        unimplemented!(
+            "transfer on bitcoin is not supported, it is not meant to be used as a child subnet"
+        );
+    }
+
     async fn propagate(
         &self,
         subnet: SubnetID,
@@ -592,7 +605,7 @@ impl SubnetManager for BtcSubnetManager {
             .get("result")
             .ok_or_else(|| anyhow!("No result found"))?;
 
-        println!("btc manager get genesis info result: {result:#?}");
+        tracing::debug!("btc manager get genesis info result: {result:#?}");
 
         // Check if subnet is bootstrapped
         if result
@@ -942,12 +955,12 @@ impl BottomUpCheckpointRelayer for BtcSubnetManager {
                 ));
             }
         };
-
+        // Split the signatures of each signatory into chunks of 64 bytes (see info above function for more details)
         let mut split_signatures = Vec::new();
         for concatenated_signatures_of_signatory in bitcoin_signatures.signatures.iter() {
             let split_signatures_of_signatory = concatenated_signatures_of_signatory
                 .chunks(libsecp256k1::util::SIGNATURE_SIZE)
-                .map(|chunk| chunk.to_vec())
+                .map(|chunk| hex::encode(chunk.to_vec()))
                 .collect::<Vec<_>>();
             split_signatures.push(split_signatures_of_signatory);
         }
@@ -992,7 +1005,7 @@ impl BottomUpCheckpointRelayer for BtcSubnetManager {
             }
         });
 
-        tracing::info!("Request body: {body:?}");
+        tracing::info!("Request body: {body:#?}");
 
         let resp = self
             .client
@@ -1045,7 +1058,7 @@ impl BottomUpCheckpointRelayer for BtcSubnetManager {
 
         let body = json!({
             "jsonrpc": "2.0",
-            "method": "getsubnet",
+            "method": "getsubnetcheckpoint",
             "id": 1,
             "params": {
                 "subnet_id": subnet_id.to_string(),
@@ -1089,14 +1102,16 @@ impl BottomUpCheckpointRelayer for BtcSubnetManager {
             ));
         }
 
-        let result = data
-            .get("result")
-            .ok_or_else(|| anyhow!("No result found"))?;
-
-        let height = result
-            .get("last_checkpoint_height")
-            .and_then(Value::as_i64)
-            .ok_or_else(|| anyhow!("No last_checkpoint_height found in getsubnet response"))?;
+        let height = match data.get("result") {
+            Some(v) if v.is_null() => 0,
+            Some(v) => v
+                .get("checkpoint_height")
+                .and_then(Value::as_i64)
+                .ok_or_else(|| {
+                    anyhow!("No checkpoint_height found in getsubnetcheckpoint response")
+                })?,
+            None => return Err(anyhow!("No result found")),
+        };
 
         Ok(height as ChainEpoch)
     }
