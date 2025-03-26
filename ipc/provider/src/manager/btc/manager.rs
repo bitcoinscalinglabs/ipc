@@ -1045,6 +1045,8 @@ impl BottomUpCheckpointRelayer for BtcSubnetManager {
         }
 
         let current_height = self.chain_head_height().await?;
+
+        tracing::info!("checkpoint submitted on btc at height: {current_height:}");
         Ok(current_height)
     }
 
