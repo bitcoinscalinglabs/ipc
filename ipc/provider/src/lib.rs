@@ -564,6 +564,40 @@ impl IpcProvider {
         }
     }
 
+    /// Transfer funds between subnets.
+    pub async fn transfer(
+        &mut self,
+        source_gateway_addr: Option<Address>,
+        source_subnet: SubnetID,
+        destination_subnet: SubnetID,
+        source_address: Option<Address>,
+        destination_address: Address,
+        amount: TokenAmount,
+    ) -> anyhow::Result<ChainEpoch> {
+        let source_conn = match self.connection(&source_subnet) {
+            None => return Err(anyhow!("source subnet not found: {source_subnet}")),
+            Some(conn) => conn,
+        };
+
+        let source_subnet_config = source_conn.subnet();
+        let source_address = self.check_sender(source_address)?;
+
+        let gateway_addr = match source_gateway_addr {
+            None => Some(source_subnet_config.gateway_addr()),
+            Some(addr) => Some(addr),
+        };
+        source_conn
+            .manager()
+            .transfer(
+                gateway_addr,
+                source_address,
+                destination_address,
+                amount,
+                destination_subnet,
+            )
+            .await
+    }
+
     /// Propagate a cross-net message forward. For `postbox_msg_key`, we are using bytes because different
     /// runtime have different representations. For FVM, it should be `CID` as bytes. For EVM, it is
     /// `bytes32`.

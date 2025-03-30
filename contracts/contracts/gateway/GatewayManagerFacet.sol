@@ -225,6 +225,7 @@ contract GatewayManagerFacet is GatewayActorModifiers, ReentrancyGuard {
     }
 
     /// @notice transfer() burns the received value locally in subnet and commits a bottom-up message to transfer the assets in the destination subnet.
+    ///         It is similar to release(), the only difference is that the created IpcEnvelope contains in the `to` field the `dstSubnet`, instead of the parent subnet.
     ///         The local supply of a subnet is always the native coin, so this method doesn't have to deal with tokens.
     ///
     /// @param to: the address to which to credit funds in the destination subnet.

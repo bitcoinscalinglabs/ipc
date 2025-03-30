@@ -1005,7 +1005,7 @@ impl BottomUpCheckpointRelayer for BtcSubnetManager {
             }
         });
 
-        tracing::info!("Request body: {body:#?}");
+        tracing::trace!("Request body: {body:#?}");
 
         let resp = self
             .client

@@ -722,17 +722,15 @@ impl SubnetManager for EthSubnetManager {
 
         tracing::info!("transfer with evm gateway contract: {gateway_addr:} with value: {value:} to subnet: {dst_subnet:}");
 
-        let evm_subnet_id = gateway_manager_facet::SubnetID::try_from(&dst_subnet)?;
+        let dst_subnet = gateway_manager_facet::SubnetID::try_from(&dst_subnet)?;
 
         let signer = Arc::new(self.get_signer_with_fee_estimator(&from)?);
         let gateway_contract = gateway_manager_facet::GatewayManagerFacet::new(
             self.ipc_contract_info.gateway_addr,
             signer.clone(),
         );
-        let mut txn = gateway_contract.transfer(
-            gateway_manager_facet::FvmAddress::try_from(to)?,
-            evm_subnet_id,
-        );
+        let mut txn =
+            gateway_contract.transfer(gateway_manager_facet::FvmAddress::try_from(to)?, dst_subnet);
         txn.tx.set_value(value);
         let txn = extend_call_with_pending_block(txn).await?;
 
