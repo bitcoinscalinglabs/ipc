@@ -26,6 +26,7 @@ use fendermint_vm_topdown::sync::launch_polling_syncer;
 use fendermint_vm_topdown::voting::{publish_vote_loop, Error as VoteError, VoteTally};
 use fendermint_vm_topdown::{CachedFinalityProvider, IPCParentFinality, Toggle};
 use fvm_shared::address::{current_network, Address, Network};
+use ipc_api::subnet_id::NetworkType;
 use ipc_ipld_resolver::{Event as ResolverEvent, VoteRecord};
 use ipc_observability::observe::register_metrics as register_default_metrics;
 use ipc_provider::config::subnet::{BTCSubnet, SubnetConfig};
@@ -137,10 +138,9 @@ async fn run(settings: Settings) -> anyhow::Result<()> {
         other => other,
     };
 
-    // TODO(btc): the following where moved in the code
     let own_subnet_id = settings.ipc.subnet_id.clone();
 
-    let ipc_provider = make_ipc_provider(&settings)?;
+    let ipc_provider = make_ipc_provider(&settings, own_subnet_id.root_network_type())?;
     let ipc_provider_proxy =
         IPCProviderProxy::new(ipc_provider.clone(), settings.ipc.subnet_id.clone())?;
     let ipc_provider_proxy_with_latency =
@@ -249,6 +249,7 @@ async fn run(settings: Settings) -> anyhow::Result<()> {
             if let Some(key) = validator_keypair {
                 let parent_finality_votes = parent_finality_votes.clone();
 
+                let own_subnet_id = own_subnet_id.clone();
                 tracing::info!("starting the parent finality vote gossip loop...");
                 tokio::spawn(async move {
                     publish_vote_loop(
@@ -291,7 +292,9 @@ async fn run(settings: Settings) -> anyhow::Result<()> {
 
     let (parent_finality_provider, ipc_tuple) = if topdown_enabled {
         info!("topdown finality enabled");
-        let topdown_config = settings.ipc.topdown_config()?;
+        let topdown_config = settings
+            .ipc
+            .topdown_config(own_subnet_id.root_network_type())?;
         let mut config = fendermint_vm_topdown::Config::new(
             topdown_config.chain_head_delay,
             topdown_config.polling_interval,
@@ -468,8 +471,11 @@ fn make_resolver_service(
     Ok(service)
 }
 
-fn make_ipc_provider(settings: &Settings) -> anyhow::Result<IpcProvider> {
-    let topdown_config = settings.ipc.topdown_config()?;
+fn make_ipc_provider(
+    settings: &Settings,
+    root_network_type: NetworkType,
+) -> anyhow::Result<IpcProvider> {
+    let topdown_config = settings.ipc.topdown_config(root_network_type)?;
 
     info!("topdown config {topdown_config:#?}");
 
