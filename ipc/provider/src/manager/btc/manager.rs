@@ -46,7 +46,7 @@ use ipc_api::checkpoint::{
 };
 use ipc_api::cross::{IpcEnvelope, IpcMsgKind};
 use ipc_api::staking::{StakingChangeRequest, ValidatorInfo};
-use ipc_api::subnet_id::{SubnetID, BTC_NAMESPACE};
+use ipc_api::subnet_id::{NetworkType, SubnetID, BTC_NAMESPACE};
 
 #[derive(Clone)]
 pub struct BtcSubnetManager {
@@ -761,7 +761,7 @@ impl SubnetManager for BtcSubnetManager {
         for msg in checkpoint.msgs {
             match msg.kind {
                 ipc_api::cross::IpcMsgKind::Transfer => {
-                    let destination_subnet = msg.to.subnet()?;
+                    let mut destination_subnet = msg.to.subnet()?;
                     if destination_subnet.is_root() {
                         // Release
                         releases.push(json!({
@@ -769,7 +769,8 @@ impl SubnetManager for BtcSubnetManager {
                             "address": ipc_api::address::bitcoin_address_from_fvm_address(&msg.to.raw_addr()?)?,
                         }));
                     } else {
-                        // Transfer
+                        //TODO(btc): The following is because the contracts do not return the correct network type
+                        destination_subnet.root_network_type = NetworkType::Btc;
                         transfers.push(json!({
                             "amount": ipc_api::token_amount_to_satoshi(msg.value)?,
                             "destination_subnet_id": destination_subnet.to_string(),
@@ -1001,11 +1002,11 @@ impl BottomUpCheckpointRelayer for BtcSubnetManager {
                 "subnet_id":            checkpoint.subnet_id.to_string(),
                 "unsigned_psbt_base64": bitcoin_signatures.unsigned_psbt.0,
                 "signatures":           signatures_json,
-                "transfer_tx_hex":      bitcoin_signatures.transfer_tx.0,
+                "batch_transfer_tx_hex":bitcoin_signatures.transfer_tx.0,
             }
         });
 
-        tracing::trace!("Request body: {body:#?}");
+        tracing::debug!("Request body: {body:#?}");
 
         let resp = self
             .client
@@ -1016,7 +1017,7 @@ impl BottomUpCheckpointRelayer for BtcSubnetManager {
 
         if !resp.status().is_success() {
             return Err(anyhow!(
-                "gencheckpointpsbt request failed with status: {}",
+                "finalizecheckpointpsbt request failed with status: {}",
                 resp.status()
             ));
         }
