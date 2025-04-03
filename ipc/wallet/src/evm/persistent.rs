@@ -61,7 +61,9 @@ impl<T: Clone + Eq + Hash + TryFrom<KeyInfo> + Default + ToString> KeyStore
     }
 
     fn list(&self) -> Result<Vec<Self::Key>> {
-        self.memory.list()
+        let mut keys = self.memory.list()?;
+        keys.sort_by(|a, b| a.to_string().cmp(&b.to_string()));
+        Ok(keys)
     }
 
     fn put(&mut self, info: KeyInfo) -> Result<Self::Key> {
