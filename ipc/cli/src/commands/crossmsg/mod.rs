@@ -14,11 +14,13 @@ use propagate::PropagateArgs;
 use release::ReleaseArgs;
 
 use clap::{Args, Subcommand};
+use transfer::{Transfer, TransferArgs};
 
 pub mod fund;
 pub mod propagate;
 pub mod release;
 mod topdown_cross;
+mod transfer;
 
 #[derive(Debug, Args)]
 #[command(name = "crossmsg", about = "cross network messages related commands")]
@@ -39,6 +41,7 @@ impl CrossMsgsCommandsArgs {
             Commands::Propagate(args) => Propagate::handle(global, args).await,
             Commands::ListTopdownMsgs(args) => ListTopdownMsgs::handle(global, args).await,
             Commands::ParentFinality(args) => LatestParentFinality::handle(global, args).await,
+            Commands::Transfer(args) => Transfer::handle(global, args).await,
         }
     }
 }
@@ -53,4 +56,5 @@ pub(crate) enum Commands {
     Propagate(PropagateArgs),
     ListTopdownMsgs(ListTopdownMsgsArgs),
     ParentFinality(LatestParentFinalityArgs),
+    Transfer(TransferArgs),
 }

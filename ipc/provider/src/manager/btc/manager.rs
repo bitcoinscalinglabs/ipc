@@ -1,16 +1,27 @@
 // Copyright 2022-2024 Protocol Labs
 // SPDX-License-Identifier: MIT
 
+use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
 use std::str::FromStr;
+use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 use ethers::providers::Authorization;
+use ethers::types::H256;
 use http::HeaderValue;
-use ipc_api::subnet::{Asset, AssetKind, BtcConstructParams, ConstructParams, PermissionMode};
+use ipc_api::address::IPCAddress;
+use ipc_api::checkpoint::{BitcoinTx, PsbtSignature, PsbtSignatureQuorum, UnsignedPsbt};
+use ipc_api::evm::payload_to_evm_address;
+use ipc_api::subnet::{
+    Asset, AssetKind, BtcConstructParams, BtcFundParams, ConstructParams, FundParams,
+    PermissionMode, PreFundParams,
+};
 use ipc_api::subnet::{BtcJoinParams, JoinParams};
 use ipc_api::validator::Validator;
-use ipc_api::{ethers_address_to_fil_address, token_amount_from_satoshi};
+use ipc_api::{ethers_address_to_fil_address, token_amount_from_satoshi, token_amount_to_satoshi};
+use ipc_wallet::{EthKeyAddress, EvmKeyStore, PersistentKeyStore};
+use libsecp256k1::SecretKey;
 use reqwest::Client;
 use serde_json::{json, Value};
 
@@ -33,10 +44,11 @@ use ipc_api::checkpoint::{
     consensus::ValidatorData, BottomUpCheckpoint, BottomUpCheckpointBundle, QuorumReachedEvent,
     Signature,
 };
-use ipc_api::cross::IpcEnvelope;
+use ipc_api::cross::{IpcEnvelope, IpcMsgKind};
 use ipc_api::staking::{StakingChangeRequest, ValidatorInfo};
-use ipc_api::subnet_id::SubnetID;
+use ipc_api::subnet_id::{NetworkType, SubnetID, BTC_NAMESPACE};
 
+#[derive(Clone)]
 pub struct BtcSubnetManager {
     client: Client,
     rpc_url: String,
@@ -77,6 +89,64 @@ impl BtcSubnetManager {
             rpc_url: url.to_string(),
         })
     }
+
+    async fn get_block_hash_inner(&self, height: ChainEpoch) -> Result<H256> {
+        tracing::info!("getting block hash for height: {height:}");
+        let body = json!({
+            "jsonrpc": "2.0",
+            "method": "getblockhash",
+            "id": 1,
+            "params": {
+                "height": height,
+            }
+        });
+        tracing::info!("Request body: {body:?}");
+
+        let resp = self
+            .client
+            .post(self.rpc_url.clone())
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(anyhow!(
+                "getblockhash request failed with status: {}",
+                resp.status()
+            ));
+        }
+
+        let data = resp.json::<Value>().await?;
+
+        if let Some(err_obj) = data.get("error") {
+            let code = err_obj
+                .get("code")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            let message = err_obj
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("Unknown error");
+            let error_data = err_obj
+                .get("data")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            return Err(anyhow!(
+                "JSON-RPC error: code={}, message={}, details={}",
+                code,
+                message,
+                error_data
+            ));
+        }
+
+        let block_hash = data
+            .get("result")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("Field result not found"))?;
+
+        let block_hash = H256::from_str(block_hash)?;
+        Ok(block_hash)
+    }
 }
 #[async_trait]
 impl SubnetManager for BtcSubnetManager {
@@ -96,11 +166,11 @@ impl SubnetManager for BtcSubnetManager {
             "method": "createsubnet",
             "id": 1,
             "params": {
-                "min_validator_stake":     params.min_validator_stake,
+                "min_validator_stake":     token_amount_to_satoshi(params.min_validator_stake)?,
                 "min_validators":          params.min_validators,
                 "bottomup_check_period":   params.bottomup_check_period,
                 "active_validators_limit": params.active_validators_limit,
-                "min_cross_msg_fee":       params.min_cross_msg_fee,
+                "min_cross_msg_fee":       token_amount_to_satoshi(params.min_cross_msg_fee)?,
                 "whitelist":               params.validator_whitelist,
             }
         });
@@ -175,7 +245,7 @@ impl SubnetManager for BtcSubnetManager {
             "params": {
                 "subnet_id":        params.subnet_id.to_string(),
                 "pubkey":           params.sender_public_key,
-                "collateral":       params.collateral,
+                "collateral":       token_amount_to_satoshi(params.collateral)?,
                 "ip":               params.ip,
                 "backup_address":   params.backup_address,
             }
@@ -227,18 +297,63 @@ impl SubnetManager for BtcSubnetManager {
 
         tracing::info!("Joined subnet with txid: {tx_id}");
 
-        // TODO(Orestis). Check what block number to return
-        return Ok(0);
+        let current_height = self.chain_head_height().await?;
+        Ok(current_height)
     }
 
-    async fn pre_fund(
-        &self,
-        subnet: SubnetID,
-        _from: Address,
-        _balancee: TokenAmount,
-    ) -> Result<()> {
-        tracing::info!("pre-fund subnet on btc with params: {subnet:?}");
-        todo!()
+    async fn pre_fund(&self, params: PreFundParams) -> Result<()> {
+        tracing::info!("pre-fund subnet on btc with params: {params:?}");
+
+        let body = json!({
+            "jsonrpc": "2.0",
+            "method": "prefundsubnet",
+            "id": 1,
+            "params": {
+                "subnet_id":        params.subnet_id.to_string(),
+                "amount":           token_amount_to_satoshi(params.amount)?,
+                "address":          payload_to_evm_address(params.dst_address.payload())?,
+            }
+        });
+        tracing::info!("Request body: {body:?}");
+
+        let resp = self
+            .client
+            .post(self.rpc_url.clone())
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(anyhow!(
+                "Pre-fund request failed with status: {}",
+                resp.status()
+            ));
+        }
+
+        let data = resp.json::<Value>().await?;
+
+        if let Some(err_obj) = data.get("error") {
+            let code = err_obj
+                .get("code")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            let message = err_obj
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("Unknown error");
+            let error_data = err_obj
+                .get("data")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            return Err(anyhow!(
+                "JSON-RPC error: code={}, message={}, details={}",
+                code,
+                message,
+                error_data
+            ));
+        }
+
+        Ok(())
     }
 
     async fn pre_release(
@@ -294,16 +409,64 @@ impl SubnetManager for BtcSubnetManager {
         todo!()
     }
 
-    async fn fund(
-        &self,
-        subnet: SubnetID,
-        _gateway_addr: Address,
-        _from: Address,
-        _to: Address,
-        _amount: TokenAmount,
-    ) -> Result<ChainEpoch> {
-        tracing::info!("funding on btc with params: {subnet:?}");
-        todo!()
+    async fn fund(&self, params: FundParams) -> Result<ChainEpoch> {
+        let params: BtcFundParams = match params {
+            FundParams::Eth(_) => return Err(anyhow!("Unsupported subnet configuration")),
+            FundParams::Btc(params) => params,
+        };
+        tracing::info!("funding on btc with params: {params:?}");
+
+        let body = json!({
+            "jsonrpc": "2.0",
+            "method": "fundsubnet",
+            "id": 1,
+            "params": {
+                "subnet_id":        params.subnet_id.to_string(),
+                "amount":           token_amount_to_satoshi(params.amount)?,
+                "address":          payload_to_evm_address(params.dst_address.payload())?,
+            }
+        });
+        tracing::info!("Request body: {body:?}");
+
+        let resp = self
+            .client
+            .post(self.rpc_url.clone())
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(anyhow!(
+                "Fund request failed with status: {}",
+                resp.status()
+            ));
+        }
+
+        let data = resp.json::<Value>().await?;
+
+        if let Some(err_obj) = data.get("error") {
+            let code = err_obj
+                .get("code")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            let message = err_obj
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("Unknown error");
+            let error_data = err_obj
+                .get("data")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            return Err(anyhow!(
+                "JSON-RPC error: code={}, message={}, details={}",
+                code,
+                message,
+                error_data
+            ));
+        }
+
+        let current_height = self.chain_head_height().await?;
+        Ok(current_height)
     }
 
     async fn approve_token(
@@ -329,13 +492,28 @@ impl SubnetManager for BtcSubnetManager {
 
     async fn release(
         &self,
-        _gateway_addr: Address,
+        _gateway_addr: Option<Address>,
         _from: Address,
         _to: Address,
         _amount: TokenAmount,
     ) -> Result<ChainEpoch> {
         tracing::info!("releasing on btc");
-        todo!()
+        unimplemented!(
+            "release on bitcoin is not supported, it is not meant to be used as a child subnet"
+        )
+    }
+
+    async fn transfer(
+        &self,
+        _gateway_addr: Option<Address>,
+        _from: Address,
+        _to: Address,
+        _amount: TokenAmount,
+        _dst_subnet: SubnetID,
+    ) -> Result<ChainEpoch> {
+        unimplemented!(
+            "transfer on bitcoin is not supported, it is not meant to be used as a child subnet"
+        );
     }
 
     async fn propagate(
@@ -356,7 +534,7 @@ impl SubnetManager for BtcSubnetManager {
 
     async fn wallet_balance(&self, address: &Address) -> Result<TokenAmount> {
         tracing::info!("getting wallet balance on btc with params: {address:?}");
-        todo!()
+        unimplemented!("getting balances of addresses on bitcoin is not supported")
     }
 
     async fn get_chain_id(&self) -> Result<String> {
@@ -385,7 +563,6 @@ impl SubnetManager for BtcSubnetManager {
                 "subnet_id": subnet_id.to_string(),
             }
         });
-        println!("Request body: {body:?}");
 
         let resp = self
             .client
@@ -428,7 +605,7 @@ impl SubnetManager for BtcSubnetManager {
             .get("result")
             .ok_or_else(|| anyhow!("No result found"))?;
 
-        println!("btc manager get genesis info result: {result:#?}");
+        tracing::debug!("btc manager get genesis info result: {result:#?}");
 
         // Check if subnet is bootstrapped
         if result
@@ -501,8 +678,6 @@ impl SubnetManager for BtcSubnetManager {
 
         let min_collateral = token_amount_from_satoshi(min_validator_stake);
 
-        println!("validators = {validators:#?}");
-
         Ok(SubnetGenesisInfo {
             active_validators_limit: active_validators_limit as u16,
             bottom_up_checkpoint_period: bottomup_check_period,
@@ -570,19 +745,310 @@ impl SubnetManager for BtcSubnetManager {
         tracing::info!("setting subnet collateral source on btc with params: {subnet:?}");
         todo!()
     }
+
+    /// This function asks the parent subnet (bitcoin) to generate the required transaction for the given `checkpoint` and `subnet_id` and sign it.
+    async fn get_checkpoint_transaction(
+        &self,
+        subnet_id: &SubnetID,
+        checkpoint: BottomUpCheckpoint,
+    ) -> Result<PsbtSignature> {
+        tracing::debug!("Creating bitcoin signatures for checkpoint: {checkpoint:?}");
+
+        // collect all withdrawals and transfers from the checkpoint msgs
+        let mut releases = Vec::new();
+        let mut transfers = Vec::new();
+
+        for msg in checkpoint.msgs {
+            match msg.kind {
+                ipc_api::cross::IpcMsgKind::Transfer => {
+                    let mut destination_subnet = msg.to.subnet()?;
+                    if destination_subnet.is_root() {
+                        // Release
+                        releases.push(json!({
+                            "amount": ipc_api::token_amount_to_satoshi(msg.value)?,
+                            "address": ipc_api::address::bitcoin_address_from_fvm_address(&msg.to.raw_addr()?)?,
+                        }));
+                    } else {
+                        //TODO(btc): The following is because the contracts do not return the correct network type
+                        destination_subnet.root_network_type = NetworkType::Btc;
+                        transfers.push(json!({
+                            "amount": ipc_api::token_amount_to_satoshi(msg.value)?,
+                            "destination_subnet_id": destination_subnet.to_string(),
+                            "subnet_user_address": ipc_api::address::to_eth_address(&msg.to.raw_addr()?)?
+                        }));
+                    }
+                }
+                ipc_api::cross::IpcMsgKind::Call => {
+                    tracing::info!("ignoring call messages: unsupported on bitcoin")
+                }
+                //TODO(btc): add receipt handling
+                ipc_api::cross::IpcMsgKind::Receipt => {}
+            }
+        }
+
+        let body = json!({
+            "jsonrpc": "2.0",
+            "method": "gencheckpointpsbt",
+            "id": 1,
+            "params": {
+                // TODO(btc): should we get the subnet_id from the checkpoint?
+                "subnet_id":            subnet_id.to_string(),
+                "checkpoint_hash":      hex::encode(checkpoint.block_hash),
+                "checkpoint_height":    checkpoint.block_height,
+                "withdrawals":          releases,
+                "transfers":            transfers,
+            }
+        });
+
+        tracing::info!("Request body: {body:?}");
+
+        let resp = self
+            .client
+            .post(self.rpc_url.clone())
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(anyhow!(
+                "gencheckpointpsbt request failed with status: {}",
+                resp.status()
+            ));
+        }
+
+        let data = resp.json::<Value>().await?;
+
+        if let Some(err_obj) = data.get("error") {
+            let code = err_obj
+                .get("code")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            let message = err_obj
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("Unknown error");
+            let error_data = err_obj
+                .get("data")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            return Err(anyhow!(
+                "JSON-RPC error: code={}, message={}, details={}",
+                code,
+                message,
+                error_data
+            ));
+        }
+
+        let unsigned_psbt = data
+            .get("result")
+            .and_then(|r| r.get("unsigned_psbt_base64"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("Missing 'result.unsigned_psbt_base64' in JSON-RPC response"))?
+            .to_string();
+
+        // The RPC call returns one signature for each input in the PSBT, hex encoded.
+        // We decode each signature and flatten the result into a single vector of bytes,
+        // which we then store in the `PsbtSignature` struct.
+        // When these signatures are submitted to the `finalize_checkpoint_psbt` RPC call,
+        // they must be split again (see `submit_checkpoint` of `BtcSubnetManager`).
+        let signature = data
+            .get("result")
+            .and_then(|r| r.get("psbt_inputs_signatures"))
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow!("Missing 'result.psbt_inputs_signatures' in JSON-RPC response"))?
+            .iter()
+            .map(|v| {
+                v.as_str()
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "Invalid entry in 'result.psbt_inputs_signatures' in JSON-RPC response"
+                        )
+                    })
+                    .and_then(|s| {
+                        hex::decode(s)
+                            .map_err(|e| anyhow!("decoding bitcoin signature failed: {}", e))
+                    })
+            })
+            .collect::<Result<Vec<Vec<u8>>>>()?
+            .into_iter()
+            .flatten()
+            .collect::<Vec<u8>>();
+
+        let transfer_tx = match data
+            .get("result")
+            .and_then(|r| r.get("batch_transfer_tx_hex"))
+        {
+            Some(v) if v.is_null() => "".to_string(),
+            Some(v) => v
+                .as_str()
+                .ok_or_else(|| anyhow!("'batch_transfer_tx_hex' is not a string"))?
+                .to_string(),
+            None => "".to_string(),
+        };
+
+        tracing::info!("BtcSubnetManager obtained checkpoint PSBT and signatures.");
+
+        Ok(PsbtSignature {
+            unsigned_psbt: UnsignedPsbt(unsigned_psbt),
+            signature,
+            transfer_tx: BitcoinTx(transfer_tx),
+        })
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }
 
+// In the `get_checkpoint_transaction` we concatenate the signatures of each signatory,
+// so we need to split them again here.
+// Example of what this code produces:
+// signatories_xonly_pubkey = vec![
+//     "5f0dfed3a527ac740c7d4a594cd3aa1059a936187399fc49e3fc6ea6ae177268",
+//     "67308c2f3915f4c36135f267ed709418c2880025d669e4ada7a206842d53c146",
+// ];
+//
+// split_signatures = vec![
+//     vec![
+//         "f245679ccda14b190213d4115ba8c10d484d5f0d1e0a37a493bd88f9fce3f05b5514debb23e83c693a1fdeb0622970fc3691dbbdee87b7430af41acdca58f44c",
+//         "ce02c09922cde3a671337baa86028a094d456a523286dccfcec015eff78fcf8b666db66c7368fe93f5d75fabf64451b2469931aab4386653194572261586e6dd",
+//     ],
+//     vec![
+//         "41592da0f93d2483ca227a75e36c8898d7097c61f56f2770ca8efe260b3d38011353edd64833cd6b5cc1b6e7c2be0b3a55fc55d5aa9cf34bfd4fa57d4ea551bf",
+//         "3e5f2635a43eab0560a038e300a5e1a4fb11cdfe0da4bf9842ca292db3538ff382d55ff05c2a32c412d558ff4333d0a0d16016b97b58971e16a93f43da01fe89",
+//     ],
+// ];
+//
+// And the resulting json will be:
+// "signatures_json": [
+//     [
+//         "5f0dfed3a527ac740c7d4a594cd3aa1059a936187399fc49e3fc6ea6ae177268",
+//         [
+//             "f245679ccda14b190213d4115ba8c10d484d5f0d1e0a37a493bd88f9fce3f05b5514debb23e83c693a1fdeb0622970fc3691dbbdee87b7430af41acdca58f44c",
+//             "ce02c09922cde3a671337baa86028a094d456a523286dccfcec015eff78fcf8b666db66c7368fe93f5d75fabf64451b2469931aab4386653194572261586e6dd"
+//         ]
+//     ],
+//     [
+//         "67308c2f3915f4c36135f267ed709418c2880025d669e4ada7a206842d53c146",
+//         [
+//             "ce02c09922cde3a671337baa86028a094d456a523286dccfcec015eff78fcf8b666db66c7368fe93f5d75fabf64451b2469931aab4386653194572261586e6dd",
+//             "3e5f2635a43eab0560a038e300a5e1a4fb11cdfe0da4bf9842ca292db3538ff382d55ff05c2a32c412d558ff4333d0a0d16016b97b58971e16a93f43da01fe89"
+//         ]
+//     ]
+// ]
 #[async_trait]
 impl BottomUpCheckpointRelayer for BtcSubnetManager {
     async fn submit_checkpoint(
         &self,
-        _submitter: &Address,
+        keystore: Arc<RwLock<PersistentKeyStore<EthKeyAddress>>>,
+        _submitter: &Option<Address>,
         checkpoint: BottomUpCheckpoint,
         _signatures: Vec<Signature>,
         _signatories: Vec<Address>,
+        bitcoin_signatures: Option<PsbtSignatureQuorum>,
     ) -> anyhow::Result<ChainEpoch> {
-        tracing::info!("submitting checkpoint on btc with params: {checkpoint:?}");
-        todo!()
+        tracing::trace!("submitting checkpoint on btc with params: {checkpoint:?}");
+        let bitcoin_signatures = match bitcoin_signatures {
+            Some(signatures) => signatures,
+            None => {
+                return Err(anyhow!(
+                    "Submitting checkpoint on bitcoin requires bitcoin_signatures"
+                ));
+            }
+        };
+        // Split the signatures of each signatory into chunks of 64 bytes (see info above function for more details)
+        let mut split_signatures = Vec::new();
+        for concatenated_signatures_of_signatory in bitcoin_signatures.signatures.iter() {
+            let split_signatures_of_signatory = concatenated_signatures_of_signatory
+                .chunks(libsecp256k1::util::SIGNATURE_SIZE)
+                .map(|chunk| hex::encode(chunk.to_vec()))
+                .collect::<Vec<_>>();
+            split_signatures.push(split_signatures_of_signatory);
+        }
+        // Replace the IPC addresses with the XOnlyPubKey, as the RPC expects the XOnlyPubKey
+        let signatories_xonly_pubkey = bitcoin_signatures
+            .signatories
+            .iter()
+            .map(|&s| -> Result<String> {
+                let sk = keystore
+                    .read()
+                    .map_err(|e| anyhow!("failed to read evm wallet: {e}"))?
+                    .get(&s.into())
+                    .map_err(|e| anyhow!("failed to get key from evm wallet: {e}"))?
+                    .ok_or_else(|| anyhow!("key {} does not exist in evm wallet", s))?
+                    .private_key()
+                    .to_vec();
+                let x_only_pub_key = hex::encode(
+                    ipc_wallet::get_xonly_public_key_serialized(&SecretKey::parse_slice(&sk)?)?
+                        .to_vec(),
+                );
+                Ok(x_only_pub_key)
+            })
+            .collect::<Result<Vec<String>>>()?;
+
+        // Construct the JSON array
+        let mut signatures_json = Vec::new();
+        for (signatory, signatures) in signatories_xonly_pubkey.iter().zip(split_signatures.iter())
+        {
+            let json_entry = json!([signatory, signatures]);
+            signatures_json.push(json_entry);
+        }
+
+        let body = json!({
+            "jsonrpc": "2.0",
+            "method": "finalizecheckpointpsbt",
+            "id": 1,
+            "params": {
+                "subnet_id":            checkpoint.subnet_id.to_string(),
+                "unsigned_psbt_base64": bitcoin_signatures.unsigned_psbt.0,
+                "signatures":           signatures_json,
+                "batch_transfer_tx_hex":bitcoin_signatures.transfer_tx.0,
+            }
+        });
+
+        tracing::debug!("Request body: {body:#?}");
+
+        let resp = self
+            .client
+            .post(self.rpc_url.clone())
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(anyhow!(
+                "finalizecheckpointpsbt request failed with status: {}",
+                resp.status()
+            ));
+        }
+
+        let data = resp.json::<Value>().await?;
+
+        if let Some(err_obj) = data.get("error") {
+            let code = err_obj
+                .get("code")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            let message = err_obj
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("Unknown error");
+            let error_data = err_obj
+                .get("data")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            return Err(anyhow!(
+                "JSON-RPC error: code={}, message={}, details={}",
+                code,
+                message,
+                error_data
+            ));
+        }
+
+        let current_height = self.chain_head_height().await?;
+
+        tracing::info!("checkpoint submitted on btc at height: {current_height:}");
+        Ok(current_height)
     }
 
     async fn last_bottom_up_checkpoint_height(
@@ -592,30 +1058,89 @@ impl BottomUpCheckpointRelayer for BtcSubnetManager {
         tracing::info!(
             "getting last bottom up checkpoint height on btc with params: {subnet_id:?}"
         );
-        todo!()
+
+        let body = json!({
+            "jsonrpc": "2.0",
+            "method": "getsubnetcheckpoint",
+            "id": 1,
+            "params": {
+                "subnet_id": subnet_id.to_string(),
+            }
+        });
+
+        let resp = self
+            .client
+            .post(self.rpc_url.clone())
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(anyhow!(
+                "btc getlastcheckpointheight request failed with status: {}",
+                resp.status()
+            ));
+        }
+
+        let data = resp.json::<Value>().await?;
+
+        if let Some(err_obj) = data.get("error") {
+            let code = err_obj
+                .get("code")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            let message = err_obj
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("Unknown error");
+            let error_data = err_obj
+                .get("data")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            return Err(anyhow!(
+                "JSON-RPC error: code={}, message={}, details={}",
+                code,
+                message,
+                error_data
+            ));
+        }
+
+        let height = match data.get("result") {
+            Some(v) if v.is_null() => 0,
+            Some(v) => v
+                .get("checkpoint_height")
+                .and_then(Value::as_i64)
+                .ok_or_else(|| {
+                    anyhow!("No checkpoint_height found in getsubnetcheckpoint response")
+                })?,
+            None => return Err(anyhow!("No result found")),
+        };
+
+        Ok(height as ChainEpoch)
     }
 
     async fn checkpoint_period(&self, subnet_id: &SubnetID) -> anyhow::Result<ChainEpoch> {
         tracing::info!("getting checkpoint period on btc with params: {subnet_id:?}");
-        todo!()
+        let genesis_info = self.get_genesis_info(subnet_id).await?;
+        Ok(genesis_info.bottom_up_checkpoint_period as ChainEpoch)
     }
 
     async fn checkpoint_bundle_at(
         &self,
         height: ChainEpoch,
     ) -> Result<Option<BottomUpCheckpointBundle>> {
-        tracing::info!("getting checkpoint bundle at height: {height:}");
-        todo!()
+        tracing::info!("getting checkpoint bundle on bitcoin at height: {height:}");
+        anyhow::bail!("not supported on btc, it is not meant to be a child subnet")
     }
     /// Queries the signature quorum reached events at target height.
-    async fn quorum_reached_events(&self, height: ChainEpoch) -> Result<Vec<QuorumReachedEvent>> {
-        tracing::info!("getting quorum reached events at height: {height:}");
-        todo!()
+    async fn quorum_reached_events(&self, _height: ChainEpoch) -> Result<Vec<QuorumReachedEvent>> {
+        tracing::info!("getting quorum reached events on bitcoin at height: {_height:}");
+        anyhow::bail!("not supported on btc, it is not meant to be a child subnet")
     }
     /// Get the current epoch in the current subnet
     async fn current_epoch(&self) -> Result<ChainEpoch> {
-        tracing::info!("getting current epoch");
-        todo!()
+        tracing::info!("getting current epoch on bitcoin");
+        anyhow::bail!("not supported on btc, it is not meant to be a child subnet")
     }
 }
 
@@ -676,7 +1201,7 @@ impl TopDownFinalityQuery for BtcSubnetManager {
             .get("result")
             .ok_or_else(|| anyhow!("No result found"))?;
 
-        dbg!(result);
+        tracing::debug!("btc manager get genesis epoch result: {result:#?}");
 
         result
             .get("genesis_block_height")
@@ -685,36 +1210,236 @@ impl TopDownFinalityQuery for BtcSubnetManager {
     }
     /// Returns the chain head height
     async fn chain_head_height(&self) -> Result<ChainEpoch> {
-        tracing::info!("getting chain head height");
-        todo!()
+        tracing::info!("getting chain head height on btc");
+        let body = json!({
+            "jsonrpc": "2.0",
+            "method": "getconfirmedcount",
+            "id": 1,
+        });
+        tracing::info!("Request body: {body:?}");
+
+        let resp = self
+            .client
+            .post(self.rpc_url.clone())
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(anyhow!(
+                "getconfirmedcount request failed with status: {}",
+                resp.status()
+            ));
+        }
+
+        let data = resp.json::<Value>().await?;
+
+        if let Some(err_obj) = data.get("error") {
+            let code = err_obj
+                .get("code")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            let message = err_obj
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("Unknown error");
+            let error_data = err_obj
+                .get("data")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            return Err(anyhow!(
+                "JSON-RPC error: code={}, message={}, details={}",
+                code,
+                message,
+                error_data
+            ));
+        }
+
+        let height = data
+            .get("result")
+            .and_then(Value::as_i64)
+            .ok_or_else(|| anyhow!("Field result not found"))?;
+
+        Ok(height as ChainEpoch)
     }
+
     /// Returns the list of top down messages
     async fn get_top_down_msgs(
         &self,
         subnet_id: &SubnetID,
-        _epoch: ChainEpoch,
+        epoch: ChainEpoch,
     ) -> Result<TopDownQueryPayload<Vec<IpcEnvelope>>> {
-        tracing::info!("getting top down messages for subnet: {subnet_id:}");
-        todo!()
+        tracing::info!("getting top down messages for subnet: {subnet_id:} at height: {epoch:}");
+
+        let body = json!({
+            "jsonrpc": "2.0",
+            "method": "getrootnetmessages",
+            "id": 1,
+            "params": {
+                "subnet_id":        subnet_id.to_string(),
+                "block_height":     epoch,
+            }
+        });
+        tracing::info!("Request body: {body:?}");
+
+        let resp = self
+            .client
+            .post(self.rpc_url.clone())
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(anyhow!(
+                "getrootnetmessages request failed with status: {}",
+                resp.status()
+            ));
+        }
+
+        let data = resp.json::<Value>().await?;
+
+        if let Some(err_obj) = data.get("error") {
+            let code = err_obj
+                .get("code")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            let message = err_obj
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("Unknown error");
+            let error_data = err_obj
+                .get("data")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            return Err(anyhow!(
+                "JSON-RPC error: code={}, message={}, details={}",
+                code,
+                message,
+                error_data
+            ));
+        }
+
+        let mut messages: Vec<IpcEnvelope> = vec![];
+        let mut prev_block_hash: Option<H256> = None;
+
+        let results = data
+            .get("result")
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow!("Field result not found"))?;
+        for result in results {
+            // parse kind
+            let kind = match result.get("kind").and_then(Value::as_str) {
+                Some("fund") => IpcMsgKind::Transfer,
+                Some(_) => return Err(anyhow!("Unknown kind in result")),
+                None => return Err(anyhow!("Field kind not found in result")),
+            };
+
+            // parse subnet_id
+            let target_subnet_id = result
+                .get("msg")
+                .and_then(|msg| msg.get("subnet_id"))
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("Field subnet_id not found in result"))?;
+            let target_subnet_id = SubnetID::from_str(target_subnet_id)?;
+
+            // parse value
+            let value = result
+                .get("msg")
+                .and_then(|msg| msg.get("amount"))
+                .and_then(Value::as_i64)
+                .ok_or_else(|| anyhow!("Field amount not found in result"))?;
+
+            // parse address
+            let target_address = result
+                .get("msg")
+                .and_then(|msg| msg.get("address"))
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("Field address not found in result"))?;
+            let address = ethers::types::Address::from_str(target_address)?;
+            let target_address = ethers_address_to_fil_address(&address)?;
+
+            // TODO(Orestis): add "from" argument to RPC
+            // parse from
+            // let from = result
+            //     .get("from")
+            //     .and_then(Value::as_str)
+            //     .ok_or_else(|| anyhow!("No from address found in result"))?;
+            // let from = ethers::types::Address::from_str(from)?;
+            // let from = ethers_address_to_fil_address(&from)?;
+
+            // parse block_hash
+            let block_hash = result
+                .get("block_hash")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("Field block_hash not found in result"))?;
+            let block_hash = H256::from_str(block_hash)?;
+            if prev_block_hash.is_some() && prev_block_hash != Some(block_hash) {
+                return Err(anyhow!("Block hash mismatch in result"));
+            }
+            prev_block_hash = Some(block_hash);
+
+            // parse nonce
+            let nonce = result
+                .get("nonce")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| anyhow!("Field nonce not found in result"))?;
+
+            let envelope = IpcEnvelope {
+                kind,
+                to: IPCAddress::new(&target_subnet_id, &target_address)?,
+                value: token_amount_from_satoshi(value),
+                // TODO(Orestis): The following should only work for fund/prefund messages.
+                // Change when we implement transfers.
+                from: IPCAddress::new(
+                    &SubnetID::new_root(subnet_id.root_id()),
+                    &Address::new_delegated(BTC_NAMESPACE, &vec![0; 20])?,
+                )?,
+                message: vec![],
+                nonce,
+            };
+            messages.push(envelope);
+        }
+
+        let block_hash = match prev_block_hash {
+            Some(h) => h.0.to_vec(),
+            None => self.get_block_hash(epoch).await?.block_hash,
+        };
+
+        Ok(TopDownQueryPayload {
+            value: messages,
+            block_hash,
+        })
     }
     /// Get the block hash
     async fn get_block_hash(&self, height: ChainEpoch) -> Result<GetBlockHashResult> {
-        tracing::info!("getting block hash for height: {height:}");
-        todo!()
+        let block_hash_current = self.get_block_hash_inner(height).await?;
+        let block_hash_parent = self.get_block_hash_inner(height - 1).await?;
+
+        Ok(GetBlockHashResult {
+            block_hash: block_hash_current.0.to_vec(),
+            parent_block_hash: block_hash_parent.0.to_vec(),
+        })
     }
+
     /// Get the validator change set from start to end block.
     async fn get_validator_changeset(
         &self,
         subnet_id: &SubnetID,
-        _epoch: ChainEpoch,
+        epoch: ChainEpoch,
     ) -> Result<TopDownQueryPayload<Vec<StakingChangeRequest>>> {
-        tracing::info!("getting validator changeset for subnet: {subnet_id:}");
-        todo!()
+        tracing::info!("getting validator changeset for subnet: {subnet_id:} at height: {epoch:}");
+
+        //TODO(Orestis): Implement this. The structure of the function is the same as get_top_down_msgs().
+        let block_hash = self.get_block_hash(epoch).await?.block_hash;
+        Ok(TopDownQueryPayload {
+            value: vec![],
+            block_hash,
+        })
     }
     /// Returns the latest parent finality committed in a child subnet
     async fn latest_parent_finality(&self) -> Result<ChainEpoch> {
         tracing::info!("getting latest parent finality");
-        todo!()
+        unimplemented!("latest_parent_finality is not expected to be called on an L1 subnet")
     }
 }
 

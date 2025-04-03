@@ -4,6 +4,7 @@
 
 use async_trait::async_trait;
 use clap::Args;
+use ipc_api::ethers_address_to_fil_address;
 use ipc_wallet::{EthKeyAddress, EvmKeyStore, WalletType};
 use std::fmt::Debug;
 use std::str::FromStr;
@@ -55,23 +56,34 @@ impl CommandLineHandler for WalletList {
                 Ok(())
             }
             WalletType::Btc => {
-                let wallet = provider.btc_wallet()?;
+                let wallet = provider.evm_wallet()?;
                 let addresses = wallet.read().unwrap().list()?;
                 for address in addresses.iter() {
-                    println!("Address: {}", address);
-
                     let key_info = wallet.read().unwrap().get(address)?.unwrap();
-                    let sk = libsecp256k1::SecretKey::parse_slice(key_info.private_key())?;
-                    println!("\tSecret key: {}", hex::encode(sk.serialize()));
+                    let sk =
+                        match ipc_wallet::parse_and_validate_secret_key(&key_info.private_key()) {
+                            Ok(sk) => sk,
+                            Err(_) => {
+                                log::trace!("Ingored non-bitcoin-compatible key");
+                                continue;
+                            }
+                        };
 
                     let pub_key =
                         hex::encode(libsecp256k1::PublicKey::from_secret_key(&sk).serialize())
                             .to_string();
-                    println!("\tPubKey: {}", pub_key);
-
                     let x_only_pub_key =
                         hex::encode(ipc_wallet::get_xonly_public_key_serialized(&sk)?.to_vec());
+
+                    println!("Address: {}", address);
+                    println!("\tSecret key: {}", hex::encode(sk.serialize()));
+                    println!("\tPubKey: {}", pub_key);
                     println!("\tXonlyPubKey: {}", x_only_pub_key);
+
+                    let eth_addr: ethers::types::Address = address.clone().into();
+                    // let fvm_address = Address::new_delegated(BTC_NAMESPACE, eth_addr.as_bytes())?;
+                    let fvm_address = ethers_address_to_fil_address(&eth_addr)?;
+                    println!("\tFilAddress: {}", fvm_address);
                 }
                 Ok(())
             }

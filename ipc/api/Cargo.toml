@@ -34,6 +34,9 @@ ipc_actors_abis = { workspace = true }
 ipc-types = { workspace = true }
 merkle-tree-rs = { path = "../../ext/merkle-tree-rs" }
 ssi-caips = "0.2.1"
+ethers-core = { workspace = true }
+
+base64 = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

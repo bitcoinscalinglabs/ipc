@@ -3,8 +3,10 @@
 //! Release cli command handler.
 
 use async_trait::async_trait;
-use clap::Args;
-use ipc_api::subnet_id::SubnetID;
+use clap::{Args, Subcommand};
+use ipc_api::{
+    address::fvm_address_from_bitcoin_address, subnet_id::SubnetID, token_amount_from_satoshi,
+};
 use std::{fmt::Debug, str::FromStr};
 
 use crate::{
@@ -24,52 +26,94 @@ impl CommandLineHandler for Release {
 
         let mut provider = get_ipc_provider(global)?;
         let subnet = SubnetID::from_str(&arguments.subnet)?;
+
         let from = match &arguments.from {
             Some(address) => Some(require_fil_addr_from_str(address)?),
             None => None,
         };
-        let to = match &arguments.to {
-            Some(address) => Some(require_fil_addr_from_str(address)?),
-            None => None,
-        };
-        let gateway_addr = match &arguments.gateway_address {
-            Some(address) => Some(require_fil_addr_from_str(address)?),
-            None => None,
-        };
 
-        println!(
-            "release performed in epoch: {:?}",
-            provider
-                .release(
-                    subnet,
-                    gateway_addr,
-                    from,
-                    to,
-                    f64_to_token_amount(arguments.amount)?,
-                )
-                .await?,
-        );
+        match &arguments.network_specific {
+            SubnetReleaseArgs::Fevm(fevm_release_args) => {
+                let gateway_addr = match &fevm_release_args.gateway_address {
+                    Some(address) => Some(require_fil_addr_from_str(address)?),
+                    None => None,
+                };
+                let to = match &fevm_release_args.to {
+                    Some(address) => Some(require_fil_addr_from_str(address)?),
+                    None => None,
+                };
+                println!(
+                    "release performed in epoch: {:?}",
+                    provider
+                        .release(
+                            subnet,
+                            gateway_addr,
+                            from,
+                            to,
+                            f64_to_token_amount(fevm_release_args.amount)?,
+                        )
+                        .await?,
+                );
+            }
+            SubnetReleaseArgs::Btc(btc_release_args) => {
+                let to = Some(fvm_address_from_bitcoin_address(&btc_release_args.to)?);
+                println!(
+                    "release performed in epoch: {:?}",
+                    provider
+                        .release(
+                            subnet,
+                            None,
+                            from,
+                            to,
+                            token_amount_from_satoshi(btc_release_args.amount),
+                        )
+                        .await?,
+                );
+            }
+        };
 
         Ok(())
     }
 }
 
 #[derive(Debug, Args)]
-#[command(about = "Release operation in the gateway actor")]
+#[command(about = "Release operation in the subnet")]
 pub(crate) struct ReleaseArgs {
-    #[arg(long, help = "The gateway address of the subnet")]
-    pub gateway_address: Option<String>,
     #[arg(long, help = "The address that releases funds")]
     pub from: Option<String>,
+    #[arg(long, help = "The subnet to release funds from")]
+    pub subnet: String,
+    #[command(subcommand)]
+    pub network_specific: SubnetReleaseArgs,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SubnetReleaseArgs {
+    #[command(name = "fevm")]
+    Fevm(FevmReleaseArgs),
+    #[command(name = "btc")]
+    Btc(BtcReleaseArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct FevmReleaseArgs {
+    #[arg(long, help = "The gateway address of the subnet")]
+    pub gateway_address: Option<String>,
     #[arg(
         long,
         help = "The address to release funds to (if not set, amount sent to from address)"
     )]
     pub to: Option<String>,
-    #[arg(long, help = "The subnet to release funds from")]
-    pub subnet: String,
     #[arg(help = "The amount to release in FIL, in whole FIL")]
     pub amount: f64,
+}
+
+#[derive(Debug, Args)]
+pub struct BtcReleaseArgs {
+    #[arg(long, help = "The bitcoinaddress to release funds to")]
+    pub to: String,
+    #[arg(help = "The amount to release (in sats)")]
+    pub amount: u64,
 }
 
 pub struct PreRelease;

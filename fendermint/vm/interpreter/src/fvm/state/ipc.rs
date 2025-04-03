@@ -1,6 +1,5 @@
 // Copyright 2022-2024 Protocol Labs
 // SPDX-License-Identifier: Apache-2.0, MIT
-
 use anyhow::{anyhow, Context};
 use ethers::types as et;
 
@@ -226,6 +225,39 @@ impl<DB: Blockstore + Clone> GatewayCaller<DB> {
         Ok(calldata)
     }
 
+    pub fn add_bitcoin_checkpoint_signature_calldata(
+        &self,
+        checkpoint: &checkpointing_facet::BottomUpCheckpoint,
+        checkpoint_psbt: ipc_api::checkpoint::PsbtSignature,
+    ) -> anyhow::Result<et::Bytes> {
+        let unsigned_psbt = checkpoint_psbt.unsigned_psbt.clone().decode()?;
+        let transfer_tx = checkpoint_psbt.transfer_tx.clone().decode()?;
+
+        tracing::debug!(
+            "Encoded arguments to add_bitcoin_checkpoint_signature(): {:?}, {:?}, {:?}, {:?}",
+            checkpoint.block_height,
+            checkpoint_psbt.unsigned_psbt.0,
+            hex::encode(checkpoint_psbt.signature.clone()),
+            checkpoint_psbt.transfer_tx.0
+        );
+
+        let call = self
+            .checkpointing
+            .contract()
+            .add_bitcoin_checkpoint_signature(
+                checkpoint.block_height,
+                et::Bytes::from(unsigned_psbt),
+                et::Bytes::from(checkpoint_psbt.signature.clone()),
+                et::Bytes::from(transfer_tx),
+            );
+
+        let calldata = call
+            .calldata()
+            .ok_or_else(|| anyhow!("no calldata for adding bitcoin signature"))?;
+
+        Ok(calldata)
+    }
+
     /// Commit the parent finality to the gateway and returns the previously committed finality.
     /// None implies there is no previously committed finality.
     pub fn commit_parent_finality(
@@ -283,15 +315,28 @@ impl<DB: Blockstore + Clone> GatewayCaller<DB> {
         state: &mut FvmExecState<DB>,
         cross_messages: Vec<IpcEnvelope>,
     ) -> anyhow::Result<FvmApplyRet> {
+        tracing::debug!("apply_cross_messages cross_messages: {:?}", cross_messages);
         let messages = cross_messages
             .into_iter()
             .map(xnet_messaging_facet::IpcEnvelope::try_from)
             .collect::<Result<Vec<_>, _>>()
             .context("failed to convert cross messages")?;
+        tracing::debug!("apply_cross_messages: {:?}", messages);
         let r = self
             .xnet
             .call_with_return(state, |c| c.apply_cross_messages(messages))?;
-        Ok(r.into_return())
+        let r = r.into_return();
+        tracing::debug!("apply_cross_messages return: {:?}", r);
+        for event in r.apply_ret.events.iter() {
+            for entry in event.event.entries.iter() {
+                tracing::debug!(
+                    "key: {:?}, value: {:?}",
+                    entry.key,
+                    hex::encode(entry.value.clone())
+                );
+            }
+        }
+        Ok(r)
     }
 
     pub fn get_latest_parent_finality(

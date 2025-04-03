@@ -52,8 +52,15 @@ async fn tester_with_upgrader(
 ) -> (Tester<I>, PublicKey) {
     let validator = rand_secret_key().public_key();
 
-    let interpreter: FvmMessageInterpreter<MemoryBlockstore, _> =
-        FvmMessageInterpreter::new(NeverCallClient, None, 1.05, 1.05, false, upgrade_scheduler);
+    let interpreter: FvmMessageInterpreter<MemoryBlockstore, _> = FvmMessageInterpreter::new(
+        NeverCallClient,
+        None,
+        1.05,
+        1.05,
+        false,
+        upgrade_scheduler,
+        None,
+    );
 
     let genesis = Genesis {
         chain_name: CHAIN_NAME.to_string(),

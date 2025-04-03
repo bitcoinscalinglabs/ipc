@@ -5,7 +5,7 @@
 use async_trait::async_trait;
 use clap::{Args, Subcommand};
 
-use ipc_api::subnet_id::SubnetID;
+use ipc_api::{subnet_id::SubnetID, token_amount_from_satoshi};
 use ipc_provider::{config::subnet::NetworkType, IpcProvider};
 
 use num_traits::Zero;
@@ -63,7 +63,7 @@ impl JoinSubnet {
             None => None,
         };
 
-        if let Some(initial_balance) = arguments.initial_balance.filter(|x| !x.is_zero()) {
+        if let Some(initial_balance) = fevm_args.initial_balance.filter(|x| !x.is_zero()) {
             log::info!("pre-funding address with {initial_balance}");
             provider
                 .pre_fund(
@@ -75,7 +75,13 @@ impl JoinSubnet {
         };
 
         let epoch = provider
-            .join_subnet(subnet_id, from, fevm_args.collateral, None, None)
+            .join_subnet(
+                subnet_id,
+                from,
+                f64_to_token_amount(fevm_args.collateral)?,
+                None,
+                None,
+            )
             .await?;
         println!("joined at epoch: {epoch}");
 
@@ -93,20 +99,27 @@ impl JoinSubnet {
             None => None,
         };
 
-        if let Some(_) = arguments.initial_balance.filter(|x| !x.is_zero()) {
-            unimplemented!("pre-funding not yet implemented for BTC");
-        }
+        if let Some(initial_balance) = btc_args.initial_balance.filter(|x| !x.is_zero()) {
+            log::info!("pre-funding address with {initial_balance}");
+            provider
+                .pre_fund(
+                    subnet_id.clone(),
+                    from,
+                    token_amount_from_satoshi(initial_balance),
+                )
+                .await?;
+        };
 
         let epoch = provider
             .join_subnet(
                 subnet_id,
                 from,
-                btc_args.collateral as f64,
+                token_amount_from_satoshi(btc_args.collateral),
                 Some(btc_args.ip.clone()),
                 Some(btc_args.backup_address.clone()),
             )
             .await?;
-        println!("joined at epoch: {epoch}");
+        println!("join transaction submitted at height: {epoch}");
 
         Ok(())
     }
@@ -130,12 +143,6 @@ pub struct JoinSubnetArgs {
     pub from: Option<String>,
     #[arg(long, help = "The subnet to join")]
     pub subnet: String,
-    #[arg(
-        long,
-        help = "Optionally add an initial balance to the validator in genesis in the subnet"
-    )]
-    pub initial_balance: Option<f64>,
-
     #[command(subcommand)]
     pub network_specific: SpecifiedNetwork,
 }
@@ -155,12 +162,22 @@ pub struct FevmJoinArgs {
         help = "The collateral to stake in the subnet (in whole FIL units)"
     )]
     pub collateral: f64,
+    #[arg(
+        long,
+        help = "Optionally add an initial balance to the validator in genesis in the subnet (in whole FIL units)"
+    )]
+    pub initial_balance: Option<f64>,
 }
 
 #[derive(Debug, Args)]
 pub struct BtcJoinArgs {
     #[arg(long, help = "The collateral to stake in the subnet (in sats)")]
     pub collateral: u64,
+    #[arg(
+        long,
+        help = "Optionally add an initial balance to the validator in genesis in the subnet (in sats)"
+    )]
+    pub initial_balance: Option<u64>,
     #[arg(long, help = "The IP address of the validator")]
     pub ip: String,
     #[arg(long, help = "The backup address of the validator")]

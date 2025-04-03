@@ -6,8 +6,8 @@ use async_trait::async_trait;
 use clap::Args;
 use futures_util::future::join_all;
 use fvm_shared::{address::Address, econ::TokenAmount};
-use ipc_api::ethers_address_to_fil_address;
 use ipc_api::subnet_id::SubnetID;
+use ipc_api::{ethers_address_to_fil_address, token_amount_to_satoshi};
 use ipc_wallet::{EthKeyAddress, EvmKeyStore, WalletType};
 use std::{fmt::Debug, str::FromStr};
 
@@ -29,7 +29,7 @@ impl CommandLineHandler for WalletBalances {
         let mut errors = Vec::new();
 
         match wallet_type {
-            WalletType::Evm => {
+            WalletType::Evm | WalletType::Btc => {
                 let wallet = provider.evm_wallet()?;
                 let addresses = wallet.read().unwrap().list()?;
                 let r = addresses
@@ -56,7 +56,19 @@ impl CommandLineHandler for WalletBalances {
                         Ok(i) => {
                             let (balance, addr) = i;
                             if addr.to_string() != "default-key" {
-                                println!("{} - Balance: {}", addr, balance);
+                                match wallet_type {
+                                    WalletType::Evm => {
+                                        println!("{} - Balance: {}", addr, balance.atto());
+                                    }
+                                    WalletType::Btc => {
+                                        println!(
+                                            "{} - Balance: {}",
+                                            addr,
+                                            token_amount_to_satoshi(balance)?
+                                        );
+                                    }
+                                    _ => {}
+                                }
                             }
                         }
                         Err(e) => {
@@ -98,9 +110,6 @@ impl CommandLineHandler for WalletBalances {
                 for (balance, addr) in r {
                     println!("{:?} - Balance: {}", addr, balance);
                 }
-            }
-            WalletType::Btc => {
-                unimplemented!()
             }
         };
 

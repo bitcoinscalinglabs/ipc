@@ -3,10 +3,10 @@
 //! Fund cli command handler.
 
 use async_trait::async_trait;
-use clap::Args;
+use clap::{Args, Subcommand};
 use fvm_shared::bigint::BigInt;
 use fvm_shared::econ::TokenAmount;
-use ipc_api::subnet_id::SubnetID;
+use ipc_api::{subnet_id::SubnetID, token_amount_from_satoshi};
 use num_traits::Num;
 use std::{fmt::Debug, str::FromStr};
 
@@ -27,31 +27,53 @@ impl CommandLineHandler for Fund {
 
         let mut provider = get_ipc_provider(global)?;
         let subnet = SubnetID::from_str(&arguments.subnet)?;
-        let from = match &arguments.from {
-            Some(address) => Some(require_fil_addr_from_str(address)?),
-            None => None,
-        };
-        let to = match &arguments.to {
-            Some(address) => Some(require_fil_addr_from_str(address)?),
-            None => None,
-        };
-        let gateway_addr = match &arguments.gateway_address {
-            Some(address) => Some(require_fil_addr_from_str(address)?),
-            None => None,
-        };
 
-        println!(
-            "fund performed in epoch: {:?}",
-            provider
-                .fund(
-                    subnet,
-                    gateway_addr,
-                    from,
-                    to,
-                    f64_to_token_amount(arguments.amount)?,
-                )
-                .await?,
-        );
+        match &arguments.network_specific {
+            SubnetFundArgs::Fevm(fevm_fund_args) => {
+                let from = match &fevm_fund_args.from {
+                    Some(address) => Some(require_fil_addr_from_str(address)?),
+                    None => None,
+                };
+                let to = match &fevm_fund_args.to {
+                    Some(address) => Some(require_fil_addr_from_str(address)?),
+                    None => None,
+                };
+                let gateway_addr = match &fevm_fund_args.gateway_address {
+                    Some(address) => Some(require_fil_addr_from_str(address)?),
+                    None => None,
+                };
+                println!(
+                    "fund performed in epoch: {:?}",
+                    provider
+                        .fund(
+                            subnet,
+                            gateway_addr,
+                            from,
+                            to,
+                            f64_to_token_amount(fevm_fund_args.amount)?,
+                        )
+                        .await?,
+                );
+            }
+            SubnetFundArgs::Btc(btc_fund_args) => {
+                let to = match &btc_fund_args.to {
+                    Some(address) => Some(require_fil_addr_from_str(address)?),
+                    None => None,
+                };
+                println!(
+                    "fund transaction submitted at height: {:?}",
+                    provider
+                        .fund(
+                            subnet,
+                            None,
+                            None,
+                            to,
+                            token_amount_from_satoshi(btc_fund_args.amount),
+                        )
+                        .await?,
+                );
+            }
+        }
 
         Ok(())
     }
@@ -60,8 +82,22 @@ impl CommandLineHandler for Fund {
 #[derive(Debug, Args)]
 #[command(about = "Send funds from a parent to a child subnet")]
 pub(crate) struct FundArgs {
-    #[arg(long, help = "The gateway address of the subnet")]
-    pub gateway_address: Option<String>,
+    #[arg(long, help = "The subnet to fund")]
+    pub subnet: String,
+    #[command(subcommand)]
+    pub network_specific: SubnetFundArgs,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SubnetFundArgs {
+    #[command(name = "fevm")]
+    Fevm(FevmFundArgs),
+    #[command(name = "btc")]
+    Btc(BtcFundArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct FevmFundArgs {
     #[arg(long, help = "The address to send funds from")]
     pub from: Option<String>,
     #[arg(
@@ -69,10 +105,18 @@ pub(crate) struct FundArgs {
         help = "The address to send funds to (if not set, amount sent to from address)"
     )]
     pub to: Option<String>,
-    #[arg(long, help = "The subnet to fund")]
-    pub subnet: String,
-    #[arg(help = "The amount to fund in FIL, in whole FIL")]
+    #[arg(long, help = "The gateway address of the subnet")]
+    pub gateway_address: Option<String>,
+    #[arg(help = "The amount to fund (in whole FIL)")]
     pub amount: f64,
+}
+
+#[derive(Debug, Args)]
+pub struct BtcFundArgs {
+    #[arg(long, help = "The address to send funds to")]
+    pub to: Option<String>,
+    #[arg(help = "The amount to fund (in sats)")]
+    pub amount: u64,
 }
 
 pub struct PreFund;
@@ -86,17 +130,35 @@ impl CommandLineHandler for PreFund {
 
         let mut provider = get_ipc_provider(global)?;
         let subnet = SubnetID::from_str(&arguments.subnet)?;
-        let from = match &arguments.from {
-            Some(address) => Some(require_fil_addr_from_str(address)?),
-            None => None,
+
+        match &arguments.network_specific {
+            SubnetPreFundArgs::Fevm(fevm_fund_args) => {
+                let from = match &fevm_fund_args.from {
+                    Some(address) => Some(require_fil_addr_from_str(address)?),
+                    None => None,
+                };
+                provider
+                    .pre_fund(
+                        subnet.clone(),
+                        from,
+                        f64_to_token_amount(fevm_fund_args.amount)?,
+                    )
+                    .await?;
+            }
+            SubnetPreFundArgs::Btc(btc_fund_args) => {
+                let dest_address = match &btc_fund_args.to {
+                    Some(address) => Some(require_fil_addr_from_str(address)?),
+                    None => None,
+                };
+                provider
+                    .pre_fund(
+                        subnet.clone(),
+                        dest_address,
+                        token_amount_from_satoshi(btc_fund_args.amount),
+                    )
+                    .await?;
+            }
         };
-        provider
-            .pre_fund(
-                subnet.clone(),
-                from,
-                f64_to_token_amount(arguments.initial_balance)?,
-            )
-            .await?;
         log::info!("address pre-funded successfully");
 
         Ok(())
@@ -106,15 +168,40 @@ impl CommandLineHandler for PreFund {
 #[derive(Debug, Args)]
 #[command(
     name = "pre-fund",
-    about = "Add some funds in genesis to an address in a child-subnet"
+    about = "Add an initial balance in genesis to an address in a child-subnet"
 )]
 pub struct PreFundArgs {
-    #[arg(long, help = "The address funded in the subnet")]
-    pub from: Option<String>,
     #[arg(long, help = "The subnet to add balance to")]
     pub subnet: String,
-    #[arg(help = "Add an initial balance for the address in genesis in the subnet")]
-    pub initial_balance: f64,
+    #[command(subcommand)]
+    pub network_specific: SubnetPreFundArgs,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SubnetPreFundArgs {
+    #[command(name = "fevm")]
+    Fevm(FevmPreFundArgs),
+    #[command(name = "btc")]
+    Btc(BtcPreFundArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct FevmPreFundArgs {
+    #[arg(
+        long,
+        help = "The address to send funds from and to be funded in the subnet"
+    )]
+    pub from: Option<String>,
+    #[arg(help = "The amount to fund (in whole FIL)")]
+    pub amount: f64,
+}
+
+#[derive(Debug, Args)]
+pub struct BtcPreFundArgs {
+    #[arg(long, help = "The address to send funds to")]
+    pub to: Option<String>,
+    #[arg(help = "The amount to fund (in sats)")]
+    pub amount: u64,
 }
 
 /// The command to send ERC20 tokens to a subnet from parent

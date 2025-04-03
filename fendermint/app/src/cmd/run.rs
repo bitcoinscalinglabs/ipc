@@ -1,6 +1,5 @@
 // Copyright 2022-2024 Protocol Labs
 // SPDX-License-Identifier: Apache-2.0, MIT
-
 use anyhow::{anyhow, bail, Context};
 use async_stm::atomically_or_err;
 use fendermint_abci::ApplicationService;
@@ -27,6 +26,7 @@ use fendermint_vm_topdown::sync::launch_polling_syncer;
 use fendermint_vm_topdown::voting::{publish_vote_loop, Error as VoteError, VoteTally};
 use fendermint_vm_topdown::{CachedFinalityProvider, IPCParentFinality, Toggle};
 use fvm_shared::address::{current_network, Address, Network};
+use ipc_api::subnet_id::NetworkType;
 use ipc_ipld_resolver::{Event as ResolverEvent, VoteRecord};
 use ipc_observability::observe::register_metrics as register_default_metrics;
 use ipc_provider::config::subnet::{BTCSubnet, SubnetConfig};
@@ -138,15 +138,61 @@ async fn run(settings: Settings) -> anyhow::Result<()> {
         other => other,
     };
 
-    let interpreter = FvmMessageInterpreter::<NamespaceBlockstore, _>::new(
-        tendermint_client.clone(),
-        validator_ctx,
-        settings.fvm.gas_overestimation_rate,
-        settings.fvm.gas_search_step,
-        settings.fvm.exec_in_check,
-        UpgradeScheduler::new(),
-    )
-    .with_push_chain_meta(testing_settings.map_or(true, |t| t.push_chain_meta));
+    let own_subnet_id = settings.ipc.subnet_id.clone();
+
+    let ipc_provider = make_ipc_provider(&settings, own_subnet_id.root_network_type())?;
+    let ipc_provider_proxy =
+        IPCProviderProxy::new(ipc_provider.clone(), settings.ipc.subnet_id.clone())?;
+    let ipc_provider_proxy_with_latency =
+        Arc::new(IPCProviderProxyWithLatency::new(ipc_provider_proxy));
+
+    let interpreter = match own_subnet_id.parent_network_type() {
+        // If the parent subnet is a bitcoin, we need to give the interpreter
+        // the manager to use for the bitcoin parent.
+        Some(ipc_api::subnet_id::NetworkType::Btc) => {
+            let connection = ipc_provider
+                .get_connection(
+                    &own_subnet_id
+                        .parent()
+                        .ok_or_else(|| anyhow!("parent subnet not found"))?,
+                )
+                .context("failed to get connection to bitcoin parent")?;
+            let manager = connection
+                .manager()
+                .as_any()
+                .downcast_ref::<ipc_provider::manager::BtcSubnetManager>()
+                .context("a manager other than BtcSubnetManager was used for bitcoin parent")?
+                .clone();
+            let interpreter =
+                FvmMessageInterpreter::<NamespaceBlockstore, _>::new_for_bitcoin_parent(
+                    tendermint_client.clone(),
+                    validator_ctx,
+                    settings.fvm.gas_overestimation_rate,
+                    settings.fvm.gas_search_step,
+                    settings.fvm.exec_in_check,
+                    UpgradeScheduler::new(),
+                    own_subnet_id.clone(),
+                    manager,
+                )
+                .with_push_chain_meta(testing_settings.map_or(true, |t| t.push_chain_meta));
+            tracing::info!("created interpreter with subnet_id: {:?}", own_subnet_id);
+            interpreter
+        }
+        // If the parent subnet is not bitcoin, we can use the standard interpreter.
+        _ => {
+            let interpreter = FvmMessageInterpreter::<NamespaceBlockstore, _>::new(
+                tendermint_client.clone(),
+                validator_ctx,
+                settings.fvm.gas_overestimation_rate,
+                settings.fvm.gas_search_step,
+                settings.fvm.exec_in_check,
+                UpgradeScheduler::new(),
+            )
+            .with_push_chain_meta(testing_settings.map_or(true, |t| t.push_chain_meta));
+            tracing::info!("created interpreter with subnet_id: {:?}", own_subnet_id);
+            interpreter
+        }
+    };
 
     let interpreter = SignedMessageInterpreter::new(interpreter);
     let interpreter = ChainMessageInterpreter::<_, NamespaceBlockstore>::new(interpreter);
@@ -171,8 +217,8 @@ async fn run(settings: Settings) -> anyhow::Result<()> {
 
     let topdown_enabled = settings.topdown_enabled();
     tracing::info!("topdown_enabled = {topdown_enabled}");
-    tracing::info!("temporarily disabling topdown finality");
-    let topdown_enabled = false;
+    // tracing::info!("temporarily disabling topdown finality");
+    // let topdown_enabled = false;
 
     // If enabled, start a resolver that communicates with the application through the resolve pool.
     if settings.resolver_enabled() {
@@ -187,8 +233,6 @@ async fn run(settings: Settings) -> anyhow::Result<()> {
         }
 
         let client = service.client();
-
-        let own_subnet_id = settings.ipc.subnet_id.clone();
 
         client
             .add_provided_subnet(own_subnet_id.clone())
@@ -205,6 +249,7 @@ async fn run(settings: Settings) -> anyhow::Result<()> {
             if let Some(key) = validator_keypair {
                 let parent_finality_votes = parent_finality_votes.clone();
 
+                let own_subnet_id = own_subnet_id.clone();
                 tracing::info!("starting the parent finality vote gossip loop...");
                 tokio::spawn(async move {
                     publish_vote_loop(
@@ -247,7 +292,9 @@ async fn run(settings: Settings) -> anyhow::Result<()> {
 
     let (parent_finality_provider, ipc_tuple) = if topdown_enabled {
         info!("topdown finality enabled");
-        let topdown_config = settings.ipc.topdown_config()?;
+        let topdown_config = settings
+            .ipc
+            .topdown_config(own_subnet_id.root_network_type())?;
         let mut config = fendermint_vm_topdown::Config::new(
             topdown_config.chain_head_delay,
             topdown_config.polling_interval,
@@ -262,16 +309,14 @@ async fn run(settings: Settings) -> anyhow::Result<()> {
             config = config.with_max_cache_blocks(v);
         }
 
-        let ipc_provider = {
-            let p = make_ipc_provider_proxy(&settings)?;
-            Arc::new(IPCProviderProxyWithLatency::new(p))
-        };
-
-        let finality_provider =
-            CachedFinalityProvider::uninitialized(config.clone(), ipc_provider.clone()).await?;
+        let finality_provider = CachedFinalityProvider::uninitialized(
+            config.clone(),
+            ipc_provider_proxy_with_latency.clone(),
+        )
+        .await?;
 
         let p = Arc::new(Toggle::enabled(finality_provider));
-        (p, Some((ipc_provider, config)))
+        (p, Some((ipc_provider_proxy_with_latency, config)))
     } else {
         info!("topdown finality disabled");
         (Arc::new(Toggle::disabled()), None)
@@ -426,10 +471,13 @@ fn make_resolver_service(
     Ok(service)
 }
 
-fn make_ipc_provider_proxy(settings: &Settings) -> anyhow::Result<IPCProviderProxy> {
-    let topdown_config = settings.ipc.topdown_config()?;
+fn make_ipc_provider(
+    settings: &Settings,
+    root_network_type: NetworkType,
+) -> anyhow::Result<IpcProvider> {
+    let topdown_config = settings.ipc.topdown_config(root_network_type)?;
 
-    println!("topdown config {topdown_config:#?}");
+    info!("topdown config {topdown_config:#?}");
 
     let subnet_id = settings
         .ipc
@@ -437,7 +485,7 @@ fn make_ipc_provider_proxy(settings: &Settings) -> anyhow::Result<IPCProviderPro
         .parent()
         .ok_or_else(|| anyhow!("subnet has no parent"))?;
 
-    println!("subnet_id {subnet_id:#?}");
+    info!("subnet_id {subnet_id:#?}");
 
     let subnet = ipc_provider::config::Subnet {
         id: subnet_id,
@@ -455,7 +503,7 @@ fn make_ipc_provider_proxy(settings: &Settings) -> anyhow::Result<IPCProviderPro
     info!("init ipc provider with subnet: {}", subnet.id);
 
     let ipc_provider = IpcProvider::new_with_subnet(None, subnet)?;
-    IPCProviderProxy::new(ipc_provider, settings.ipc.subnet_id.clone())
+    Ok(ipc_provider)
 }
 
 fn to_resolver_config(settings: &Settings) -> anyhow::Result<ipc_ipld_resolver::Config> {

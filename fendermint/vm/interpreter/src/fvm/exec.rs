@@ -28,6 +28,7 @@ pub type BlockEndEvents = Vec<Event>;
 /// might not be available to the caller, because of the message lookups
 /// and transformations that happen along the way, e.g. where we need
 /// a field, we might just have a CID.
+#[derive(Debug)]
 pub struct FvmApplyRet {
     pub apply_ret: ApplyRet,
     pub from: Address,
@@ -245,6 +246,8 @@ where
                     let chain_id = state.chain_id();
                     let height = checkpoint.block_height;
                     let validator_ctx = ctx.clone();
+                    let subnet_id = self.subnet_id.clone();
+                    let parent_manager = self.parent_manager.clone();
 
                     tokio::spawn(async move {
                         let res = checkpoint::broadcast_incomplete_signatures(
@@ -253,6 +256,8 @@ where
                             &gateway,
                             chain_id,
                             incomplete_checkpoints,
+                            subnet_id,
+                            parent_manager,
                         )
                         .await;
 

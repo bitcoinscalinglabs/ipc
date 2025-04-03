@@ -57,16 +57,6 @@ impl CommandLineHandler for BottomUpRelayer {
         let config_path = global.config_path();
         let config = Arc::new(Config::from_file(&config_path)?);
         let mut keystore = new_evm_keystore_from_config(config)?;
-        let submitter = match (arguments.submitter.as_ref(), keystore.get_default()?) {
-            (Some(submitter), _) => require_fil_addr_from_str(submitter)?,
-            (None, Some(addr)) => {
-                log::info!("using default address: {addr:?}");
-                Address::try_from(addr)?
-            }
-            _ => {
-                return Err(anyhow!("no submitter address provided"));
-            }
-        };
 
         let subnet = SubnetID::from_str(&arguments.subnet)?;
         let parent = subnet
@@ -76,11 +66,28 @@ impl CommandLineHandler for BottomUpRelayer {
         let child = get_subnet_config(&config_path, &subnet)?;
         let parent = get_subnet_config(&config_path, &parent)?;
 
-        let mut manager = BottomUpCheckpointManager::new_evm_manager(
+        let submitter = match parent.network_type() {
+            ipc_provider::config::subnet::NetworkType::Fevm => {
+                let submitter = match (arguments.submitter.as_ref(), keystore.get_default()?) {
+                    (Some(submitter), _) => require_fil_addr_from_str(submitter)?,
+                    (None, Some(addr)) => {
+                        log::info!("using default address: {addr:?}");
+                        Address::try_from(addr)?
+                    }
+                    _ => {
+                        return Err(anyhow!("no submitter address provided"));
+                    }
+                };
+                Some(submitter)
+            }
+            ipc_provider::config::subnet::NetworkType::Btc => None,
+        };
+
+        let mut manager = BottomUpCheckpointManager::new(
             parent.clone(),
             child.clone(),
-            Arc::new(RwLock::new(keystore)),
             arguments.max_parallelism,
+            Arc::new(RwLock::new(keystore)),
         )
         .await?;
 

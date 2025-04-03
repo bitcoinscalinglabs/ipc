@@ -20,12 +20,7 @@ pub(crate) struct WalletExport;
 
 impl WalletExport {
     fn export_evm(provider: &IpcProvider, arguments: &WalletExportArgs) -> anyhow::Result<String> {
-        let wallet_type = WalletType::from_str(&arguments.wallet_type)?;
-        let keystore = if wallet_type == WalletType::Evm {
-            provider.evm_wallet()?
-        } else {
-            provider.btc_wallet()?
-        };
+        let keystore = provider.evm_wallet()?;
 
         let address = ethers::types::Address::from_str(&arguments.address)?;
 
@@ -47,6 +42,32 @@ impl WalletExport {
             format!("{:?}", address),
             hex::encode(key_info.private_key()),
         );
+        Ok(serde_json::to_string(&info)?)
+    }
+
+    fn export_btc(provider: &IpcProvider, arguments: &WalletExportArgs) -> anyhow::Result<String> {
+        let keystore = provider.evm_wallet()?;
+
+        let address = ethers::types::Address::from_str(&arguments.address)?;
+
+        let key_info = keystore
+            .read()
+            .unwrap()
+            .get(&address.into())?
+            .ok_or_else(|| anyhow!("key does not exists"))?;
+
+        let private_key =
+            ipc_wallet::parse_and_validate_secret_key(key_info.private_key())?.serialize();
+
+        if arguments.hex {
+            return Ok(hex::encode(private_key));
+        }
+
+        if arguments.fendermint {
+            return Ok(BASE64_STANDARD.encode(private_key));
+        }
+
+        let info = PersistentKeyInfo::new(format!("{:?}", address), hex::encode(private_key));
         Ok(serde_json::to_string(&info)?)
     }
 
@@ -82,7 +103,8 @@ impl CommandLineHandler for WalletExport {
 
         let wallet_type = WalletType::from_str(&arguments.wallet_type)?;
         let v = match wallet_type {
-            WalletType::Evm | WalletType::Btc => WalletExport::export_evm(&provider, arguments),
+            WalletType::Evm => WalletExport::export_evm(&provider, arguments),
+            WalletType::Btc => WalletExport::export_btc(&provider, arguments),
             WalletType::Fvm => WalletExport::export_fvm(&provider, arguments),
         }?;
 
@@ -163,7 +185,7 @@ impl WalletPublicKey {
         provider: &IpcProvider,
         arguments: &WalletPublicKeyArgs,
     ) -> anyhow::Result<String> {
-        let keystore = provider.btc_wallet()?;
+        let keystore = provider.evm_wallet()?;
         let address = ethers::types::Address::from_str(&arguments.address)?;
 
         let key_info = keystore

@@ -273,7 +273,7 @@ fn maybe_eth_address(addr: &Address) -> Option<et::H160> {
 
 /// Check if the address can be converted to an Ethereum one.
 fn is_eth_addr_compat(addr: &Address) -> bool {
-    from_fvm::to_eth_address(addr).is_ok()
+    ipc_api::address::to_eth_address(addr).is_ok()
 }
 
 /// Check if the address is an Ethereum delegated one.

@@ -86,6 +86,11 @@ where
     gateway: GatewayCaller<DB>,
     /// Upgrade scheduler stores all the upgrades to be executed at given heights.
     upgrade_scheduler: UpgradeScheduler<DB>,
+    /// The subnet-id of the chain (in the IPC Address format).
+    /// It is an Option because we allow the interpreter to not have context about the subnet-id.
+    subnet_id: Option<ipc_api::subnet_id::SubnetID>,
+    /// The manager of the parent subnet. Only used for bitcoin parent subnets.
+    parent_manager: Option<ipc_provider::manager::BtcSubnetManager>,
 }
 
 impl<DB, C> FvmMessageInterpreter<DB, C>
@@ -109,6 +114,32 @@ where
             push_chain_meta: true,
             gateway: GatewayCaller::default(),
             upgrade_scheduler,
+            subnet_id: None,
+            parent_manager: None,
+        }
+    }
+
+    pub fn new_for_bitcoin_parent(
+        client: C,
+        validator_ctx: Option<ValidatorContext<C>>,
+        gas_overestimation_rate: f64,
+        gas_search_step: f64,
+        exec_in_check: bool,
+        upgrade_scheduler: UpgradeScheduler<DB>,
+        subnet_id: ipc_api::subnet_id::SubnetID,
+        parent_manager: ipc_provider::manager::BtcSubnetManager,
+    ) -> Self {
+        Self {
+            client,
+            validator_ctx,
+            gas_overestimation_rate,
+            gas_search_step,
+            exec_in_check,
+            push_chain_meta: true,
+            gateway: GatewayCaller::default(),
+            upgrade_scheduler,
+            subnet_id: Some(subnet_id),
+            parent_manager: Some(parent_manager),
         }
     }
 

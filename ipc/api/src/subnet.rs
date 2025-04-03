@@ -98,11 +98,11 @@ pub struct EthConstructParams {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BtcConstructParams {
     pub parent: SubnetID,
-    pub min_validator_stake: u64,
+    pub min_validator_stake: TokenAmount,
     pub min_validators: u64,
     pub bottomup_check_period: ChainEpoch,
     pub active_validators_limit: u16,
-    pub min_cross_msg_fee: u64,
+    pub min_cross_msg_fee: TokenAmount,
     pub validator_whitelist: Vec<String>,
 }
 
@@ -123,7 +123,7 @@ pub struct BtcJoinParams {
     pub subnet_id: SubnetID,
     // The x coordinate of the secp256k1 public key of the sender, hex encoded
     pub sender_public_key: String,
-    pub collateral: u64,
+    pub collateral: TokenAmount,
     pub ip: String,
     pub backup_address: String,
 }
@@ -133,4 +133,44 @@ pub struct BtcJoinParams {
 #[repr(u64)]
 pub enum ConsensusType {
     Fendermint,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PreFundParams {
+    /// The ID of the subnet where the funds will be sent to (child subnet)
+    pub subnet_id: SubnetID,
+    /// The address to be charged in the parent subnet and pre-funded in the child subnet
+    pub dst_address: Address,
+    /// Amount to pre-fund
+    pub amount: TokenAmount,
+}
+
+pub enum FundParams {
+    Eth(EthFundParams),
+    Btc(BtcFundParams),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EthFundParams {
+    /// The gateway address of the parent subnet
+    pub parent_gateway_addr: Address,
+    /// Target subnet ID (child subnet)
+    pub subnet_id: SubnetID,
+    /// The address to be charged in the parent subnet
+    pub sender: Address,
+    /// The address to receive the funds in the child subnet
+    pub to: Address,
+    /// The amount to fund
+    pub amount: TokenAmount,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BtcFundParams {
+    /// The ID of the subnet where the funds will be sent to (child subnet)
+    pub subnet_id: SubnetID,
+    /// The address to receive the funds in the child subnet
+    /// (the charged (sender) address is determined by the loaded bitcoin wallet and cannot be specified in the ipc codebase)
+    pub dst_address: Address,
+    /// The amount to fund
+    pub amount: TokenAmount,
 }

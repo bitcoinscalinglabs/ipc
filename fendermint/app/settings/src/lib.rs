@@ -6,7 +6,7 @@ use config::{Config, ConfigError, Environment, File};
 use fvm_shared::address::Address;
 use fvm_shared::bigint::Zero;
 use fvm_shared::econ::TokenAmount;
-use ipc_api::subnet_id::SubnetID;
+use ipc_api::subnet_id::{NetworkType, SubnetID};
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, DurationSeconds};
 use std::fmt::{Display, Formatter};
@@ -212,15 +212,30 @@ pub struct IpcSettings {
 }
 
 impl IpcSettings {
-    pub fn topdown_config(&self) -> anyhow::Result<&TopDownSettings> {
+    pub fn topdown_config(
+        &self,
+        root_network_type: NetworkType,
+    ) -> anyhow::Result<&TopDownSettings> {
         let ret = self
             .topdown
             .as_ref()
             .ok_or_else(|| anyhow!("top down config missing"))?;
 
-        if ret.chain_head_delay.is_zero() {
-            bail!("unsafe top-down chain head delay: zero value not accepted")
-        };
+        match root_network_type {
+            NetworkType::Fevm => {
+                if ret.chain_head_delay.is_zero() {
+                    bail!("unsafe top-down chain head delay: zero value not accepted")
+                }
+            }
+            NetworkType::Btc => {
+                if !ret.chain_head_delay.is_zero() {
+                    tracing::warn!("chain_head_delay should be 0 for BTC parent, this parameter is controlled by the bitcoin provider");
+                }
+                if !ret.proposal_delay.is_zero() {
+                    tracing::warn!("proposal_delay should be 0 for BTC parent, this parameter is controlled by the bitcoin provider");
+                }
+            }
+        }
 
         Ok(ret)
     }
@@ -303,7 +318,7 @@ impl Settings {
     /// finally parse it into the [Settings] type.
     pub fn new(config_dir: &Path, home_dir: &Path, run_mode: &str) -> Result<Self, ConfigError> {
         let config = Self::config(config_dir, home_dir, run_mode)?;
-        println!("fenderming Settings::new config = {config:#?}");
+        tracing::debug!("fenderming Settings::new config = {config:#?}");
         Self::parse(config)
     }
 

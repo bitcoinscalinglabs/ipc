@@ -1,6 +1,6 @@
 // Copyright 2022-2024 Protocol Labs
 // SPDX-License-Identifier: MIT
-
+use std::any::Any;
 use std::borrow::Borrow;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, RwLock};
@@ -13,6 +13,7 @@ use ipc_actors_abis::{
     subnet_actor_activity_facet, subnet_actor_checkpointing_facet, subnet_actor_getter_facet,
     subnet_actor_manager_facet, subnet_actor_reward_facet,
 };
+use ipc_api::checkpoint::{BottomUpCheckpointBundle, PsbtSignatureQuorum};
 use ipc_api::evm::{fil_to_eth_amount, payload_to_evm_address, subnet_id_to_evm_addresses};
 use ipc_api::validator::from_contract_validators;
 use reqwest::header::HeaderValue;
@@ -20,7 +21,8 @@ use reqwest::Client;
 use std::net::{IpAddr, SocketAddr};
 
 use ipc_api::subnet::{
-    Asset, AssetKind, ConstructParams, EthJoinParams, JoinParams, PermissionMode,
+    Asset, AssetKind, ConstructParams, EthFundParams, EthJoinParams, FundParams, JoinParams,
+    PermissionMode, PreFundParams,
 };
 use ipc_api::{eth_to_fil_amount, ethers_address_to_fil_address};
 
@@ -49,14 +51,14 @@ use fvm_shared::clock::ChainEpoch;
 use fvm_shared::{address::Address, econ::TokenAmount};
 use ipc_actors_abis::subnet_actor_activity_facet::ValidatorClaim;
 use ipc_api::checkpoint::{
-    consensus::ValidatorData, BottomUpCheckpoint, BottomUpCheckpointBundle, QuorumReachedEvent,
-    Signature, VALIDATOR_REWARD_FIELDS,
+    consensus::ValidatorData, BottomUpCheckpoint, QuorumReachedEvent, Signature,
+    VALIDATOR_REWARD_FIELDS,
 };
 use ipc_api::cross::IpcEnvelope;
 use ipc_api::merkle::MerkleGen;
 use ipc_api::staking::{StakingChangeRequest, ValidatorInfo, ValidatorStakingInfo};
 use ipc_api::subnet::EthConstructParams;
-use ipc_api::subnet_id::SubnetID;
+use ipc_api::subnet_id::{NetworkType, SubnetID};
 use ipc_observability::lazy_static;
 use ipc_wallet::{EthKeyAddress, EvmKeyStore, PersistentKeyStore};
 use num_traits::ToPrimitive;
@@ -143,7 +145,7 @@ impl TopDownFinalityQuery for EthSubnetManager {
             Arc::new(self.ipc_contract_info.provider.clone()),
         );
 
-        let topic1 = contract_address_from_subnet(subnet_id)?;
+        let topic1: ethers::types::H160 = contract_address_from_subnet(subnet_id)?;
         tracing::debug!(
             "getting top down messages for subnet: {:?} with topic 1: {}",
             subnet_id,
@@ -384,21 +386,24 @@ impl SubnetManager for EthSubnetManager {
         block_number_from_receipt(receipt)
     }
 
-    async fn pre_fund(&self, subnet: SubnetID, from: Address, balance: TokenAmount) -> Result<()> {
-        let balance = balance
+    async fn pre_fund(&self, params: PreFundParams) -> Result<()> {
+        let balance = params
+            .amount
             .atto()
             .to_u128()
             .ok_or_else(|| anyhow!("invalid initial balance"))?;
 
-        let address = contract_address_from_subnet(&subnet)?;
+        let address = contract_address_from_subnet(&params.subnet_id)?;
         tracing::info!("interacting with evm subnet contract: {address:} with balance: {balance:}");
 
-        let signer = Arc::new(self.get_signer_with_fee_estimator(&from)?);
+        let signer = Arc::new(self.get_signer_with_fee_estimator(&params.dst_address)?);
         let contract =
             subnet_actor_manager_facet::SubnetActorManagerFacet::new(address, signer.clone());
 
         let mut txn = contract.pre_fund(U256::from(balance));
-        txn = self.handle_txn_token(&subnet, txn, 0, balance).await?;
+        txn = self
+            .handle_txn_token(&params.subnet_id, txn, balance, 0)
+            .await?;
 
         let txn = extend_call_with_pending_block(txn).await?;
 
@@ -559,27 +564,30 @@ impl SubnetManager for EthSubnetManager {
         Ok(())
     }
 
-    async fn fund(
-        &self,
-        subnet: SubnetID,
-        gateway_addr: Address,
-        from: Address,
-        to: Address,
-        amount: TokenAmount,
-    ) -> Result<ChainEpoch> {
-        self.ensure_same_gateway(&gateway_addr)?;
+    async fn fund(&self, params: FundParams) -> Result<ChainEpoch> {
+        let params: EthFundParams = match params {
+            FundParams::Eth(params) => params,
+            FundParams::Btc(_) => return Err(anyhow!("Unsupported subnet configuration")),
+        };
 
-        let value = amount
+        self.ensure_same_gateway(&params.parent_gateway_addr)?;
+
+        let value = params
+            .amount
             .atto()
             .to_u128()
             .ok_or_else(|| anyhow!("invalid value to fund"))?;
 
-        tracing::info!("fund with evm gateway contract: {gateway_addr:} with value: {value:}, original: {amount:?}");
+        tracing::info!(
+            "fund with evm gateway contract: {:?} with value: {value:}, original: {:?}",
+            params.parent_gateway_addr,
+            params.amount
+        );
 
-        let evm_subnet_id = gateway_manager_facet::SubnetID::try_from(&subnet)?;
+        let evm_subnet_id = gateway_manager_facet::SubnetID::try_from(&params.subnet_id)?;
         tracing::debug!("evm subnet id to fund: {evm_subnet_id:?}");
 
-        let signer = Arc::new(self.get_signer_with_fee_estimator(&from)?);
+        let signer = Arc::new(self.get_signer_with_fee_estimator(&params.sender)?);
         let gateway_contract = gateway_manager_facet::GatewayManagerFacet::new(
             self.ipc_contract_info.gateway_addr,
             signer.clone(),
@@ -587,7 +595,7 @@ impl SubnetManager for EthSubnetManager {
 
         let mut txn = gateway_contract.fund(
             evm_subnet_id,
-            gateway_manager_facet::FvmAddress::try_from(to)?,
+            gateway_manager_facet::FvmAddress::try_from(params.to)?,
         );
         txn.tx.set_value(value);
         let txn = extend_call_with_pending_block(txn).await?;
@@ -665,11 +673,13 @@ impl SubnetManager for EthSubnetManager {
 
     async fn release(
         &self,
-        gateway_addr: Address,
+        gateway_addr: Option<Address>,
         from: Address,
         to: Address,
         amount: TokenAmount,
     ) -> Result<ChainEpoch> {
+        let gateway_addr =
+            gateway_addr.ok_or_else(|| anyhow!("gateway address must be provided"))?;
         self.ensure_same_gateway(&gateway_addr)?;
 
         let value = amount
@@ -685,6 +695,42 @@ impl SubnetManager for EthSubnetManager {
             signer.clone(),
         );
         let mut txn = gateway_contract.release(gateway_manager_facet::FvmAddress::try_from(to)?);
+        txn.tx.set_value(value);
+        let txn = extend_call_with_pending_block(txn).await?;
+
+        let pending_tx = txn.send().await?;
+        let receipt = pending_tx.retries(TRANSACTION_RECEIPT_RETRIES).await?;
+        block_number_from_receipt(receipt)
+    }
+
+    async fn transfer(
+        &self,
+        gateway_addr: Option<Address>,
+        from: Address,
+        to: Address,
+        amount: TokenAmount,
+        dst_subnet: SubnetID,
+    ) -> Result<ChainEpoch> {
+        let gateway_addr =
+            gateway_addr.ok_or_else(|| anyhow!("gateway address must be provided"))?;
+        self.ensure_same_gateway(&gateway_addr)?;
+
+        let value = amount
+            .atto()
+            .to_u128()
+            .ok_or_else(|| anyhow!("invalid value to fund"))?;
+
+        tracing::info!("transfer with evm gateway contract: {gateway_addr:} with value: {value:} to subnet: {dst_subnet:}");
+
+        let dst_subnet = gateway_manager_facet::SubnetID::try_from(&dst_subnet)?;
+
+        let signer = Arc::new(self.get_signer_with_fee_estimator(&from)?);
+        let gateway_contract = gateway_manager_facet::GatewayManagerFacet::new(
+            self.ipc_contract_info.gateway_addr,
+            signer.clone(),
+        );
+        let mut txn =
+            gateway_contract.transfer(gateway_manager_facet::FvmAddress::try_from(to)?, dst_subnet);
         txn.tx.set_value(value);
         let txn = extend_call_with_pending_block(txn).await?;
 
@@ -983,6 +1029,20 @@ impl SubnetManager for EthSubnetManager {
         let receipt = pending_tx.retries(TRANSACTION_RECEIPT_RETRIES).await?;
         block_number_from_receipt(receipt)
     }
+
+    async fn get_checkpoint_transaction(
+        &self,
+        _subnet_id: &SubnetID,
+        _checkpoint: BottomUpCheckpoint,
+    ) -> Result<ipc_api::checkpoint::PsbtSignature> {
+        unimplemented!(
+            "Checkpointing on evm parent subnets does not need to contact the parent subnet"
+        )
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }
 
 #[async_trait]
@@ -1223,11 +1283,27 @@ impl EthSubnetManager {
 impl BottomUpCheckpointRelayer for EthSubnetManager {
     async fn submit_checkpoint(
         &self,
-        submitter: &Address,
+        _keystore: Arc<RwLock<PersistentKeyStore<EthKeyAddress>>>,
+        submitter: &Option<Address>,
         checkpoint: BottomUpCheckpoint,
         signatures: Vec<Signature>,
         signatories: Vec<Address>,
+        bitcoin_signatures: Option<PsbtSignatureQuorum>,
     ) -> anyhow::Result<ChainEpoch> {
+        if bitcoin_signatures != None {
+            return Err(anyhow!(
+                "Submitting checkpoint on an EVM subnet does not need bitcoin_signatures"
+            ));
+        }
+        let submitter = match submitter {
+            Some(submitter) => submitter,
+            None => {
+                return Err(anyhow!(
+                    "submitter address is required for submitting checkpoint on an EVM subnet"
+                ));
+            }
+        };
+
         let address = contract_address_from_subnet(&checkpoint.subnet_id)?;
         tracing::debug!(
             "submit bottom up checkpoint: {checkpoint:?} in evm subnet contract: {address:}"
@@ -1299,7 +1375,16 @@ impl BottomUpCheckpointRelayer for EthSubnetManager {
             return Ok(None);
         }
 
-        let checkpoint = BottomUpCheckpoint::try_from(checkpoint)?;
+        tracing::info!(
+            "getting checkpoint bundle at height: {} for subnet: {:?}",
+            height,
+            checkpoint.subnet_id
+        );
+
+        let mut checkpoint = BottomUpCheckpoint::try_from(checkpoint)?;
+        //TODO(Orestis): try_from() does not set the field root_network_type. Fix. Then re-enable the condition and remove the following line and change the field to not pub
+        checkpoint.subnet_id.root_network_type = NetworkType::Btc;
+
         let signatories = signatories
             .into_iter()
             .map(|s| ethers_address_to_fil_address(&s))
@@ -1309,10 +1394,53 @@ impl BottomUpCheckpointRelayer for EthSubnetManager {
             .map(|s| s.to_vec())
             .collect::<Vec<_>>();
 
+        let bitcoin_signatures =
+        // = if checkpoint.subnet_id.parent_network_type()
+        //     == Some(NetworkType::Btc)
+        {
+            tracing::debug!(
+                "getting bitcoin checkpoint signatures for checkpoint at height: {}",
+                height
+            );
+            let contract = checkpointing_facet::CheckpointingFacet::new(
+                self.ipc_contract_info.gateway_addr,
+                Arc::new(self.ipc_contract_info.provider.clone()),
+            );
+
+            let (psbt, batch_transfer_tx, signatories, signatures) = contract
+                .get_bitcoin_checkpoint_signatures(U256::from(height))
+                .call()
+                .await?;
+
+            if signatories.len() != signatures.len() {
+                return Err(anyhow!(
+                    "signatories and signatures length mismatch for bitcoin checkpoint at height: {}",
+                    height
+                ));
+            }
+
+            tracing::debug!("found {} bitcoin signatures", signatures.len());
+
+            let signatures = signatures
+                .into_iter()
+                .map(|s| s.to_vec())
+                .collect::<Vec<_>>();
+
+            Some(PsbtSignatureQuorum {
+                unsigned_psbt: ipc_api::checkpoint::UnsignedPsbt::encode(&psbt)?,
+                signatories,
+                signatures,
+                transfer_tx: ipc_api::checkpoint::BitcoinTx::encode(&batch_transfer_tx)?,
+            })
+        // } else {
+        //     None
+        };
+
         Ok(Some(BottomUpCheckpointBundle {
             checkpoint,
             signatures,
             signatories,
+            bitcoin_signatures,
         }))
     }
 

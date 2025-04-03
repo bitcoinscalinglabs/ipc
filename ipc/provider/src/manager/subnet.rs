@@ -12,17 +12,22 @@ use ipc_api::checkpoint::{
 };
 use ipc_api::cross::IpcEnvelope;
 use ipc_api::staking::{StakingChangeRequest, ValidatorInfo};
-use ipc_api::subnet::{Asset, ConstructParams, JoinParams, PermissionMode};
+use ipc_api::subnet::{
+    Asset, ConstructParams, FundParams, JoinParams, PermissionMode, PreFundParams,
+};
 use ipc_api::subnet_id::SubnetID;
 use ipc_api::validator::Validator;
+use ipc_wallet::{EthKeyAddress, PersistentKeyStore};
+use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
+use std::sync::{Arc, RwLock};
 
 use crate::lotus::message::ipc::SubnetInfo;
 
 /// Trait to interact with a subnet and handle its lifecycle.
 #[async_trait]
 pub trait SubnetManager:
-    Send + Sync + TopDownFinalityQuery + BottomUpCheckpointRelayer + ValidatorRewarder
+    Send + Sync + TopDownFinalityQuery + BottomUpCheckpointRelayer + ValidatorRewarder + Any
 {
     /// Deploys a new subnet actor on the `parent` subnet and with the
     /// configuration passed in `ConstructParams`.
@@ -42,7 +47,7 @@ pub trait SubnetManager:
 
     /// Adds some initial balance to an address before a child subnet bootstraps to make
     /// it available in the subnet at genesis.
-    async fn pre_fund(&self, subnet: SubnetID, from: Address, balance: TokenAmount) -> Result<()>;
+    async fn pre_fund(&self, params: PreFundParams) -> Result<()>;
 
     /// Releases initial funds from an address for a subnet that has not yet been bootstrapped
     async fn pre_release(&self, subnet: SubnetID, from: Address, amount: TokenAmount)
@@ -75,14 +80,7 @@ pub trait SubnetManager:
 
     /// Fund injects new funds from an account of the parent chain to a subnet.
     /// Returns the epoch that the fund is executed in the parent.
-    async fn fund(
-        &self,
-        subnet: SubnetID,
-        gateway_addr: Address,
-        from: Address,
-        to: Address,
-        amount: TokenAmount,
-    ) -> Result<ChainEpoch>;
+    async fn fund(&self, params: FundParams) -> Result<ChainEpoch>;
 
     /// Sends funds to a specified subnet receiver using ERC20 tokens.
     /// This function locks the amount of ERC20 tokens into custody and then mints the supply in the specified subnet.
@@ -132,10 +130,21 @@ pub trait SubnetManager:
     /// Returns the epoch that the released is executed in the child.
     async fn release(
         &self,
-        gateway_addr: Address,
+        gateway_addr: Option<Address>,
         from: Address,
         to: Address,
         amount: TokenAmount,
+    ) -> Result<ChainEpoch>;
+
+    /// Transfer creates a new message to transfer funds in a subnet
+    /// Returns the epoch that the transfer is executed in the child.
+    async fn transfer(
+        &self,
+        gateway_addr: Option<Address>,
+        from: Address,
+        to: Address,
+        amount: TokenAmount,
+        dst_subnet: SubnetID,
     ) -> Result<ChainEpoch>;
 
     /// Propagate a cross-net message forward. For `postbox_msg_key`, we are using bytes because different
@@ -201,6 +210,16 @@ pub trait SubnetManager:
         public_keys: &[Vec<u8>],
         federated_power: &[u128],
     ) -> Result<ChainEpoch>;
+
+    /// This function asks the parent subnet (bitcoin) to generate the required transaction for the given `checkpoint` and `subnet_id`.
+    /// It is only required when the parent subnet is bitcoin.
+    async fn get_checkpoint_transaction(
+        &self,
+        subnet_id: &SubnetID,
+        checkpoint: BottomUpCheckpoint,
+    ) -> Result<ipc_api::checkpoint::PsbtSignature>;
+
+    fn as_any(&self) -> &dyn Any;
 }
 
 #[derive(Debug)]
@@ -238,6 +257,7 @@ pub trait TopDownFinalityQuery: Send + Sync {
     /// Returns the chain head height
     async fn chain_head_height(&self) -> Result<ChainEpoch>;
     /// Returns the list of top down messages
+    /// If the parent subnet is bitcoin, the epoch denotes the block height of the bitcoin network
     async fn get_top_down_msgs(
         &self,
         subnet_id: &SubnetID,
@@ -264,10 +284,12 @@ pub trait BottomUpCheckpointRelayer: Send + Sync {
     /// Returns the epoch that the execution is successful
     async fn submit_checkpoint(
         &self,
-        submitter: &Address,
+        keystore: Arc<RwLock<PersistentKeyStore<EthKeyAddress>>>,
+        submitter: &Option<Address>,
         checkpoint: BottomUpCheckpoint,
         signatures: Vec<Signature>,
         signatories: Vec<Address>,
+        bitcoin_signatures: Option<ipc_api::checkpoint::PsbtSignatureQuorum>,
     ) -> Result<ChainEpoch>;
     /// The last confirmed/submitted checkpoint height.
     async fn last_bottom_up_checkpoint_height(&self, subnet_id: &SubnetID) -> Result<ChainEpoch>;

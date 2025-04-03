@@ -30,7 +30,7 @@ pub fn parse_and_validate_secret_key(private_key_data: &[u8]) -> Result<SecretKe
     let compressed = public_key.serialize_compressed();
     if compressed[0] != libsecp256k1_core::util::TAG_PUBKEY_EVEN {
         return Err(anyhow!(
-            "Invalid secretkey, the corresponding public key parity is not even"
+            "secret key is not compatible with bitcoin, the corresponding public key parity is not even"
         ));
     }
 

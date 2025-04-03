@@ -3,7 +3,10 @@
 use crate::error::Error;
 use crate::subnet_id::SubnetID;
 use crate::{deserialize_human_readable_str, HumanReadable};
-use fvm_shared::address::{Address, Protocol};
+use anyhow::{anyhow, bail, Context};
+use ethers_core::types as et;
+use fvm_shared::address::{Address, Payload, Protocol};
+use ipc_types::{EthAddress, EAM_ACTOR_ID};
 use serde::ser::Error as SerializeError;
 use serde_tuple::{Deserialize_tuple, Serialize_tuple};
 use std::{fmt, str::FromStr};
@@ -119,6 +122,43 @@ impl serde_with::SerializeAs<IPCAddress> for HumanReadable {
 }
 
 deserialize_human_readable_str!(IPCAddress);
+
+/// Receives a bitcoin address (as a string) as an input and returns the corresponding
+/// filecoin delegated address
+pub fn fvm_address_from_bitcoin_address(s: &str) -> anyhow::Result<fvm_shared::address::Address> {
+    let addr =
+        fvm_shared::address::Address::new_delegated(crate::subnet_id::BTC_NAMESPACE, s.as_bytes())?;
+    Ok(addr)
+}
+
+/// Receives a filecoin delegated address as an input and returns the corresponding
+/// bitcoin address (as a string)
+pub fn bitcoin_address_from_fvm_address(address: &Address) -> anyhow::Result<String> {
+    match address.payload() {
+        Payload::Delegated(d) if d.namespace() == crate::subnet_id::BTC_NAMESPACE => {
+            let subaddr = d.subaddress().to_vec();
+            let subaddr_str =
+                String::from_utf8(subaddr).context("failed to parse subaddress as string")?;
+            Ok(subaddr_str)
+        }
+        _ => Err(anyhow!("address is not a bitcoin delegated address")),
+    }
+}
+
+pub fn to_eth_address(addr: &Address) -> anyhow::Result<Option<et::H160>> {
+    match addr.payload() {
+        Payload::Delegated(d) if d.namespace() == EAM_ACTOR_ID && d.subaddress().len() == 20 => {
+            Ok(Some(et::H160::from_slice(d.subaddress())))
+        }
+        // Deployments should be sent with an empty `to`.
+        Payload::ID(EAM_ACTOR_ID) => Ok(None),
+        // It should be possible to send to an ethereum account by ID.
+        Payload::ID(id) => Ok(Some(et::H160::from_slice(&EthAddress::from_id(*id).0))),
+        // The following fit into the type but are not valid ethereum addresses.
+        // Return an error so we can prevent tampering with the address when we convert ethereum transactions to FVM messages.
+        _ => bail!("not an Ethereum address: {addr}"), // f1, f2, f3 or an invalid delegated address.
+    }
+}
 
 #[cfg(test)]
 mod tests {

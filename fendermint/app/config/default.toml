@@ -67,9 +67,14 @@ port = 9184
 
 [tracing.console]
 enabled = true
+level = "debug"
 
 [tracing.file]
-enabled = false
+enabled = true
+level = "trace"
+directory = "logs"
+max_log_files = 4
+rotation = "minutely"
 
 [snapshots]
 # Enable the export and import of snapshots.

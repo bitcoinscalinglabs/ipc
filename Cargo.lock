@@ -3262,6 +3262,7 @@ dependencies = [
  "fvm_ipld_encoding",
  "fvm_shared",
  "hex",
+ "ipc-api",
  "jsonrpc-v2",
  "lazy_static",
  "lru_time_cache",
@@ -3575,6 +3576,7 @@ dependencies = [
  "hex",
  "ipc-api",
  "ipc-observability",
+ "ipc-provider",
  "ipc_actors_abis",
  "libipld",
  "merkle-tree-rs",
@@ -5348,8 +5350,10 @@ name = "ipc-api"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.21.7",
  "cid",
  "ethers",
+ "ethers-core",
  "fil_actors_runtime",
  "fnv",
  "fvm_ipld_blockstore",

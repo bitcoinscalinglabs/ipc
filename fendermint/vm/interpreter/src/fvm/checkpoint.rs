@@ -25,6 +25,7 @@ use ipc_actors_abis::checkpointing_facet as checkpoint;
 use ipc_actors_abis::gateway_getter_facet as getter;
 use ipc_api::staking::ConfigurationNumber;
 use ipc_observability::{emit, serde::HexEncodableBlockHash};
+use ipc_provider::manager::SubnetManager;
 use std::collections::HashMap;
 use std::time::Duration;
 use tendermint::block::Height;
@@ -136,6 +137,11 @@ where
         msg_count: num_msgs,
         config_number: next_configuration_number,
     });
+    tracing::debug!(
+        height = height.value(),
+        "created checkpoint at height, checkpoint: {:?}",
+        checkpoint,
+    );
 
     Ok(Some((checkpoint, power_updates)))
 }
@@ -206,6 +212,8 @@ pub async fn broadcast_incomplete_signatures<C, DB>(
     gateway: &GatewayCaller<DB>,
     chain_id: ChainID,
     incomplete_checkpoints: Vec<getter::BottomUpCheckpoint>,
+    subnet_id: Option<ipc_api::subnet_id::SubnetID>,
+    parent_manager: Option<ipc_provider::manager::BtcSubnetManager>,
 ) -> anyhow::Result<()>
 where
     C: Client + Clone + Send + Sync + 'static,
@@ -272,7 +280,7 @@ where
             broadcast_signature(
                 &validator_ctx.broadcaster,
                 gateway,
-                checkpoint,
+                checkpoint.clone(),
                 &power_table,
                 &validator,
                 &validator_ctx.secret_key,
@@ -280,6 +288,46 @@ where
             )
             .await
             .context("failed to broadcast checkpoint signature")?;
+
+            // TODO(themis):
+            // step 1: get checkpoint PSBT from provider
+            // step 2: sign PSBT
+            // step 3: submit signature on some smart contract that stores map between checkpoint and signatures
+            // TODO(Orestis):
+            // Getting self.subnet_id here is a workaround, because the subnet_id that comes in the BottomUpCheckpoint
+            // cannot give us the information about the parent network type, nor the the root id of the parent
+            // with a "/b" prefix. If we change that, we can get rid of the subnet_id parameter in the function.
+
+            if parent_is_bitcoin(&subnet_id) {
+                let subnet_id = match &subnet_id {
+                    Some(subnet_id) => subnet_id,
+                    None => {
+                        return Err(anyhow!(
+                            "broadcast_incomplete_signatures needs the subnet_id of the current subnet when the parent is bitcoin"
+                        ))
+                    }
+                };
+                let parent_manager = match &parent_manager {
+                    Some(parent_manager) => parent_manager,
+                    None => {
+                        return Err(anyhow!(
+                            "broadcast_incomplete_signatures needs the parent manager when the parent is bitcoin"
+                        ))
+                    }
+                };
+                broadcast_bitcoin_signature(
+                    &validator_ctx.broadcaster,
+                    gateway,
+                    subnet_id,
+                    parent_manager,
+                    checkpoint,
+                    chain_id,
+                )
+                .await
+                .context("failed to broadcast bitcoin signature")?;
+            } else {
+                tracing::debug!("will not create bitcoin signature for this checkpoint");
+            }
 
             emit(CheckpointSigned {
                 role: CheckpointSignedRole::Own,
@@ -291,6 +339,52 @@ where
             tracing::debug!(?height, "submitted checkpoint signature");
         }
     }
+    Ok(())
+}
+
+fn parent_is_bitcoin(subnet_id: &Option<ipc_api::subnet_id::SubnetID>) -> bool {
+    if let Some(subnet_id) = subnet_id {
+        return subnet_id.parent_network_type() == Some(ipc_api::subnet_id::NetworkType::Btc);
+    }
+    false
+}
+
+async fn broadcast_bitcoin_signature<C, DB>(
+    broadcaster: &Broadcaster<C>,
+    gateway: &GatewayCaller<DB>,
+    subnet_id: &ipc_api::subnet_id::SubnetID,
+    parent_manager: &ipc_provider::manager::BtcSubnetManager,
+    checkpoint: checkpoint::BottomUpCheckpoint,
+    chain_id: ChainID,
+) -> anyhow::Result<()>
+where
+    C: Client + Clone + Send + Sync + 'static,
+    DB: Blockstore + Send + Sync + Clone + 'static,
+{
+    let checkpoint_psbt = parent_manager
+        .get_checkpoint_transaction(
+            subnet_id,
+            ipc_api::checkpoint::BottomUpCheckpoint::try_from(checkpoint.clone())?,
+        )
+        .await?;
+    tracing::info!(
+        "interpreter obtained checkpoint PSBT from bitcoin provider: {checkpoint_psbt:?}"
+    );
+
+    let calldata = gateway
+        .add_bitcoin_checkpoint_signature_calldata(&checkpoint, checkpoint_psbt)
+        .context("failed to produce bitcoin checkpoint signature calldata")?;
+
+    let tx_hash = broadcaster
+        .fevm_invoke(Address::from(gateway.addr()), calldata, chain_id)
+        .await
+        .context("failed to broadcast bitcoin checkpoint signature")?;
+
+    tracing::info!(
+        tx_hash = tx_hash.to_string(),
+        "broadcasted bitcoin checkpoint signature"
+    );
+
     Ok(())
 }
 
@@ -384,7 +478,7 @@ where
     if batch.block_height.as_u64() != 0 {
         tracing::debug!(
             height = height.value(),
-            "bottom up msg batch exists at height"
+            "bottom up msg batch exists at height",
         );
     } else if height.value() % gateway.bottom_up_check_period(state)? == 0 {
         tracing::debug!(

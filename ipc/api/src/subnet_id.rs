@@ -35,7 +35,7 @@ pub const BTC_NAMESPACE: u64 = 20;
 /// hierarchy where the subnet is spawned.
 #[derive(PartialEq, Eq, Hash, Clone, Debug, Serialize_tuple, Deserialize_tuple)]
 pub struct SubnetID {
-    root_network_type: NetworkType,
+    pub root_network_type: NetworkType,
     root: u64, // For FEVM: chain_id, For BTC: 1=mainnet, 2=testnet, etc
     children: Vec<Address>,
 }

@@ -42,6 +42,8 @@ import {SubnetActorFacetsHelper} from "../helpers/SubnetActorFacetsHelper.sol";
 import {FullActivityRollup, Consensus} from "../../contracts/structs/Activity.sol";
 import {ActivityHelper} from "../helpers/ActivityHelper.sol";
 
+import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
+
 contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeTokenMock {
     using SubnetIDHelper for SubnetID;
     using CrossMsgHelper for IpcEnvelope;
@@ -1590,6 +1592,451 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
         gatewayDiamond.checkpointer().addCheckpointSignature(100, membershipProofs[0], weights[0], signature);
 
         vm.stopPrank();
+    }
+
+    function testGatewayDiamond_addBitcoinCheckpointSignature_quorum() public {
+        (uint256[] memory privKeys, address[] memory addrs, uint256[] memory weights) = TestUtils.getFourValidators(vm);
+
+        (bytes32 membershipRoot, bytes32[][] memory membershipProofs) = MerkleTreeHelper
+            .createMerkleProofsForValidators(addrs, weights);
+
+        BottomUpCheckpoint memory checkpoint = BottomUpCheckpoint({
+            subnetID: gatewayDiamond.getter().getNetworkName(),
+            blockHeight: gatewayDiamond.getter().bottomUpCheckPeriod(),
+            blockHash: keccak256("block"),
+            nextConfigurationNumber: 1,
+            msgs: new IpcEnvelope[](0),
+            activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
+        });
+
+        // create a checkpoint
+        vm.startPrank(FilAddress.SYSTEM_ACTOR);
+        gatewayDiamond.checkpointer().createBottomUpCheckpoint(
+            checkpoint,
+            membershipRoot,
+            weights[0] + weights[1] + weights[2],
+            ActivityHelper.dummyActivityRollup()
+        );
+        vm.stopPrank();
+
+        // adds signatures
+
+        uint8 v;
+        bytes32 r;
+        bytes32 s;
+        bytes memory signature;
+
+        for (uint64 i = 0; i < 2; i++) {
+            (v, r, s) = vm.sign(privKeys[i], keccak256(abi.encode(checkpoint)));
+            signature = abi.encodePacked(r, s, v);
+
+            vm.startPrank(vm.addr(privKeys[i]));
+            gatewayDiamond.checkpointer().addCheckpointSignature(
+                checkpoint.blockHeight,
+                membershipProofs[i],
+                weights[i],
+                signature
+            );
+
+            // Add Bitcoin checkpoint signatures
+            gatewayDiamond.checkpointer().addBitcoinCheckpointSignature(
+                checkpoint.blockHeight,
+                abi.encodePacked("psbt"),
+                abi.encodePacked(string.concat("val", Strings.toString(i), "sig")),
+                abi.encodePacked("batchtransfer1")
+            );
+            vm.stopPrank();
+        }
+
+        // Check the Bitcoin checkpoint signatures were properly added
+        {
+            (
+                bytes memory retrievedPsbt,
+                bytes memory retrievedBatchTransferTx,
+                address[] memory signatories,
+                bytes[] memory retrievedSignatures
+            ) = gatewayDiamond.checkpointer().getBitcoinCheckpointSignatures(checkpoint.blockHeight);
+
+            require(keccak256(retrievedPsbt) == keccak256(abi.encodePacked("psbt")), "incorrect PSBT");
+            require(signatories.length == 2, "incorrect number of signatories");
+            require(signatories[0] == vm.addr(privKeys[0]), "incorrect first signatory");
+            require(signatories[1] == vm.addr(privKeys[1]), "incorrect second signatory");
+            require(
+                keccak256(retrievedSignatures[0]) == keccak256(abi.encodePacked("val0sig")),
+                "incorrect first signature"
+            );
+            require(
+                keccak256(retrievedSignatures[1]) == keccak256(abi.encodePacked("val1sig")),
+                "incorrect second signature"
+            );
+            require(
+                keccak256(retrievedBatchTransferTx) == keccak256(abi.encodePacked("batchtransfer1")),
+                "incorrect batch transfer tx"
+            );
+        }
+    }
+
+    function testGatewayDiamond_addBitcoinCheckpointSignature_differentPSBT() public {
+        (uint256[] memory privKeys, address[] memory addrs, uint256[] memory weights) = TestUtils.getFourValidators(vm);
+
+        (bytes32 membershipRoot, bytes32[][] memory membershipProofs) = MerkleTreeHelper
+            .createMerkleProofsForValidators(addrs, weights);
+
+        BottomUpCheckpoint memory checkpoint = BottomUpCheckpoint({
+            subnetID: gatewayDiamond.getter().getNetworkName(),
+            blockHeight: gatewayDiamond.getter().bottomUpCheckPeriod(),
+            blockHash: keccak256("block"),
+            nextConfigurationNumber: 1,
+            msgs: new IpcEnvelope[](0),
+            activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
+        });
+
+        // create a checkpoint
+        vm.startPrank(FilAddress.SYSTEM_ACTOR);
+        gatewayDiamond.checkpointer().createBottomUpCheckpoint(
+            checkpoint,
+            membershipRoot,
+            weights[0] + weights[1] + weights[2],
+            ActivityHelper.dummyActivityRollup()
+        );
+        vm.stopPrank();
+
+        // Add regular checkpoint signatures first
+        uint8 v;
+        bytes32 r;
+        bytes32 s;
+        bytes memory signature;
+
+        for (uint64 i = 0; i < 3; i++) {
+            (v, r, s) = vm.sign(privKeys[i], keccak256(abi.encode(checkpoint)));
+            signature = abi.encodePacked(r, s, v);
+
+            vm.startPrank(vm.addr(privKeys[i]));
+            gatewayDiamond.checkpointer().addCheckpointSignature(
+                checkpoint.blockHeight,
+                membershipProofs[i],
+                weights[i],
+                signature
+            );
+            vm.stopPrank();
+        }
+
+        // First validator adds a Bitcoin signature for PSBT1
+        vm.startPrank(vm.addr(privKeys[0]));
+        gatewayDiamond.checkpointer().addBitcoinCheckpointSignature(
+            checkpoint.blockHeight,
+            abi.encodePacked("psbt1"),
+            abi.encodePacked("val0sig"),
+            abi.encodePacked("batchtransfer1")
+        );
+        vm.stopPrank();
+
+        // Second validator adds a Bitcoin signature for PSBT1
+        vm.startPrank(vm.addr(privKeys[1]));
+        gatewayDiamond.checkpointer().addBitcoinCheckpointSignature(
+            checkpoint.blockHeight,
+            abi.encodePacked("psbt1"),
+            abi.encodePacked("val1sig"),
+            abi.encodePacked("batchtransfer1")
+        );
+        vm.stopPrank();
+
+        // Third validator adds a Bitcoin signature for PSBT2 (different PSBT)
+        vm.startPrank(vm.addr(privKeys[2]));
+        gatewayDiamond.checkpointer().addBitcoinCheckpointSignature(
+            checkpoint.blockHeight,
+            abi.encodePacked("psbt2"),
+            abi.encodePacked("val2sig"),
+            abi.encodePacked("batchtransfer2")
+        );
+        vm.stopPrank();
+
+        // Check both PSBTs were stored properly, with PSBT1 having more signatures
+        {
+            (
+                bytes memory retrievedPsbt,
+                bytes memory retrievedBatchTransferTx,
+                address[] memory signatories,
+
+            ) = gatewayDiamond.checkpointer().getBitcoinCheckpointSignatures(checkpoint.blockHeight);
+
+            // Should return PSBT1 as it has 2 signatures vs 1 for PSBT2
+            require(keccak256(retrievedPsbt) == keccak256(abi.encodePacked("psbt1")), "incorrect PSBT");
+            require(signatories.length == 2, "incorrect number of signatories");
+            require(
+                keccak256(retrievedBatchTransferTx) == keccak256(abi.encodePacked("batchtransfer1")),
+                "incorrect batch transfer tx"
+            );
+        }
+    }
+
+    function testGatewayDiamond_addBitcoinCheckpointSignature_NotAuthorized() public {
+        (uint256[] memory privKeys, address[] memory addrs, uint256[] memory weights) = TestUtils.getFourValidators(vm);
+
+        (bytes32 membershipRoot, bytes32[][] memory membershipProofs) = MerkleTreeHelper
+            .createMerkleProofsForValidators(addrs, weights);
+
+        BottomUpCheckpoint memory checkpoint = BottomUpCheckpoint({
+            subnetID: gatewayDiamond.getter().getNetworkName(),
+            blockHeight: gatewayDiamond.getter().bottomUpCheckPeriod(),
+            blockHash: keccak256("block"),
+            nextConfigurationNumber: 1,
+            msgs: new IpcEnvelope[](0),
+            activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
+        });
+
+        // create a checkpoint
+        vm.startPrank(FilAddress.SYSTEM_ACTOR);
+        gatewayDiamond.checkpointer().createBottomUpCheckpoint(
+            checkpoint,
+            membershipRoot,
+            weights[0] + weights[1] + weights[2],
+            ActivityHelper.dummyActivityRollup()
+        );
+        vm.stopPrank();
+
+        // First validator adds a regular checkpoint signature
+        uint8 v;
+        bytes32 r;
+        bytes32 s;
+        bytes memory signature;
+
+        (v, r, s) = vm.sign(privKeys[0], keccak256(abi.encode(checkpoint)));
+        signature = abi.encodePacked(r, s, v);
+
+        vm.startPrank(vm.addr(privKeys[0]));
+        gatewayDiamond.checkpointer().addCheckpointSignature(
+            checkpoint.blockHeight,
+            membershipProofs[0],
+            weights[0],
+            signature
+        );
+        vm.stopPrank();
+
+        // Attempt to add a Bitcoin signature from a validator who hasn't signed the regular checkpoint
+        vm.startPrank(vm.addr(privKeys[1]));
+        vm.expectRevert(abi.encodeWithSelector(NotAuthorized.selector, vm.addr(privKeys[1])));
+        gatewayDiamond.checkpointer().addBitcoinCheckpointSignature(
+            checkpoint.blockHeight,
+            abi.encodePacked("psbt1"),
+            abi.encodePacked("val1sig"),
+            abi.encodePacked("batchtransfer1")
+        );
+        vm.stopPrank();
+
+        // Try with a completely unauthorized address
+        address unauthorizedAddress = address(0x1234);
+        vm.startPrank(unauthorizedAddress);
+        vm.expectRevert(abi.encodeWithSelector(NotAuthorized.selector, unauthorizedAddress));
+        gatewayDiamond.checkpointer().addBitcoinCheckpointSignature(
+            checkpoint.blockHeight,
+            abi.encodePacked("psbt1"),
+            abi.encodePacked("val1sig"),
+            abi.encodePacked("batchtransfer1")
+        );
+        vm.stopPrank();
+    }
+
+    function testGatewayDiamond_addBitcoinCheckpointSignature_UnknownCheckpoint() public {
+        (uint256[] memory privKeys, , ) = TestUtils.getFourValidators(vm);
+
+        // Try to add a Bitcoin signature for a non-existent checkpoint
+        uint256 nonExistentHeight = 999;
+
+        vm.startPrank(vm.addr(privKeys[0]));
+        vm.expectRevert(CheckpointNotCreated.selector);
+        gatewayDiamond.checkpointer().addBitcoinCheckpointSignature(
+            nonExistentHeight,
+            abi.encodePacked("psbt1"),
+            abi.encodePacked("val0sig"),
+            abi.encodePacked("batchtransfer1")
+        );
+        vm.stopPrank();
+    }
+
+    function testGatewayDiamond_addBitcoinCheckpointSignature_SignatureReplay() public {
+        (uint256[] memory privKeys, address[] memory addrs, uint256[] memory weights) = TestUtils.getFourValidators(vm);
+
+        (bytes32 membershipRoot, bytes32[][] memory membershipProofs) = MerkleTreeHelper
+            .createMerkleProofsForValidators(addrs, weights);
+
+        BottomUpCheckpoint memory checkpoint = BottomUpCheckpoint({
+            subnetID: gatewayDiamond.getter().getNetworkName(),
+            blockHeight: gatewayDiamond.getter().bottomUpCheckPeriod(),
+            blockHash: keccak256("block"),
+            nextConfigurationNumber: 1,
+            msgs: new IpcEnvelope[](0),
+            activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
+        });
+
+        // create a checkpoint
+        vm.startPrank(FilAddress.SYSTEM_ACTOR);
+        gatewayDiamond.checkpointer().createBottomUpCheckpoint(
+            checkpoint,
+            membershipRoot,
+            weights[0] + weights[1] + weights[2],
+            ActivityHelper.dummyActivityRollup()
+        );
+        vm.stopPrank();
+
+        // First validator adds a regular checkpoint signature
+        uint8 v;
+        bytes32 r;
+        bytes32 s;
+        bytes memory signature;
+
+        (v, r, s) = vm.sign(privKeys[0], keccak256(abi.encode(checkpoint)));
+        signature = abi.encodePacked(r, s, v);
+
+        vm.startPrank(vm.addr(privKeys[0]));
+        gatewayDiamond.checkpointer().addCheckpointSignature(
+            checkpoint.blockHeight,
+            membershipProofs[0],
+            weights[0],
+            signature
+        );
+
+        // Add Bitcoin signature
+        gatewayDiamond.checkpointer().addBitcoinCheckpointSignature(
+            checkpoint.blockHeight,
+            abi.encodePacked("psbt1"),
+            abi.encodePacked("val0sig"),
+            abi.encodePacked("batchtransfer1")
+        );
+
+        // Try to add the same Bitcoin signature again (same PSBT)
+        vm.expectRevert(SignatureReplay.selector);
+        gatewayDiamond.checkpointer().addBitcoinCheckpointSignature(
+            checkpoint.blockHeight,
+            abi.encodePacked("psbt1"),
+            abi.encodePacked("new_val0sig"),
+            abi.encodePacked("batchtransfer1")
+        );
+        vm.stopPrank();
+    }
+
+    function testGatewayDiamond_pruneBottomUpCheckpoints_PrunesBitcoinCheckpoints() public {
+        (uint256[] memory privKeys, address[] memory addrs, uint256[] memory weights) = TestUtils.getFourValidators(vm);
+
+        (bytes32 membershipRoot, bytes32[][] memory membershipProofs) = MerkleTreeHelper
+            .createMerkleProofsForValidators(addrs, weights);
+
+        uint256 index = gatewayDiamond.getter().getCheckpointRetentionHeight();
+        require(index == 1, "unexpected initial retention height");
+
+        // Create 5 checkpoints with heights 1-5
+        for (uint64 i = 1; i <= 5; i++) {
+            BottomUpCheckpoint memory checkpoint = BottomUpCheckpoint({
+                subnetID: gatewayDiamond.getter().getNetworkName(),
+                blockHeight: i * gatewayDiamond.getter().bottomUpCheckPeriod(),
+                blockHash: keccak256(abi.encodePacked("block", i)),
+                nextConfigurationNumber: 1,
+                msgs: new IpcEnvelope[](0),
+                activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
+            });
+
+            // Create the checkpoint
+            vm.startPrank(FilAddress.SYSTEM_ACTOR);
+            gatewayDiamond.checkpointer().createBottomUpCheckpoint(
+                checkpoint,
+                membershipRoot,
+                weights[0] + weights[1],
+                ActivityHelper.dummyActivityRollup()
+            );
+            vm.stopPrank();
+
+            // Add a regular signature so we can add a Bitcoin signature
+            uint8 v;
+            bytes32 r;
+            bytes32 s;
+            bytes memory signature;
+
+            (v, r, s) = vm.sign(privKeys[0], keccak256(abi.encode(checkpoint)));
+            signature = abi.encodePacked(r, s, v);
+
+            vm.startPrank(vm.addr(privKeys[0]));
+            gatewayDiamond.checkpointer().addCheckpointSignature(
+                checkpoint.blockHeight,
+                membershipProofs[0],
+                weights[0],
+                signature
+            );
+
+            // Add Bitcoin checkpoint signature with unique data for each checkpoint
+            gatewayDiamond.checkpointer().addBitcoinCheckpointSignature(
+                checkpoint.blockHeight,
+                abi.encodePacked("psbt", i),
+                abi.encodePacked("sig", i),
+                abi.encodePacked("batchtx", i)
+            );
+            vm.stopPrank();
+        }
+
+        // Verify all Bitcoin checkpoints exist before pruning
+        for (uint64 i = 1; i <= 5; i++) {
+            uint256 height = i * gatewayDiamond.getter().bottomUpCheckPeriod();
+            (
+                bytes memory psbt,
+                bytes memory batchTx,
+                address[] memory signatories,
+                bytes[] memory signatures
+            ) = gatewayDiamond.checkpointer().getBitcoinCheckpointSignatures(height);
+
+            // Verify the checkpoint data
+            require(keccak256(psbt) == keccak256(abi.encodePacked("psbt", i)), "incorrect PSBT before pruning");
+            require(
+                keccak256(batchTx) == keccak256(abi.encodePacked("batchtx", i)),
+                "incorrect batch tx before pruning"
+            );
+            require(signatories.length == 1, "incorrect number of signatories before pruning");
+            require(signatories[0] == vm.addr(privKeys[0]), "incorrect signatory before pruning");
+            require(
+                keccak256(signatures[0]) == keccak256(abi.encodePacked("sig", i)),
+                "incorrect signature before pruning"
+            );
+        }
+
+        // Prune checkpoints with height < 3
+        uint256 newRetentionHeight = 3 * gatewayDiamond.getter().bottomUpCheckPeriod();
+        vm.startPrank(FilAddress.SYSTEM_ACTOR);
+        gatewayDiamond.checkpointer().pruneBottomUpCheckpoints(newRetentionHeight);
+        vm.stopPrank();
+
+        // Verify new retention height
+        index = gatewayDiamond.getter().getCheckpointRetentionHeight();
+        require(index == newRetentionHeight, "retention height not updated correctly");
+
+        // Verify Bitcoin checkpoints with height < 3 are pruned
+        for (uint64 i = 1; i <= 5; i++) {
+            uint256 height = i * gatewayDiamond.getter().bottomUpCheckPeriod();
+
+            if (height < newRetentionHeight) {
+                // These should be pruned
+                vm.expectRevert(CheckpointNotCreated.selector);
+                gatewayDiamond.checkpointer().getBitcoinCheckpointSignatures(height);
+            } else {
+                // These should still exist
+                (
+                    bytes memory psbt,
+                    bytes memory batchTx,
+                    address[] memory signatories,
+                    bytes[] memory signatures
+                ) = gatewayDiamond.checkpointer().getBitcoinCheckpointSignatures(height);
+
+                // Verify the checkpoint data is still intact
+                require(keccak256(psbt) == keccak256(abi.encodePacked("psbt", i)), "incorrect PSBT after pruning");
+                require(
+                    keccak256(batchTx) == keccak256(abi.encodePacked("batchtx", i)),
+                    "incorrect batch tx after pruning"
+                );
+                require(signatories.length == 1, "incorrect number of signatories after pruning");
+                require(signatories[0] == vm.addr(privKeys[0]), "incorrect signatory after pruning");
+                require(
+                    keccak256(signatures[0]) == keccak256(abi.encodePacked("sig", i)),
+                    "incorrect signature after pruning"
+                );
+            }
+        }
     }
 
     function testGatewayDiamond_garbage_collect_bottomUpCheckpoints() public {

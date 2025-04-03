@@ -5,7 +5,6 @@
 use crate::proxy::ParentQueryProxy;
 use crate::sync::syncer::LotusParentSyncer;
 use crate::sync::ParentFinalityStateQuery;
-use anyhow::Context;
 
 /// Tendermint aware syncer
 pub(crate) struct TendermintAwareSyncer<T, C, P> {
@@ -41,7 +40,7 @@ where
             .tendermint_client
             .status()
             .await
-            .context("failed to get Tendermint status")?;
+            .map_err(|e| anyhow::anyhow!("failed to get Tendermint status. Error: {}", e))?;
         Ok(status.sync_info.catching_up)
     }
 }

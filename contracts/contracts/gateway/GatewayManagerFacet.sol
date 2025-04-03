@@ -6,7 +6,8 @@ import {SubnetActorGetterFacet} from "../subnet/SubnetActorGetterFacet.sol";
 import {BURNT_FUNDS_ACTOR} from "../constants/Constants.sol";
 import {IpcEnvelope} from "../structs/CrossNet.sol";
 import {FvmAddress} from "../structs/FvmAddress.sol";
-import {SubnetID, Subnet, Asset} from "../structs/Subnet.sol";
+import {FvmAddressHelper} from "../lib/FvmAddressHelper.sol";
+import {SubnetID, IPCAddress, Subnet, Asset} from "../structs/Subnet.sol";
 import {Membership, AssetKind} from "../structs/Subnet.sol";
 import {AlreadyRegisteredSubnet, CannotReleaseZero, MethodNotAllowed, NotEnoughFunds, NotEnoughFundsToRelease, NotEnoughCollateral, NotEmptySubnetCircSupply, NotRegisteredSubnet, InvalidXnetMessage, InvalidXnetMessageReason} from "../errors/IPCErrors.sol";
 import {LibGateway} from "../lib/LibGateway.sol";
@@ -215,6 +216,29 @@ contract GatewayManagerFacet is GatewayActorModifiers, ReentrancyGuard {
             subnet: s.networkName,
             signer: msg.sender,
             to: to,
+            value: msg.value
+        });
+
+        LibGateway.commitBottomUpMsg(crossMsg);
+        // burn funds that are being released
+        payable(BURNT_FUNDS_ACTOR).sendValue(msg.value);
+    }
+
+    /// @notice transfer() burns the received value locally in subnet and commits a bottom-up message to transfer the assets in the destination subnet.
+    ///         It is similar to release(), the only difference is that the created IpcEnvelope contains in the `to` field the `dstSubnet`, instead of the parent subnet.
+    ///         The local supply of a subnet is always the native coin, so this method doesn't have to deal with tokens.
+    ///
+    /// @param to: the address to which to credit funds in the destination subnet.
+    /// @param dstSubnet: the destination subnet.
+    function transfer(FvmAddress calldata to, SubnetID calldata dstSubnet) external payable {
+        if (msg.value == 0) {
+            // prevent spamming if there's no value to release.
+            revert InvalidXnetMessage(InvalidXnetMessageReason.Value);
+        }
+
+        IpcEnvelope memory crossMsg = CrossMsgHelper.createTransferMsg({
+            from: IPCAddress({subnetId: s.networkName, rawAddress: FvmAddressHelper.from(msg.sender)}),
+            to: IPCAddress({subnetId: dstSubnet, rawAddress: to}),
             value: msg.value
         });
 
