@@ -255,7 +255,7 @@ impl BottomUpCheckpointManager {
                         });
                     })
                     .inspect_err(|err| {
-                        tracing::error!("Fail to submit checkpoint at height {height}: {err}");
+                        tracing::warn!("Fail to submit checkpoint at height {height}: {err}");
                     });
 
                     drop(submission_permit);

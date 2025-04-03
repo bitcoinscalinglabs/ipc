@@ -947,7 +947,7 @@ impl BottomUpCheckpointRelayer for BtcSubnetManager {
         _signatories: Vec<Address>,
         bitcoin_signatures: Option<PsbtSignatureQuorum>,
     ) -> anyhow::Result<ChainEpoch> {
-        tracing::info!("submitting checkpoint on btc with params: {checkpoint:?}");
+        tracing::trace!("submitting checkpoint on btc with params: {checkpoint:?}");
         let bitcoin_signatures = match bitcoin_signatures {
             Some(signatures) => signatures,
             None => {
