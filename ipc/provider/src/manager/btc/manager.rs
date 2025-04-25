@@ -7,6 +7,8 @@ use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
+use ethers::abi::ethereum_types;
+use ethers::core::k256::Secp256k1;
 use ethers::providers::Authorization;
 use ethers::types::H256;
 use http::HeaderValue;
@@ -45,7 +47,7 @@ use ipc_api::checkpoint::{
     Signature,
 };
 use ipc_api::cross::{IpcEnvelope, IpcMsgKind};
-use ipc_api::staking::{StakingChangeRequest, ValidatorInfo};
+use ipc_api::staking::{StakingChange, StakingChangeRequest, StakingOperation, ValidatorInfo};
 use ipc_api::subnet_id::{NetworkType, SubnetID, BTC_NAMESPACE};
 
 #[derive(Clone)]
@@ -1429,10 +1431,144 @@ impl TopDownFinalityQuery for BtcSubnetManager {
     ) -> Result<TopDownQueryPayload<Vec<StakingChangeRequest>>> {
         tracing::info!("getting validator changeset for subnet: {subnet_id:} at height: {epoch:}");
 
-        //TODO(Orestis): Implement this. The structure of the function is the same as get_top_down_msgs().
-        let block_hash = self.get_block_hash(epoch).await?.block_hash;
+        let body = json!({
+            "jsonrpc": "2.0",
+            "method": "getstakechanges",
+            "id": 1,
+            "params": {
+                "subnet_id":        subnet_id.to_string(),
+                "block_height":     epoch,
+            }
+        });
+        tracing::info!("Request body: {body:?}");
+
+        let resp = self
+            .client
+            .post(self.rpc_url.clone())
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(anyhow!(
+                "getstakechanges request failed with status: {}",
+                resp.status()
+            ));
+        }
+
+        let data = resp.json::<Value>().await?;
+
+        if let Some(err_obj) = data.get("error") {
+            let code = err_obj
+                .get("code")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            let message = err_obj
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("Unknown error");
+            let error_data = err_obj
+                .get("data")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            return Err(anyhow!(
+                "JSON-RPC error: code={}, message={}, details={}",
+                code,
+                message,
+                error_data
+            ));
+        }
+
+        let mut changes: Vec<StakingChangeRequest> = vec![];
+        let mut prev_block_hash: Option<H256> = None;
+
+        let results = data
+            .get("result")
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow!("Field result not found"))?;
+        for result in results {
+            let change_entry = result
+                .get("change")
+                .ok_or_else(|| anyhow!("Field change not found in result"))?;
+
+            // parse validator address
+            let validator_address = change_entry
+                .get("validator_subnet_address")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("Field validator_subnet_address not found in result"))?;
+            let validator_address = ethers::types::Address::from_str(validator_address)?;
+            let validator_address = ethers_address_to_fil_address(&validator_address)?;
+
+            // parse type of change
+            let change = if change_entry.get("join").is_some() {
+                let pubkey = change_entry
+                    .get("join")
+                    .and_then(|join_params| join_params.get("pubkey"))
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| anyhow!("Field pubkey could not be found or parsed"))?;
+                let pubkey_bytes =
+                    hex::decode(pubkey).map_err(|_| anyhow!("Invalid hex in pubkey"))?;
+                if pubkey_bytes.len() != 33 {
+                    return Err(anyhow!(
+                        "Invalid pubkey length, the RPC method should return 33 bytes"
+                    ));
+                }
+                let secp_pubkey = libsecp256k1::PublicKey::parse_slice(
+                    &pubkey_bytes,
+                    Some(libsecp256k1::PublicKeyFormat::Compressed),
+                )
+                .map_err(|_| anyhow!("Invalid secp256k1 public key"))?;
+
+                StakingChange {
+                    op: StakingOperation::Deposit,
+                    payload: ethers::abi::encode(&[ethers::abi::Token::Bytes(
+                        secp_pubkey.serialize_compressed().to_vec(),
+                    )]),
+                    validator: validator_address,
+                }
+            } else if change_entry.get("deposit").is_some() {
+                let amount = change_entry
+                    .get("deposit")
+                    .and_then(|deposit_params| deposit_params.get("amount"))
+                    .and_then(Value::as_i64)
+                    .ok_or_else(|| anyhow!("Field amount could not be found or parsed"))?;
+
+                StakingChange {
+                    op: StakingOperation::Deposit,
+                    payload: ethers::abi::encode(&[ethers::abi::Token::Int(
+                        ethereum_types::U256::from(amount),
+                    )]),
+                    validator: validator_address,
+                }
+            } else {
+                return Err(anyhow!("Unknown operation in change"));
+            };
+
+            // parse block_hash
+            let block_hash = result
+                .get("block_hash")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("Field block_hash not found in result"))?;
+            let block_hash = H256::from_str(block_hash)?;
+            if prev_block_hash.is_some() && prev_block_hash != Some(block_hash) {
+                return Err(anyhow!("Block hash mismatch in result"));
+            }
+            prev_block_hash = Some(block_hash);
+
+            let change_request = StakingChangeRequest {
+                configuration_number: 0, //TODO(Orestis): Add configuration number
+                change,
+            };
+            changes.push(change_request);
+        }
+
+        let block_hash = match prev_block_hash {
+            Some(h) => h.0.to_vec(),
+            None => self.get_block_hash(epoch).await?.block_hash,
+        };
+
         Ok(TopDownQueryPayload {
-            value: vec![],
+            value: changes,
             block_hash,
         })
     }
