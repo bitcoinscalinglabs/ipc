@@ -8,7 +8,6 @@ use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 use ethers::abi::ethereum_types;
-use ethers::core::k256::Secp256k1;
 use ethers::providers::Authorization;
 use ethers::types::H256;
 use http::HeaderValue;
@@ -1487,21 +1486,27 @@ impl TopDownFinalityQuery for BtcSubnetManager {
             .and_then(Value::as_array)
             .ok_or_else(|| anyhow!("Field result not found"))?;
         for result in results {
-            let change_entry = result
-                .get("change")
-                .ok_or_else(|| anyhow!("Field change not found in result"))?;
+            // parse configuration_number
+            let configuration_number =
+                result
+                    .get("configuration_number")
+                    .and_then(Value::as_i64)
+                    .ok_or_else(|| anyhow!("Field configuration_number not found in result"))?;
 
             // parse validator address
-            let validator_address = change_entry
+            let validator_address = result
                 .get("validator_subnet_address")
                 .and_then(Value::as_str)
                 .ok_or_else(|| anyhow!("Field validator_subnet_address not found in result"))?;
             let validator_address = ethers::types::Address::from_str(validator_address)?;
             let validator_address = ethers_address_to_fil_address(&validator_address)?;
 
-            // parse type of change
-            let change = if change_entry.get("join").is_some() {
-                let pubkey = change_entry
+            let change_details = result
+                .get("change")
+                .ok_or_else(|| anyhow!("Field change not found in result"))?;
+
+            let change = if change_details.get("join").is_some() {
+                let pubkey = change_details
                     .get("join")
                     .and_then(|join_params| join_params.get("pubkey"))
                     .and_then(Value::as_str)
@@ -1520,14 +1525,14 @@ impl TopDownFinalityQuery for BtcSubnetManager {
                 .map_err(|_| anyhow!("Invalid secp256k1 public key"))?;
 
                 StakingChange {
-                    op: StakingOperation::Deposit,
+                    op: StakingOperation::SetMetadata,
                     payload: ethers::abi::encode(&[ethers::abi::Token::Bytes(
                         secp_pubkey.serialize_compressed().to_vec(),
                     )]),
                     validator: validator_address,
                 }
-            } else if change_entry.get("deposit").is_some() {
-                let amount = change_entry
+            } else if change_details.get("deposit").is_some() {
+                let amount = change_details
                     .get("deposit")
                     .and_then(|deposit_params| deposit_params.get("amount"))
                     .and_then(Value::as_i64)
@@ -1556,9 +1561,15 @@ impl TopDownFinalityQuery for BtcSubnetManager {
             prev_block_hash = Some(block_hash);
 
             let change_request = StakingChangeRequest {
-                configuration_number: 0, //TODO(Orestis): Add configuration number
+                configuration_number: configuration_number as u64,
                 change,
             };
+            tracing::debug!(
+                "Received new change request. configuration_number: {configuration_number}, operation: {:?}, validator: {:?}, payload: {:?}",
+                change_request.change.op,
+                change_request.change.validator.to_string(),
+                hex::encode(change_request.change.payload.clone()),
+            );
             changes.push(change_request);
         }
 
