@@ -796,6 +796,7 @@ impl SubnetManager for BtcSubnetManager {
                 "subnet_id":            subnet_id.to_string(),
                 "checkpoint_hash":      hex::encode(checkpoint.block_hash),
                 "checkpoint_height":    checkpoint.block_height,
+                "next_committee_configuration_number": checkpoint.next_configuration_number,
                 "withdrawals":          releases,
                 "transfers":            transfers,
             }
