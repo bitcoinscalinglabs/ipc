@@ -1527,21 +1527,23 @@ impl TopDownFinalityQuery for BtcSubnetManager {
 
                 StakingChange {
                     op: StakingOperation::SetMetadata,
-                    payload: ethers::abi::encode(&[ethers::abi::Token::Bytes(
-                        secp_pubkey.serialize_compressed().to_vec(),
-                    )]),
+                    payload: secp_pubkey.serialize().to_vec(),
                     validator: validator_address,
                 }
             } else if change_details.get("deposit").is_some() {
                 let amount = change_details
                     .get("deposit")
                     .and_then(|deposit_params| deposit_params.get("amount"))
-                    .and_then(Value::as_i64)
+                    .and_then(Value::as_u64)
                     .ok_or_else(|| anyhow!("Field amount could not be found or parsed"))?;
+
+                // TODO check overflow
+                let amount = amount * ipc_api::SATOSHI_TO_ATTO;
+                // let amount = token_amount_from_satoshi(amount);
 
                 StakingChange {
                     op: StakingOperation::Deposit,
-                    payload: ethers::abi::encode(&[ethers::abi::Token::Int(
+                    payload: ethers::abi::encode(&[ethers::abi::Token::Uint(
                         ethereum_types::U256::from(amount),
                     )]),
                     validator: validator_address,
