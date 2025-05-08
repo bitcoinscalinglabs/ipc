@@ -174,7 +174,14 @@ impl<DB: Blockstore + Clone> GatewayCaller<DB> {
             .current_membership(state)
             .context("failed to get current membership")?;
 
+        println!("current_power_table membership = {:#?}", membership);
+
         let power_table = membership_to_power_table(&membership, state.power_scale());
+
+        println!(
+            "current_power_table membership_to_power_table power_table = {:#?}",
+            power_table
+        );
 
         Ok((membership.configuration_number, power_table))
     }
@@ -283,6 +290,8 @@ impl<DB: Blockstore + Clone> GatewayCaller<DB> {
         state: &mut FvmExecState<DB>,
         changes: Vec<StakingChangeRequest>,
     ) -> anyhow::Result<()> {
+        println!("store_validator_changes changes= {:#?}", changes);
+
         if changes.is_empty() {
             return Ok(());
         }
@@ -291,6 +300,11 @@ impl<DB: Blockstore + Clone> GatewayCaller<DB> {
         for c in changes {
             change_requests.push(top_down_finality_facet::StakingChangeRequest::try_from(c)?);
         }
+
+        println!(
+            "store_validator_changes change_requests= {:#?}",
+            change_requests
+        );
 
         self.topdown
             .call(state, |c| c.store_validator_changes(change_requests))

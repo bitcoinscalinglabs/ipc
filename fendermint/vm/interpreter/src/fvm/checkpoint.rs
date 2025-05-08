@@ -68,13 +68,24 @@ where
     };
 
     // Get the current power table from the ledger, not CometBFT.
-    let (_, curr_power_table) =
+    let (curr_configuration_number, curr_power_table) =
         ipc_power_table(gateway, state).context("failed to get the current power table")?;
+
+    println!(
+        "checkpoint.rs curr_configuration_number: {}",
+        curr_configuration_number
+    );
+    println!("checkpoint.rs curr_power_table: {:#?}", curr_power_table);
 
     // Apply any validator set transitions.
     let next_configuration_number = gateway
         .apply_validator_changes(state)
         .context("failed to apply validator changes")?;
+
+    println!(
+        "checkpoint.rs next_configuration_number: {}",
+        next_configuration_number
+    );
 
     // Sum up the value leaving the subnet as part of the bottom-up messages.
     let burnt_tokens = tokens_to_burn(&msgs);
@@ -123,13 +134,23 @@ where
     let power_updates = if next_configuration_number == 0 {
         PowerUpdates(Vec::new())
     } else {
+        println!("\n\ngetting power_updates");
+
         let (next_power_configuration_number, next_power_table) =
             ipc_power_table(gateway, state).context("failed to get next power table")?;
+
+        println!(
+            "checkpoint.rs next_power_configuration_number: {}",
+            next_power_configuration_number
+        );
+        println!("checkpoint.rs next_power_table: {:#?}", next_power_table);
 
         debug_assert_eq!(next_power_configuration_number, next_configuration_number);
 
         power_diff(curr_power_table, next_power_table)
     };
+
+    println!("checkpoint.rs power_updates: {:#?}", power_updates);
 
     emit(CheckpointCreated {
         height: height.value(),

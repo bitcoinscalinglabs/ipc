@@ -28,7 +28,7 @@ pub enum Error<K = ValidatorKey, V: AsRef<[u8]> = BlockHash> {
     #[error("failed to extend chain; expected block height {0}, got {1}")]
     UnexpectedBlock(BlockHeight, BlockHeight),
 
-    #[error("validator unknown or has no power: {0:?}")]
+    #[error("validator unknown or has no power: {0:?} {0}")]
     UnpoweredValidator(K),
 
     #[error(
@@ -199,6 +199,8 @@ where
         }
 
         if !self.has_power(&validator_key)? {
+            println!("Validator unpowered: {}", validator_key);
+
             return abort(Error::UnpoweredValidator(validator_key));
         }
 
