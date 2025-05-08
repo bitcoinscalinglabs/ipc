@@ -420,12 +420,16 @@ where
 
     /// Replaces the current validators cache with a new one.
     async fn refresh_validators_cache(&self) -> Result<()> {
-        let mut state = self
-            .read_only_view(None)?
-            .ok_or_else(|| anyhow!("exec state should be present"))?;
-
-        let mut cache = self.validators_cache.lock().await;
-        *cache = Some(ValidatorCache::new_from_state(&mut state)?);
+        // Copied from: https://github.com/consensus-shipyard/ipc/pull/1234/files
+        // https://github.com/consensus-shipyard/ipc/pull/1234/commits/1ba6c9a64c97a81478f52cea0c66f01dac4768a0
+        // TODO: This should be read only state, but we can't use the read-only view here
+        // because it hasn't been committed to state store yet.
+        self.modify_exec_state(|mut s| async {
+            let mut cache = self.validators_cache.lock().await;
+            *cache = Some(ValidatorCache::new_from_state(&mut s.1)?);
+            Ok((s, ()))
+        })
+        .await?;
         Ok(())
     }
 
