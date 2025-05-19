@@ -1548,6 +1548,24 @@ impl TopDownFinalityQuery for BtcSubnetManager {
                     )]),
                     validator: validator_address,
                 }
+            } else if change_details.get("withdraw").is_some() {
+                let amount = change_details
+                    .get("withdraw")
+                    .and_then(|params| params.get("amount"))
+                    .and_then(Value::as_u64)
+                    .ok_or_else(|| anyhow!("Field amount could not be found or parsed"))?;
+
+                // TODO check overflow
+                let amount = amount * ipc_api::SATOSHI_TO_ATTO;
+                // let amount = token_amount_from_satoshi(amount);
+
+                StakingChange {
+                    op: StakingOperation::Withdraw,
+                    payload: ethers::abi::encode(&[ethers::abi::Token::Uint(
+                        ethereum_types::U256::from(amount),
+                    )]),
+                    validator: validator_address,
+                }
             } else {
                 return Err(anyhow!("Unknown operation in change"));
             };
