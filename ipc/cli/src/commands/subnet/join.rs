@@ -196,28 +196,70 @@ impl CommandLineHandler for StakeSubnet {
 
         let mut provider = get_ipc_provider(global)?;
         let subnet = SubnetID::from_str(&arguments.subnet)?;
-        let from = match &arguments.from {
-            Some(address) => Some(require_fil_addr_from_str(address)?),
-            None => None,
-        };
-        provider
-            .stake(subnet, from, f64_to_token_amount(arguments.collateral)?)
-            .await
+
+        match &arguments.network_specific {
+            StakeSpecifiedNetwork::Fevm(fevm_args) => {
+                let from = match &fevm_args.from {
+                    Some(address) => Some(require_fil_addr_from_str(address)?),
+                    None => None,
+                };
+                provider
+                    .stake(subnet, from, f64_to_token_amount(fevm_args.collateral)?)
+                    .await?;
+            }
+            StakeSpecifiedNetwork::Btc(btc_args) => {
+                let validator_address = match &btc_args.validator_address {
+                    Some(address) => Some(require_fil_addr_from_str(address)?),
+                    None => None,
+                };
+                provider
+                    .stake(
+                        subnet,
+                        validator_address,
+                        token_amount_from_satoshi(btc_args.collateral),
+                    )
+                    .await?;
+            }
+        }
+
+        Ok(())
     }
 }
 
 #[derive(Debug, Args)]
 #[command(name = "stake", about = "Add collateral to an already joined subnet")]
 pub struct StakeSubnetArgs {
-    #[arg(long, help = "The address that stakes in the subnet")]
-    pub from: Option<String>,
     #[arg(long, help = "The subnet to add collateral to")]
     pub subnet: String,
+    #[command(subcommand)]
+    pub network_specific: StakeSpecifiedNetwork,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum StakeSpecifiedNetwork {
+    #[command(name = "fevm")]
+    Fevm(FevmStakeArgs),
+    #[command(name = "btc")]
+    Btc(BtcStakeArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct FevmStakeArgs {
+    #[arg(long, help = "The address that stakes in the subnet")]
+    pub from: Option<String>,
     #[arg(
         long,
         help = "The collateral to stake in the subnet (in whole FIL units)"
     )]
     pub collateral: f64,
+}
+
+#[derive(Debug, Args)]
+pub struct BtcStakeArgs {
+    #[arg(long, help = "The address that stakes in the subnet")]
+    pub validator_address: Option<String>,
+    #[arg(long, help = "The collateral to stake in the subnet (in sats)")]
+    pub collateral: u64,
 }
 
 /// The command to unstake in a subnet from validator
@@ -232,13 +274,25 @@ impl CommandLineHandler for UnstakeSubnet {
 
         let mut provider = get_ipc_provider(global)?;
         let subnet = SubnetID::from_str(&arguments.subnet)?;
-        let from = match &arguments.from {
-            Some(address) => Some(require_fil_addr_from_str(address)?),
-            None => None,
-        };
-        provider
-            .unstake(subnet, from, f64_to_token_amount(arguments.collateral)?)
-            .await
+
+        match &arguments.network_specific {
+            UnstakeSpecifiedNetwork::Fevm(fevm_args) => {
+                let from = match &fevm_args.from {
+                    Some(address) => Some(require_fil_addr_from_str(address)?),
+                    None => None,
+                };
+                provider
+                    .unstake(subnet, from, f64_to_token_amount(fevm_args.collateral)?)
+                    .await?;
+            }
+            UnstakeSpecifiedNetwork::Btc(btc_args) => {
+                provider
+                    .unstake(subnet, None, token_amount_from_satoshi(btc_args.collateral))
+                    .await?;
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -248,13 +302,33 @@ impl CommandLineHandler for UnstakeSubnet {
     about = "Remove collateral to an already joined subnet"
 )]
 pub struct UnstakeSubnetArgs {
-    #[arg(long, help = "The address that unstakes in the subnet")]
-    pub from: Option<String>,
     #[arg(long, help = "The subnet to release collateral from")]
     pub subnet: String,
+    #[command(subcommand)]
+    pub network_specific: UnstakeSpecifiedNetwork,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum UnstakeSpecifiedNetwork {
+    #[command(name = "fevm")]
+    Fevm(FevmUnstakeArgs),
+    #[command(name = "btc")]
+    Btc(BtcUnstakeArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct FevmUnstakeArgs {
+    #[arg(long, help = "The address that unstakes in the subnet")]
+    pub from: Option<String>,
     #[arg(
         long,
         help = "The collateral to unstake from the subnet (in whole FIL units)"
     )]
     pub collateral: f64,
+}
+
+#[derive(Debug, Args)]
+pub struct BtcUnstakeArgs {
+    #[arg(long, help = "The collateral to unstake from the subnet (in sats)")]
+    pub collateral: u64,
 }

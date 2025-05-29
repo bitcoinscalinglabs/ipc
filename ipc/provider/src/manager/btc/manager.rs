@@ -245,7 +245,7 @@ impl SubnetManager for BtcSubnetManager {
             "id": 1,
             "params": {
                 "subnet_id":        params.subnet_id.to_string(),
-                "pubkey":           params.sender_public_key,
+                "pubkey":           params.public_key,
                 "collateral":       token_amount_to_satoshi(params.collateral)?,
                 "ip":               params.ip,
                 "backup_address":   params.backup_address,
@@ -367,24 +367,126 @@ impl SubnetManager for BtcSubnetManager {
         todo!()
     }
 
-    async fn stake(
-        &self,
-        subnet: SubnetID,
-        _from: Address,
-        _collaterall: TokenAmount,
-    ) -> Result<()> {
-        tracing::info!("staking subnet on btc with params: {subnet:?}");
-        todo!()
+    async fn stake(&self, params: JoinParams) -> Result<()> {
+        let params: BtcJoinParams = match params {
+            JoinParams::Eth(_) => return Err(anyhow!("Unsupported subnet configuration")),
+            JoinParams::Btc(params) => params,
+        };
+
+        tracing::info!("staking subnet on btc with params: {params:?}");
+        let body = json!({
+            "jsonrpc": "2.0",
+            "method": "stakecollateral",
+            "id": 1,
+            "params": {
+                "subnet_id":     params.subnet_id.to_string(),
+                "amount":        token_amount_to_satoshi(params.collateral)?,
+                "pubkey":        params.public_key,
+            }
+        });
+        tracing::info!("Request body: {body:?}");
+
+        let resp = self
+            .client
+            .post(self.rpc_url.clone())
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(anyhow!(
+                "stakecollateral request failed with status: {}",
+                resp.status()
+            ));
+        }
+
+        let data = resp.json::<Value>().await?;
+
+        if let Some(err_obj) = data.get("error") {
+            let code = err_obj
+                .get("code")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            let message = err_obj
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("Unknown error");
+            let error_data = err_obj
+                .get("data")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            return Err(anyhow!(
+                "JSON-RPC error: code={}, message={}, details={}",
+                code,
+                message,
+                error_data
+            ));
+        }
+
+        tracing::info!("stakecollateral request successful");
+        Ok(())
     }
 
-    async fn unstake(
-        &self,
-        subnet: SubnetID,
-        _from: Address,
-        _collateral: TokenAmount,
-    ) -> Result<()> {
-        tracing::info!("unstaking subnet on btc with params: {subnet:?}");
-        todo!()
+    async fn unstake(&self, params: JoinParams) -> Result<()> {
+        let params: BtcJoinParams = match params {
+            JoinParams::Eth(_) => return Err(anyhow!("Unsupported subnet configuration")),
+            JoinParams::Btc(params) => params,
+        };
+
+        tracing::info!("unstaking subnet on btc with params: {params:?}");
+
+        // We don't need to send the public key because the RPC method
+        // will use the one from the wallet.
+        let body = json!({
+            "jsonrpc": "2.0",
+            "method": "unstakecollateral",
+            "id": 1,
+            "params": {
+                "subnet_id":     params.subnet_id.to_string(),
+                "amount":        token_amount_to_satoshi(params.collateral)?,
+            }
+        });
+        tracing::info!("Request body: {body:?}");
+
+        let resp = self
+            .client
+            .post(self.rpc_url.clone())
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(anyhow!(
+                "unstakecollateral request failed with status: {}",
+                resp.status()
+            ));
+        }
+
+        let data = resp.json::<Value>().await?;
+
+        if let Some(err_obj) = data.get("error") {
+            let code = err_obj
+                .get("code")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            let message = err_obj
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("Unknown error");
+            let error_data = err_obj
+                .get("data")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            return Err(anyhow!(
+                "JSON-RPC error: code={}, message={}, details={}",
+                code,
+                message,
+                error_data
+            ));
+        }
+
+        tracing::info!("unstakecollateral request successful");
+        Ok(())
     }
 
     async fn leave_subnet(&self, subnet: SubnetID, _from: Address) -> Result<()> {

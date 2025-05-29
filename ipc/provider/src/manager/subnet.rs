@@ -55,12 +55,11 @@ pub trait SubnetManager:
 
     /// Allows validators that have already joined the subnet to stake more collateral
     /// and increase their power in the subnet.
-    async fn stake(&self, subnet: SubnetID, from: Address, collateral: TokenAmount) -> Result<()>;
+    async fn stake(&self, params: JoinParams) -> Result<()>;
 
     /// Allows validators that have already joined the subnet to unstake collateral
     /// and reduce their power in the subnet.
-    async fn unstake(&self, subnet: SubnetID, from: Address, collateral: TokenAmount)
-        -> Result<()>;
+    async fn unstake(&self, params: JoinParams) -> Result<()>;
 
     /// Sends a request to leave a subnet from a wallet address.
     async fn leave_subnet(&self, subnet: SubnetID, from: Address) -> Result<()>;

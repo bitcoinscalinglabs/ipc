@@ -438,23 +438,31 @@ impl SubnetManager for EthSubnetManager {
         Ok(())
     }
 
-    async fn stake(&self, subnet: SubnetID, from: Address, collateral: TokenAmount) -> Result<()> {
-        let collateral = collateral
+    async fn stake(&self, params: JoinParams) -> Result<()> {
+        let params: EthJoinParams = match params {
+            JoinParams::Eth(params) => params,
+            JoinParams::Btc(_) => return Err(anyhow!("Unsupported subnet configuration")),
+        };
+
+        let collateral = params
+            .collateral
             .atto()
             .to_u128()
             .ok_or_else(|| anyhow!("invalid collateral amount"))?;
 
-        let address = contract_address_from_subnet(&subnet)?;
+        let address = contract_address_from_subnet(&params.subnet_id)?;
         tracing::info!(
             "interacting with evm subnet contract: {address:} with collateral: {collateral:}"
         );
 
-        let signer = Arc::new(self.get_signer_with_fee_estimator(&from)?);
+        let signer = Arc::new(self.get_signer_with_fee_estimator(&params.sender)?);
         let contract =
             subnet_actor_manager_facet::SubnetActorManagerFacet::new(address, signer.clone());
 
         let mut txn = contract.stake(U256::from(collateral));
-        txn = self.handle_txn_token(&subnet, txn, collateral, 0).await?;
+        txn = self
+            .handle_txn_token(&params.subnet_id, txn, collateral, 0)
+            .await?;
 
         let txn = extend_call_with_pending_block(txn).await?;
 
@@ -463,23 +471,24 @@ impl SubnetManager for EthSubnetManager {
         Ok(())
     }
 
-    async fn unstake(
-        &self,
-        subnet: SubnetID,
-        from: Address,
-        collateral: TokenAmount,
-    ) -> Result<()> {
-        let collateral = collateral
+    async fn unstake(&self, params: JoinParams) -> Result<()> {
+        let params: EthJoinParams = match params {
+            JoinParams::Eth(params) => params,
+            JoinParams::Btc(_) => return Err(anyhow!("Unsupported subnet configuration")),
+        };
+
+        let collateral = params
+            .collateral
             .atto()
             .to_u128()
             .ok_or_else(|| anyhow!("invalid collateral amount"))?;
 
-        let address = contract_address_from_subnet(&subnet)?;
+        let address = contract_address_from_subnet(&params.subnet_id)?;
         tracing::info!(
             "interacting with evm subnet contract: {address:} with collateral: {collateral:}"
         );
 
-        let signer = Arc::new(self.get_signer_with_fee_estimator(&from)?);
+        let signer = Arc::new(self.get_signer_with_fee_estimator(&params.sender)?);
         let contract =
             subnet_actor_manager_facet::SubnetActorManagerFacet::new(address, signer.clone());
 
