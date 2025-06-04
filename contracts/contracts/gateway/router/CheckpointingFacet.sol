@@ -6,7 +6,7 @@ import {BottomUpCheckpoint} from "../../structs/CrossNet.sol";
 import {LibGateway} from "../../lib/LibGateway.sol";
 import {LibQuorum} from "../../lib/LibQuorum.sol";
 import {Subnet} from "../../structs/Subnet.sol";
-import {BitcoinCheckpoint} from "../../structs/Bitcoin.sol";
+import {BitcoinCheckpoint, BitcoinBootstrapHandover} from "../../structs/Bitcoin.sol";
 import {QuorumObjKind} from "../../structs/Quorum.sol";
 import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 
@@ -23,6 +23,7 @@ import {ActivityRollupRecorded, FullActivityRollup} from "../../structs/Activity
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
 event BitcoinCheckpointAdded(uint256 indexed height, address indexed signatory, bytes32 indexed psbtHash);
+event BitcoinBootstrapHandoverAdded(address indexed signatory, bytes32 indexed psbtHash);
 
 contract CheckpointingFacet is GatewayActorModifiers {
     using SubnetIDHelper for SubnetID;
@@ -267,6 +268,106 @@ contract CheckpointingFacet is GatewayActorModifiers {
         }
 
         return (psbt, batchTransferTx, signatories, signatures);
+    }
+
+    function addBitcoinBootstrapHandoverSignature(
+        bytes calldata psbt,
+        bytes calldata signatures
+    ) external {
+
+        address signatory = msg.sender;
+        bytes32 psbtHash = keccak256(psbt);
+
+        // Check if this is a new PSBT hash
+        bool hashExists = false;
+        for (uint i = 0; i < s.bitcoinBootstrapHandoverPsbtHashes.length; i++) {
+            if (s.bitcoinBootstrapHandoverPsbtHashes[i] == psbtHash) {
+                hashExists = true;
+                break;
+            }
+        }
+        if (!hashExists) {
+            s.bitcoinBootstrapHandoverPsbtHashes.push(psbtHash);
+        }
+
+        BitcoinBootstrapHandover storage btcHandover = s.bitcoinBootstrapHandovers[psbtHash];
+        // Set the PSBT if it hasn't been set yet
+        if (btcHandover.psbt.length == 0) {
+            btcHandover.psbt = psbt;
+        }
+
+        // Check if sender is already a signatory
+        bool alreadySigned = false;
+        for (uint i = 0; i < btcHandover.signatories.length; i++) {
+            if (btcHandover.signatories[i] == signatory) {
+                alreadySigned = true;
+                break;
+            }
+        }
+
+        // Add the signature to the Bitcoin handover transaction if not already a signatory
+        if (alreadySigned) {
+            revert SignatureReplay();
+        } else {
+            btcHandover.signatories.push(signatory);
+            btcHandover.signatures[signatory] = signatures;
+            emit BitcoinBootstrapHandoverAdded(signatory, keccak256(psbt));
+        }
+    }
+
+    /// @notice Get the Bitcoin bootstrap handover with the most signatures.
+    /// @return psbt - The base64 of the PSBT with the most signatures.
+    /// @return signatories - The list of validators who signed.
+    /// @return signatures - The list of signatures corresponding to the signatories.
+    function getBitcoinBootstrapHandoverSignatures(
+    )
+        external
+        view
+        returns (
+            bytes memory psbt,
+            address[] memory signatories,
+            bytes[] memory signatures
+        )
+    {
+        bytes32[] storage hashes = s.bitcoinBootstrapHandoverPsbtHashes;
+        if (hashes.length == 0) {
+            // No Bitcoin handovers found
+            return (new bytes(0), new address[](0), new bytes[](0));
+        }
+
+        // Find the checkpoint with the most signatures
+        bytes32 mostSignedPsbtHash;
+        uint256 maxSignatures = 0;
+
+        for (uint256 i = 0; i < hashes.length; i++) {
+            bytes32 currentHash = hashes[i];
+            BitcoinBootstrapHandover storage currentHandover = s.bitcoinBootstrapHandovers[currentHash];
+
+            uint256 signatureCount = currentHandover.signatories.length;
+
+            // When multiple PSBTs have the same number of signatures, keep the first
+            if (signatureCount > maxSignatures) {
+                maxSignatures = signatureCount;
+                mostSignedPsbtHash = currentHash;
+            }
+        }
+
+        // Get the handover with the most signatures
+        BitcoinBootstrapHandover storage btcHandover = s.bitcoinBootstrapHandovers[mostSignedPsbtHash];
+
+        // Return the PSBT
+        psbt = btcHandover.psbt;
+
+        // Return signatories
+        signatories = btcHandover.signatories;
+
+        // Map signatories to their signatures
+        signatures = new bytes[](signatories.length);
+        for (uint256 i = 0; i < signatories.length; i++) {
+            signatures[i] = btcHandover.signatures[signatories[i]];
+        }
+
+        return (psbt, signatories, signatures);
     }
 
     /// @notice submit a batch of cross-net messages for execution.

@@ -409,6 +409,58 @@ where
     Ok(())
 }
 
+pub async fn broadcast_bitcoin_signature_for_bootstrap_handover<C, DB>(
+    broadcaster: &Broadcaster<C>,
+    gateway: &GatewayCaller<DB>,
+    subnet_id: Option<ipc_api::subnet_id::SubnetID>,
+    parent_manager: Option<ipc_provider::manager::BtcSubnetManager>,
+    chain_id: ChainID,
+) -> anyhow::Result<()>
+where
+    C: Client + Clone + Send + Sync + 'static,
+    DB: Blockstore + Send + Sync + Clone + 'static,
+{
+    let subnet_id = match &subnet_id {
+        Some(subnet_id) => subnet_id,
+        None => {
+            return Err(anyhow!(
+                "broadcast_bitcoin_signature_for_bootstrap_handover needs the subnet_id of the current subnet"
+            ))
+        }
+    };
+    let parent_manager = match &parent_manager {
+        Some(parent_manager) => parent_manager,
+        None => {
+            return Err(anyhow!(
+                "broadcast_bitcoin_signature_for_bootstrap_handover needs the parent manager"
+            ))
+        }
+    };
+
+    let bootstrap_handover_psbt = parent_manager
+        .get_bootstrap_handover_transaction(subnet_id)
+        .await?;
+    tracing::info!(
+        "interpreter obtained bootstrap-handover PSBT from bitcoin provider: {bootstrap_handover_psbt:?}"
+    );
+
+    let calldata = gateway
+        .add_bitcoin_bootstrap_handover_signature_calldata(bootstrap_handover_psbt)
+        .context("failed to produce bitcoin bootstrap-handover signature calldata")?;
+
+    let tx_hash = broadcaster
+        .fevm_invoke(Address::from(gateway.addr()), calldata, chain_id)
+        .await
+        .context("failed to broadcast bitcoin bootstrap-handover signature")?;
+
+    tracing::info!(
+        tx_hash = tx_hash.to_string(),
+        "broadcasted bitcoin bootstrap-handover signature"
+    );
+
+    Ok(())
+}
+
 /// As a validator, sign the checkpoint and broadcast a transaction to add our signature to the ledger.
 pub async fn broadcast_signature<C, DB>(
     broadcaster: &Broadcaster<C>,

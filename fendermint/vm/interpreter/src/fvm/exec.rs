@@ -220,6 +220,43 @@ where
                 });
             });
 
+        let height = state.block_height();
+
+        // When the subnet starts, we need to broadcast the bootstrap-handover signature
+        // TODO(bitcoin):
+        // We are also not checking whether the validator has a positive voting power,
+        // probably not needed, but the code for checkpoint signatures does it.
+        if height == 10 {
+            if let Some(ref ctx) = self.validator_ctx {
+                if !self.syncing().await {
+                    let validator_ctx = ctx.clone();
+                    let gateway = self.gateway.clone();
+                    let subnet_id = self.subnet_id.clone();
+                    let parent_manager = self.parent_manager.clone();
+                    let chain_id = state.chain_id();
+
+                    tokio::spawn(async move {
+                        let res = checkpoint::broadcast_bitcoin_signature_for_bootstrap_handover(
+                            &validator_ctx.broadcaster,
+                            &gateway,
+                            subnet_id,
+                            parent_manager,
+                            chain_id,
+                        )
+                        .await;
+
+                        if let Err(e) = res {
+                            tracing::error!(error =? e, "error broadcasting bootstrap-handover signature");
+                        } else {
+                            tracing::info!(
+                                "broadcasted bootstrap-handover signature at height {height:?}"
+                            );
+                        }
+                    });
+                }
+            }
+        }
+
         let updates = if let Some((checkpoint, updates)) =
             checkpoint::maybe_create_checkpoint(&self.gateway, &mut state, &mut block_end_events)
                 .context("failed to create checkpoint")?
