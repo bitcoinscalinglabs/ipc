@@ -49,7 +49,9 @@ use ipc_api::checkpoint::{
     Signature,
 };
 use ipc_api::cross::{IpcEnvelope, IpcMsgKind};
-use ipc_api::staking::{StakingChange, StakingChangeRequest, StakingOperation, ValidatorInfo};
+use ipc_api::staking::{
+    StakingChange, StakingChangeRequest, StakingOperation, ValidatorInfo, ValidatorStakingInfo,
+};
 use ipc_api::subnet_id::{NetworkType, SubnetID, BTC_NAMESPACE};
 
 #[derive(Clone)]
@@ -832,7 +834,83 @@ impl SubnetManager for BtcSubnetManager {
 
     async fn list_validators(&self, subnet: &SubnetID) -> Result<Vec<(Address, ValidatorInfo)>> {
         tracing::info!("list validators on btc with params: {subnet:?}");
-        todo!()
+
+        let body = json!({
+            "jsonrpc": "2.0",
+            "method": "getsubnet",
+            "id": 1,
+            "params": {
+                "subnet_id": subnet.to_string(),
+            }
+        });
+
+        let resp = self
+            .client
+            .post(self.rpc_url.clone())
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(anyhow!(
+                "btc getsubnet request failed with status: {}",
+                resp.status()
+            ));
+        }
+
+        let data = resp.json::<Value>().await?;
+
+        if let Some(err_obj) = data.get("error") {
+            let code = err_obj
+                .get("code")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            let message = err_obj
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("Unknown error");
+            let error_data = err_obj
+                .get("data")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            return Err(anyhow!(
+                "JSON-RPC error: code={}, message={}, details={}",
+                code,
+                message,
+                error_data
+            ));
+        }
+
+        let result = data
+            .get("result")
+            .ok_or_else(|| anyhow!("No result found"))?;
+
+        let mut validators = Vec::new();
+
+        // parse current committee from response
+        let current_committee = result
+            .get("committee")
+            .and_then(|v| v.get("validators"))
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow!("Field committee.validators not found in the response"))?;
+
+        validators.extend(get_validators_from_response(current_committee, true)?);
+
+        // parse waiting committee from response, if it exists
+        match result
+            .get("waiting_committee")
+            .and_then(|v| v.get("validators"))
+            .and_then(Value::as_array)
+        {
+            Some(waiting_committee) => {
+                validators.extend(get_validators_from_response(waiting_committee, false)?);
+            }
+            None => {
+                tracing::info!("no waiting committee found in response");
+            }
+        }
+
+        Ok(validators)
     }
 
     async fn set_federated_power(
@@ -1946,6 +2024,37 @@ impl ValidatorRewarder for BtcSubnetManager {
         );
         todo!()
     }
+}
+
+fn get_validators_from_response(
+    committee: &Vec<Value>,
+    is_current_committee: bool,
+) -> Result<Vec<(Address, ValidatorInfo)>> {
+    let validators = committee
+        .iter()
+        .filter_map(|v| {
+            let subnet_address = v.get("subnet_address")?.as_str()?;
+            let addr = ethers::types::Address::from_str(subnet_address).ok()?;
+            let addr = ethers_address_to_fil_address(&addr).ok()?;
+
+            let collateral = v.get("collateral")?.as_u64()?;
+            let weight = token_amount_from_satoshi(collateral);
+
+            let v = ValidatorInfo {
+                staking: ValidatorStakingInfo {
+                    confirmed_collateral: weight.clone(),
+                    total_collateral: weight,
+                    metadata: Vec::new(),
+                },
+                is_active: is_current_committee,
+                is_waiting: !is_current_committee,
+            };
+
+            Some((addr, v))
+        })
+        .collect();
+
+    Ok(validators)
 }
 
 #[cfg(test)]

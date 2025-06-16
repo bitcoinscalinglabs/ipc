@@ -57,9 +57,9 @@ impl TryFrom<lib_staking_change_log::NewStakingChangeRequestFilter> for StakingC
 /// The staking validator information
 #[derive(Clone, Debug)]
 pub struct ValidatorStakingInfo {
-    confirmed_collateral: TokenAmount,
-    total_collateral: TokenAmount,
-    metadata: Vec<u8>,
+    pub confirmed_collateral: TokenAmount,
+    pub total_collateral: TokenAmount,
+    pub metadata: Vec<u8>,
 }
 
 impl Display for ValidatorStakingInfo {
