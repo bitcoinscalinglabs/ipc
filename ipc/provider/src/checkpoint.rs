@@ -153,6 +153,7 @@ impl BottomUpCheckpointManager {
         tracing::info!("launching {self} for {submitter:?}");
 
         // Bootstrap handover must be submitted before the first checkpoint.
+        let mut boostrap_handover_retries = 3;
         loop {
             match self.submit_bootstrap_handover().await {
                 Ok(()) => {
@@ -161,6 +162,11 @@ impl BottomUpCheckpointManager {
                 }
                 Err(e) => {
                     tracing::error!("cannot submit bootstrap handover due to: {e}");
+                    boostrap_handover_retries -= 1;
+                    if boostrap_handover_retries == 0 {
+                        tracing::error!("failed to submit bootstrap handover after 3 retries");
+                        break;
+                    }
                 }
             }
             tokio::time::sleep(submission_interval).await;
