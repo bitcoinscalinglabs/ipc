@@ -6,7 +6,7 @@ import {QuorumMap} from "../structs/Quorum.sol";
 import {BottomUpCheckpoint, BottomUpMsgBatch, IpcEnvelope, ParentFinality} from "../structs/CrossNet.sol";
 import {SubnetID, Subnet, ParentValidatorsTracker} from "../structs/Subnet.sol";
 import {Membership} from "../structs/Subnet.sol";
-import {BitcoinCheckpoint} from "../structs/Bitcoin.sol";
+import {BitcoinCheckpoint, BitcoinBootstrapHandover} from "../structs/Bitcoin.sol";
 import {AccountHelper} from "../lib/AccountHelper.sol";
 import {FilAddress} from "fevmate/contracts/utils/FilAddress.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
@@ -77,6 +77,8 @@ struct GatewayActorStorage {
     // =========== Bitcoin ===========
     mapping(uint256 => mapping(bytes32 => BitcoinCheckpoint)) bitcoinCheckpoints;
     mapping(uint256 => bytes32[]) bitcoinCheckpointPsbtHashes;
+    mapping(bytes32 => BitcoinBootstrapHandover) bitcoinBootstrapHandovers;
+    bytes32[] bitcoinBootstrapHandoverPsbtHashes;
 }
 
 library LibGatewayActorStorage {

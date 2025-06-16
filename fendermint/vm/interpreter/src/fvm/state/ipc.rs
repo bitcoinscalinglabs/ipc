@@ -235,7 +235,7 @@ impl<DB: Blockstore + Clone> GatewayCaller<DB> {
     pub fn add_bitcoin_checkpoint_signature_calldata(
         &self,
         checkpoint: &checkpointing_facet::BottomUpCheckpoint,
-        checkpoint_psbt: ipc_api::checkpoint::PsbtSignature,
+        checkpoint_psbt: ipc_api::checkpoint::BitcoinCheckpointSignature,
     ) -> anyhow::Result<et::Bytes> {
         let unsigned_psbt = checkpoint_psbt.unsigned_psbt.clone().decode()?;
         let transfer_tx = checkpoint_psbt.transfer_tx.clone().decode()?;
@@ -261,6 +261,33 @@ impl<DB: Blockstore + Clone> GatewayCaller<DB> {
         let calldata = call
             .calldata()
             .ok_or_else(|| anyhow!("no calldata for adding bitcoin signature"))?;
+
+        Ok(calldata)
+    }
+
+    pub fn add_bitcoin_bootstrap_handover_signature_calldata(
+        &self,
+        handover_psbt: ipc_api::checkpoint::BitcoinHandoverSignature,
+    ) -> anyhow::Result<et::Bytes> {
+        let unsigned_psbt = handover_psbt.unsigned_psbt.clone().decode()?;
+
+        tracing::debug!(
+            "Encoded arguments to add_bitcoin_bootstrap_handover_signature(): {:?}, {:?}",
+            handover_psbt.unsigned_psbt.0,
+            hex::encode(handover_psbt.signature.clone()),
+        );
+
+        let call = self
+            .checkpointing
+            .contract()
+            .add_bitcoin_bootstrap_handover_signature(
+                et::Bytes::from(unsigned_psbt),
+                et::Bytes::from(handover_psbt.signature.clone()),
+            );
+
+        let calldata = call.calldata().ok_or_else(|| {
+            anyhow!("no calldata for adding bitcoin bootstrap-handover signature")
+        })?;
 
         Ok(calldata)
     }

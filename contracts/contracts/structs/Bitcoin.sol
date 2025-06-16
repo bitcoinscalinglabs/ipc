@@ -11,3 +11,12 @@ struct BitcoinCheckpoint {
     /// @dev The list of signatures.
     mapping(address => bytes) signatures;
 }
+
+struct BitcoinBootstrapHandover {
+    /// @dev The base64 of the psbt.
+    bytes psbt;
+    /// @dev The list of validators who signed.
+    address[] signatories;
+    /// @dev The list of signatures.
+    mapping(address => bytes) signatures;
+}
