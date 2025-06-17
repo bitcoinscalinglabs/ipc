@@ -106,6 +106,7 @@ pub struct BtcConstructParams {
     pub validator_whitelist: Vec<String>,
 }
 
+// Used by functions join_subnet(), stake(), unstake().
 pub enum JoinParams {
     Eth(EthJoinParams),
     Btc(BtcJoinParams),
@@ -121,8 +122,8 @@ pub struct EthJoinParams {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BtcJoinParams {
     pub subnet_id: SubnetID,
-    // The x coordinate of the secp256k1 public key of the sender, hex encoded
-    pub sender_public_key: String,
+    // The x coordinate of the secp256k1 public key of the validator that joins/stakes, hex encoded
+    pub public_key: String,
     pub collateral: TokenAmount,
     pub ip: String,
     pub backup_address: String,

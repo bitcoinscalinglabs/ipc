@@ -275,19 +275,12 @@ impl IpcProvider {
         let parent_id = subnet.parent().ok_or_else(|| anyhow!("no parent found"))?;
         let parent_conn = self.get_connection(&parent_id)?;
 
-        let parent_config = parent_conn.subnet();
+        let parent = parent_conn.subnet();
         let sender = self.check_sender(from)?;
-        let addr_payload = sender.payload();
-        let addr = payload_to_evm_address(addr_payload)?;
 
-        let keystore = self.evm_wallet()?;
-        let key_info = keystore
-            .read()
-            .map_err(|e| anyhow::anyhow!("Failed to get the lock for evm keystore: {}", e))?
-            .get(&addr.into())?
-            .ok_or_else(|| anyhow!("key does not exist"))?;
+        let key_info = self.get_key_from_sender(sender)?;
 
-        let params = match parent_config.config {
+        let params = match parent.config {
             config::subnet::SubnetConfig::Fevm(_) => {
                 let sk = libsecp256k1::SecretKey::parse_slice(key_info.private_key())?;
                 let public_key = libsecp256k1::PublicKey::from_secret_key(&sk);
@@ -319,7 +312,7 @@ impl IpcProvider {
 
                 JoinParams::Btc(BtcJoinParams {
                     subnet_id: subnet,
-                    sender_public_key: hex_public_key,
+                    public_key: hex_public_key,
                     collateral,
                     ip,
                     backup_address,
@@ -370,11 +363,59 @@ impl IpcProvider {
         collateral: TokenAmount,
     ) -> anyhow::Result<()> {
         let parent = subnet.parent().ok_or_else(|| anyhow!("no parent found"))?;
-        let conn = self.get_connection(&parent)?;
+        let parent_conn = self.get_connection(&parent)?;
 
+        let parent = parent_conn.subnet();
         let sender = self.check_sender(from)?;
 
-        conn.manager().stake(subnet, sender, collateral).await
+        let key_info = self.get_key_from_sender(sender)?;
+
+        let params = match parent.config {
+            config::subnet::SubnetConfig::Fevm(_) => {
+                let sk = libsecp256k1::SecretKey::parse_slice(key_info.private_key())?;
+                let public_key = libsecp256k1::PublicKey::from_secret_key(&sk);
+                let hex_public_key = hex::encode(public_key.serialize());
+                log::info!("staking in subnet using public key: {hex_public_key:?}");
+
+                JoinParams::Eth(EthJoinParams {
+                    subnet_id: subnet,
+                    sender: sender,
+                    collateral,
+                    metadata: Vec::new(),
+                })
+            }
+            config::subnet::SubnetConfig::Btc(_) => {
+                let sk = ipc_wallet::parse_and_validate_secret_key(key_info.private_key())?;
+                let public_key = ipc_wallet::get_xonly_public_key_serialized(&sk)?;
+                let hex_public_key = hex::encode(public_key);
+                log::info!("staking in subnet using public key: {hex_public_key:?}");
+
+                JoinParams::Btc(BtcJoinParams {
+                    subnet_id: subnet,
+                    public_key: hex_public_key,
+                    collateral,
+                    ip: String::new(),
+                    backup_address: String::new(),
+                })
+            }
+        };
+
+        parent_conn.manager().stake(params).await
+    }
+
+    fn get_key_from_sender(
+        &mut self,
+        sender: Address,
+    ) -> Result<ipc_wallet::EvmKeyInfo, anyhow::Error> {
+        let addr_payload = sender.payload();
+        let addr = payload_to_evm_address(addr_payload)?;
+        let keystore = self.evm_wallet()?;
+        let key_info = keystore
+            .read()
+            .map_err(|e| anyhow::anyhow!("Failed to get the lock for evm keystore: {}", e))?
+            .get(&addr.into())?
+            .ok_or_else(|| anyhow!("key does not exist"))?;
+        Ok(key_info)
     }
 
     pub async fn unstake(
@@ -384,11 +425,39 @@ impl IpcProvider {
         collateral: TokenAmount,
     ) -> anyhow::Result<()> {
         let parent = subnet.parent().ok_or_else(|| anyhow!("no parent found"))?;
-        let conn = self.get_connection(&parent)?;
+        let parent_conn = self.get_connection(&parent)?;
+        let parent = parent_conn.subnet();
 
-        let sender = self.check_sender(from)?;
+        let params = match parent.config {
+            config::subnet::SubnetConfig::Fevm(_) => {
+                let sender = self.check_sender(from)?;
+                let key_info = self.get_key_from_sender(sender)?;
+                let sk = libsecp256k1::SecretKey::parse_slice(key_info.private_key())?;
+                let public_key = libsecp256k1::PublicKey::from_secret_key(&sk);
+                let hex_public_key = hex::encode(public_key.serialize());
+                log::info!("unstaking in subnet using public key: {hex_public_key:?}");
 
-        conn.manager().unstake(subnet, sender, collateral).await
+                JoinParams::Eth(EthJoinParams {
+                    subnet_id: subnet,
+                    sender: sender,
+                    collateral,
+                    metadata: Vec::new(),
+                })
+            }
+            config::subnet::SubnetConfig::Btc(_) => {
+                log::info!("unstaking in subnet with btc parent");
+
+                JoinParams::Btc(BtcJoinParams {
+                    subnet_id: subnet,
+                    public_key: String::new(),
+                    collateral,
+                    ip: String::new(),
+                    backup_address: String::new(),
+                })
+            }
+        };
+
+        parent_conn.manager().unstake(params).await
     }
 
     pub async fn leave_subnet(

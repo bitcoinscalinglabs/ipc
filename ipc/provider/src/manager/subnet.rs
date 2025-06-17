@@ -55,12 +55,11 @@ pub trait SubnetManager:
 
     /// Allows validators that have already joined the subnet to stake more collateral
     /// and increase their power in the subnet.
-    async fn stake(&self, subnet: SubnetID, from: Address, collateral: TokenAmount) -> Result<()>;
+    async fn stake(&self, params: JoinParams) -> Result<()>;
 
     /// Allows validators that have already joined the subnet to unstake collateral
     /// and reduce their power in the subnet.
-    async fn unstake(&self, subnet: SubnetID, from: Address, collateral: TokenAmount)
-        -> Result<()>;
+    async fn unstake(&self, params: JoinParams) -> Result<()>;
 
     /// Sends a request to leave a subnet from a wallet address.
     async fn leave_subnet(&self, subnet: SubnetID, from: Address) -> Result<()>;
@@ -217,7 +216,14 @@ pub trait SubnetManager:
         &self,
         subnet_id: &SubnetID,
         checkpoint: BottomUpCheckpoint,
-    ) -> Result<ipc_api::checkpoint::PsbtSignature>;
+    ) -> Result<ipc_api::checkpoint::BitcoinCheckpointSignature>;
+
+    /// This function asks the parent subnet (bitcoin) to generate the required transaction for the initial handover.
+    /// It is only required when the parent subnet is bitcoin.
+    async fn get_bootstrap_handover_transaction(
+        &self,
+        subnet_id: &SubnetID,
+    ) -> Result<ipc_api::checkpoint::BitcoinHandoverSignature>;
 
     fn as_any(&self) -> &dyn Any;
 }
@@ -289,7 +295,7 @@ pub trait BottomUpCheckpointRelayer: Send + Sync {
         checkpoint: BottomUpCheckpoint,
         signatures: Vec<Signature>,
         signatories: Vec<Address>,
-        bitcoin_signatures: Option<ipc_api::checkpoint::PsbtSignatureQuorum>,
+        bitcoin_signatures: Option<ipc_api::checkpoint::BitcoinCheckpointSignatureQuorum>,
     ) -> Result<ChainEpoch>;
     /// The last confirmed/submitted checkpoint height.
     async fn last_bottom_up_checkpoint_height(&self, subnet_id: &SubnetID) -> Result<ChainEpoch>;
@@ -304,6 +310,21 @@ pub trait BottomUpCheckpointRelayer: Send + Sync {
     async fn quorum_reached_events(&self, height: ChainEpoch) -> Result<Vec<QuorumReachedEvent>>;
     /// Get the current epoch in the current subnet
     async fn current_epoch(&self) -> Result<ChainEpoch>;
+
+    /// Submit a bootstrap handover signature for the given subnet.
+    /// Used only when the parent subnet is bitcoin.
+    async fn submit_bootstrap_handover(
+        &self,
+        subnet_id: &SubnetID,
+        keystore: Arc<RwLock<PersistentKeyStore<EthKeyAddress>>>,
+        handover_signatures: ipc_api::checkpoint::BitcoinHandoverSignatureQuorum,
+    ) -> Result<ChainEpoch>;
+
+    /// Get the bootstrap handover signatures.
+    async fn get_bootstrap_handover_signatures(
+        &self,
+        height: ChainEpoch,
+    ) -> Result<ipc_api::checkpoint::BitcoinHandoverSignatureQuorum>;
 }
 
 /// The validator reward related functions, such as check reward and claim reward for mining blocks

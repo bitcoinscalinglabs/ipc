@@ -140,6 +140,9 @@ where
         view_provider.set_new_finality(finality.clone(), None)?;
 
         vote_tally.set_finalized(finality.height, finality.block_hash.clone(), None, None)?;
+
+        println!("vote_tally.set_power_table {:#?}", power_table);
+
         vote_tally.set_power_table(power_table.clone())?;
         Ok(())
     })

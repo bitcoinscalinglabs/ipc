@@ -152,12 +152,61 @@ impl BottomUpCheckpointManager {
     pub async fn run(self, submitter: Option<Address>, submission_interval: Duration) {
         tracing::info!("launching {self} for {submitter:?}");
 
+        // Bootstrap handover must be submitted before the first checkpoint.
+        let mut boostrap_handover_retries = 3;
+        loop {
+            match self.submit_bootstrap_handover().await {
+                Ok(()) => {
+                    tracing::info!("submitted bootstrap handover");
+                    break;
+                }
+                Err(e) => {
+                    tracing::error!("cannot submit bootstrap handover due to: {e}");
+                    boostrap_handover_retries -= 1;
+                    if boostrap_handover_retries == 0 {
+                        tracing::error!("failed to submit bootstrap handover after 3 retries");
+                        break;
+                    }
+                }
+            }
+            tokio::time::sleep(submission_interval).await;
+        }
+
         loop {
             if let Err(e) = self.submit_next_epoch(submitter).await {
                 tracing::error!("cannot submit checkpoint due to: {e}");
             }
             tokio::time::sleep(submission_interval).await;
         }
+    }
+
+    async fn submit_bootstrap_handover(&self) -> Result<()> {
+        let current_height = self.child_handler.current_epoch().await?;
+
+        let handover_signatures = self
+            .child_handler
+            .get_bootstrap_handover_signatures(current_height)
+            .await?;
+
+        tracing::info!("handover signatures: {handover_signatures:?}");
+
+        let epoch = self
+            .parent_handler
+            .submit_bootstrap_handover(
+                &self.metadata.child.id,
+                self.keystore.clone(),
+                handover_signatures,
+            )
+            .await
+            .map_err(|e| {
+                anyhow!(
+                    "cannot submit bootstrap handover at height {} due to: {e}",
+                    current_height
+                )
+            })?;
+
+        tracing::info!("submitted bootstrap handover at height {}", epoch);
+        Ok(())
     }
 
     /// Checks if the relayer has already submitted at the next submission epoch, if not it submits it.

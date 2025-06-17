@@ -4,26 +4,23 @@
 [tasks.testnode]
 workspace = false
 dependencies = [
-    "create-log-volume",
-    "testnode-down",
-    "testnode-init",
-    "docker-network-create",
-    "cometbft-init",
-    "fendermint-deps",
-    "testnode-config",
-    "fendermint-start",
-    "cometbft-start",
-    "cometbft-wait",
-    "promtail-start",
-    "ethapi-start",
-    "testnode-report",
+	"create-log-volume",
+	"testnode-down",
+	"testnode-init",
+	"docker-network-create",
+	"cometbft-init",
+	"fendermint-deps",
+	"testnode-config",
+	"fendermint-start",
+	"cometbft-start",
+	"cometbft-wait",
+	"promtail-start",
+	"ethapi-start",
+	"testnode-report",
 ]
 
 [tasks.testnode-init]
-dependencies = [
-    "node-clear",
-    "node-mkdir",
-]
+dependencies = ["node-clear", "node-mkdir"]
 
 [tasks.testnode-clear]
 script = """
@@ -42,37 +39,42 @@ mkdir -p $CMT_DIR
 
 [tasks.testnode-restart]
 run_task = { name = [
-    "cometbft-stop",
-    "fendermint-stop",
-    "ethapi-stop",
-    "fendermint-start",
-    "cometbft-start",
-    "cometbft-wait",
-    "ethapi-start",
+	"cometbft-stop",
+	"fendermint-stop",
+	"ethapi-stop",
+	"fendermint-start",
+	"cometbft-start",
+	"cometbft-wait",
+	"ethapi-start",
 ] }
 
 [tasks.testnode-down]
 # `dependencies` doesn't seem to work with `cleanup_task`.
 run_task = { name = [
-    "cometbft-destroy",
-    "fendermint-destroy",
-    "ethapi-destroy",
-    "docker-network-rm",
-    "destroy-log-volume",
+	"cometbft-destroy",
+	"fendermint-destroy",
+	"ethapi-destroy",
+	# this is skipped due to the need to run
+	# additional validator nodes
+	#
+	# otherwise, it would remove the network we previously
+	# created and the new validator couldn't join
+	# "docker-network-rm",
+	"destroy-log-volume",
 ] }
 
 # This task create all necessary data structures to run Fendermint:
 # the genesis file with necessary entities and cryptographic keys.
 [tasks.testnode-config]
 dependencies = [
-    "genesis-new",
-    "genesis-new-key",
-    "genesis-new-accounts",
-    "genesis-add-validator",
-    "genesis-new-gateway",
-    "genesis-seal",
-    "genesis-write",
-    "testnode-export-keys",
+	"genesis-new",
+	"genesis-new-key",
+	"genesis-new-accounts",
+	"genesis-add-validator",
+	"genesis-new-gateway",
+	"genesis-seal",
+	"genesis-write",
+	"testnode-export-keys",
 ]
 
 [tasks.testnode-export-keys]

@@ -13,7 +13,7 @@ use ipc_actors_abis::{
     subnet_actor_activity_facet, subnet_actor_checkpointing_facet, subnet_actor_getter_facet,
     subnet_actor_manager_facet, subnet_actor_reward_facet,
 };
-use ipc_api::checkpoint::{BottomUpCheckpointBundle, PsbtSignatureQuorum};
+use ipc_api::checkpoint::{BitcoinCheckpointSignatureQuorum, BottomUpCheckpointBundle};
 use ipc_api::evm::{fil_to_eth_amount, payload_to_evm_address, subnet_id_to_evm_addresses};
 use ipc_api::validator::from_contract_validators;
 use reqwest::header::HeaderValue;
@@ -438,23 +438,31 @@ impl SubnetManager for EthSubnetManager {
         Ok(())
     }
 
-    async fn stake(&self, subnet: SubnetID, from: Address, collateral: TokenAmount) -> Result<()> {
-        let collateral = collateral
+    async fn stake(&self, params: JoinParams) -> Result<()> {
+        let params: EthJoinParams = match params {
+            JoinParams::Eth(params) => params,
+            JoinParams::Btc(_) => return Err(anyhow!("Unsupported subnet configuration")),
+        };
+
+        let collateral = params
+            .collateral
             .atto()
             .to_u128()
             .ok_or_else(|| anyhow!("invalid collateral amount"))?;
 
-        let address = contract_address_from_subnet(&subnet)?;
+        let address = contract_address_from_subnet(&params.subnet_id)?;
         tracing::info!(
             "interacting with evm subnet contract: {address:} with collateral: {collateral:}"
         );
 
-        let signer = Arc::new(self.get_signer_with_fee_estimator(&from)?);
+        let signer = Arc::new(self.get_signer_with_fee_estimator(&params.sender)?);
         let contract =
             subnet_actor_manager_facet::SubnetActorManagerFacet::new(address, signer.clone());
 
         let mut txn = contract.stake(U256::from(collateral));
-        txn = self.handle_txn_token(&subnet, txn, collateral, 0).await?;
+        txn = self
+            .handle_txn_token(&params.subnet_id, txn, collateral, 0)
+            .await?;
 
         let txn = extend_call_with_pending_block(txn).await?;
 
@@ -463,23 +471,24 @@ impl SubnetManager for EthSubnetManager {
         Ok(())
     }
 
-    async fn unstake(
-        &self,
-        subnet: SubnetID,
-        from: Address,
-        collateral: TokenAmount,
-    ) -> Result<()> {
-        let collateral = collateral
+    async fn unstake(&self, params: JoinParams) -> Result<()> {
+        let params: EthJoinParams = match params {
+            JoinParams::Eth(params) => params,
+            JoinParams::Btc(_) => return Err(anyhow!("Unsupported subnet configuration")),
+        };
+
+        let collateral = params
+            .collateral
             .atto()
             .to_u128()
             .ok_or_else(|| anyhow!("invalid collateral amount"))?;
 
-        let address = contract_address_from_subnet(&subnet)?;
+        let address = contract_address_from_subnet(&params.subnet_id)?;
         tracing::info!(
             "interacting with evm subnet contract: {address:} with collateral: {collateral:}"
         );
 
-        let signer = Arc::new(self.get_signer_with_fee_estimator(&from)?);
+        let signer = Arc::new(self.get_signer_with_fee_estimator(&params.sender)?);
         let contract =
             subnet_actor_manager_facet::SubnetActorManagerFacet::new(address, signer.clone());
 
@@ -1034,10 +1043,17 @@ impl SubnetManager for EthSubnetManager {
         &self,
         _subnet_id: &SubnetID,
         _checkpoint: BottomUpCheckpoint,
-    ) -> Result<ipc_api::checkpoint::PsbtSignature> {
+    ) -> Result<ipc_api::checkpoint::BitcoinCheckpointSignature> {
         unimplemented!(
             "Checkpointing on evm parent subnets does not need to contact the parent subnet"
         )
+    }
+
+    async fn get_bootstrap_handover_transaction(
+        &self,
+        _subnet_id: &SubnetID,
+    ) -> Result<ipc_api::checkpoint::BitcoinHandoverSignature> {
+        unimplemented!("Bootstrap handover is only required for bitcoin parent subnet")
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -1288,7 +1304,7 @@ impl BottomUpCheckpointRelayer for EthSubnetManager {
         checkpoint: BottomUpCheckpoint,
         signatures: Vec<Signature>,
         signatories: Vec<Address>,
-        bitcoin_signatures: Option<PsbtSignatureQuorum>,
+        bitcoin_signatures: Option<BitcoinCheckpointSignatureQuorum>,
     ) -> anyhow::Result<ChainEpoch> {
         if bitcoin_signatures != None {
             return Err(anyhow!(
@@ -1407,29 +1423,29 @@ impl BottomUpCheckpointRelayer for EthSubnetManager {
                 Arc::new(self.ipc_contract_info.provider.clone()),
             );
 
-            let (psbt, batch_transfer_tx, signatories, signatures) = contract
+            let (psbt, batch_transfer_tx, bitcoin_signatories, bitcoin_signatures) = contract
                 .get_bitcoin_checkpoint_signatures(U256::from(height))
                 .call()
                 .await?;
 
-            if signatories.len() != signatures.len() {
+            if bitcoin_signatories.len() != bitcoin_signatures.len() {
                 return Err(anyhow!(
                     "signatories and signatures length mismatch for bitcoin checkpoint at height: {}",
                     height
                 ));
             }
 
-            tracing::debug!("found {} bitcoin signatures", signatures.len());
+            tracing::debug!("found {} bitcoin signatures", bitcoin_signatures.len());
 
-            let signatures = signatures
+            let bitcoin_signatures = bitcoin_signatures
                 .into_iter()
                 .map(|s| s.to_vec())
                 .collect::<Vec<_>>();
 
-            Some(PsbtSignatureQuorum {
+            Some(BitcoinCheckpointSignatureQuorum {
                 unsigned_psbt: ipc_api::checkpoint::UnsignedPsbt::encode(&psbt)?,
-                signatories,
-                signatures,
+                signatories: bitcoin_signatories,
+                signatures: bitcoin_signatures,
                 transfer_tx: ipc_api::checkpoint::BitcoinTx::encode(&batch_transfer_tx)?,
             })
         // } else {
@@ -1476,6 +1492,54 @@ impl BottomUpCheckpointRelayer for EthSubnetManager {
             .await?
             .as_u64();
         Ok(epoch as ChainEpoch)
+    }
+
+    async fn submit_bootstrap_handover(
+        &self,
+        _subnet_id: &SubnetID,
+        _keystore: Arc<RwLock<PersistentKeyStore<EthKeyAddress>>>,
+        _handover_signatures: ipc_api::checkpoint::BitcoinHandoverSignatureQuorum,
+    ) -> anyhow::Result<ChainEpoch> {
+        anyhow::bail!("handover does not need to be submitted on evm")
+    }
+
+    async fn get_bootstrap_handover_signatures(
+        &self,
+        height: ChainEpoch,
+    ) -> anyhow::Result<ipc_api::checkpoint::BitcoinHandoverSignatureQuorum> {
+        tracing::debug!(
+            "getting bitcoin checkpoint signatures for checkpoint at height: {}",
+            height
+        );
+        let contract = checkpointing_facet::CheckpointingFacet::new(
+            self.ipc_contract_info.gateway_addr,
+            Arc::new(self.ipc_contract_info.provider.clone()),
+        );
+
+        let (psbt, signatories, signatures) = contract
+            .get_bitcoin_bootstrap_handover_signatures()
+            .call()
+            .await?;
+
+        if signatories.len() != signatures.len() {
+            return Err(anyhow!(
+                "signatories and signatures length mismatch for bitcoin handover at height: {}",
+                height
+            ));
+        }
+
+        tracing::debug!("found {} bitcoin signatures", signatures.len());
+
+        let signatures = signatures
+            .into_iter()
+            .map(|s| s.to_vec())
+            .collect::<Vec<_>>();
+
+        Ok(ipc_api::checkpoint::BitcoinHandoverSignatureQuorum {
+            unsigned_psbt: ipc_api::checkpoint::UnsignedPsbt::encode(&psbt)?,
+            signatories,
+            signatures,
+        })
     }
 }
 

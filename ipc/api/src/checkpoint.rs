@@ -64,12 +64,12 @@ pub struct BottomUpCheckpointBundle {
     /// The list of addresses that have signed the checkpoint hash
     pub signatories: Vec<Address>,
     /// The bitcoin data for the checkpoint
-    pub bitcoin_signatures: Option<PsbtSignatureQuorum>,
+    pub bitcoin_signatures: Option<BitcoinCheckpointSignatureQuorum>,
 }
 
-/// A Partially Signed Bitcoin Transaction (PSBT) and a set of signatures
+/// A set of signatures on a bitcoin transaction that encodes a checkpoint.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PsbtSignatureQuorum {
+pub struct BitcoinCheckpointSignatureQuorum {
     /// The unsigned PSBT
     pub unsigned_psbt: UnsignedPsbt,
     /// The signatories
@@ -81,15 +81,36 @@ pub struct PsbtSignatureQuorum {
     pub transfer_tx: BitcoinTx,
 }
 
-/// A Partially Signed Bitcoin Transaction (PSBT) with a single signature
+/// A signature from a single signatory on the bitcoin transaction that encodes a checkpoint.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PsbtSignature {
-    /// The unsigned PSBT
+pub struct BitcoinCheckpointSignature {
+    /// The unsigned PSBT of the checkpoint transaction
     pub unsigned_psbt: UnsignedPsbt,
     /// The signature of a single signatory.
     pub signature: BitcoinSignature,
-    /// The transfer transaction
+    /// The corresponding transfer transaction
     pub transfer_tx: BitcoinTx,
+}
+
+/// A set of signatures on a bitcoin transaction that encodes a bootstrap handover.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BitcoinHandoverSignatureQuorum {
+    /// The unsigned PSBT
+    pub unsigned_psbt: UnsignedPsbt,
+    /// The signatories
+    pub signatories: Vec<ethers::types::Address>,
+    /// The signatures of each signatory.
+    /// `signatures[i]` contains the signature of `signatories[i]`.
+    pub signatures: Vec<BitcoinSignature>,
+}
+
+/// A signature from a single signatory on the bitcoin transaction that encodes a bootstrap handover.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BitcoinHandoverSignature {
+    /// The unsigned PSBT of the bootstrap handover transaction
+    pub unsigned_psbt: UnsignedPsbt,
+    /// The signature of a single signatory.
+    pub signature: BitcoinSignature,
 }
 
 /// A base64-encoded unsigned PSBT
