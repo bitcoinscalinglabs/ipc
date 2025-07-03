@@ -3,7 +3,7 @@
 //! Kill a subnet cli command handler.
 
 use async_trait::async_trait;
-use clap::Args;
+use clap::{Args, Subcommand};
 use ipc_api::subnet_id::SubnetID;
 use std::{fmt::Debug, str::FromStr};
 
@@ -21,20 +21,44 @@ impl CommandLineHandler for KillSubnet {
 
         let mut provider = get_ipc_provider(global)?;
         let subnet = SubnetID::from_str(&arguments.subnet)?;
-        let from = match &arguments.from {
-            Some(address) => Some(require_fil_addr_from_str(address)?),
-            None => None,
-        };
 
-        provider.kill_subnet(subnet, from).await
+        match &arguments.network_specific {
+            KillSpecifiedNetwork::Fevm(fevm_args) => {
+                let from = match &fevm_args.from {
+                    Some(address) => Some(require_fil_addr_from_str(address)?),
+                    None => None,
+                };
+                provider.kill_subnet(subnet, from).await?;
+            }
+            KillSpecifiedNetwork::Btc(_) => provider.kill_subnet(subnet, None).await?,
+        }
+
+        Ok(())
     }
 }
 
 #[derive(Debug, Args)]
 #[command(name = "kill", about = "Kill an existing subnet")]
 pub struct KillSubnetArgs {
-    #[arg(long, help = "The address that kills the subnet")]
-    pub from: Option<String>,
     #[arg(long, help = "The subnet to kill")]
     pub subnet: String,
+    #[command(subcommand)]
+    pub network_specific: KillSpecifiedNetwork,
 }
+
+#[derive(Debug, Subcommand)]
+pub enum KillSpecifiedNetwork {
+    #[command(name = "fevm")]
+    Fevm(FevmKillArgs),
+    #[command(name = "btc")]
+    Btc(BtcKillArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct FevmKillArgs {
+    #[arg(long, help = "The address that kills the subnet")]
+    pub from: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct BtcKillArgs {}

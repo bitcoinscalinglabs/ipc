@@ -13,7 +13,7 @@ use ipc_api::checkpoint::{
 use ipc_api::cross::IpcEnvelope;
 use ipc_api::staking::{StakingChangeRequest, ValidatorInfo};
 use ipc_api::subnet::{
-    Asset, ConstructParams, FundParams, JoinParams, PermissionMode, PreFundParams,
+    Asset, ConstructParams, FundParams, JoinParams, KillSubnetParams, PermissionMode, PreFundParams,
 };
 use ipc_api::subnet_id::SubnetID;
 use ipc_api::validator::Validator;
@@ -65,7 +65,7 @@ pub trait SubnetManager:
     async fn leave_subnet(&self, subnet: SubnetID, from: Address) -> Result<()>;
 
     /// Sends a signal to kill a subnet
-    async fn kill_subnet(&self, subnet: SubnetID, from: Address) -> Result<()>;
+    async fn kill_subnet(&self, params: KillSubnetParams) -> Result<()>;
 
     /// Lists all the registered children in a gateway.
     async fn list_child_subnets(
