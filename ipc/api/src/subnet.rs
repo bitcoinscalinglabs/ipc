@@ -175,3 +175,17 @@ pub struct BtcFundParams {
     /// The amount to fund
     pub amount: TokenAmount,
 }
+
+pub enum KillSubnetParams {
+    Eth(EthKillSubnetParams),
+    Btc(BtcKillSubnetParams),
+}
+
+pub struct EthKillSubnetParams {
+    pub subnet_id: SubnetID,
+    pub sender: Address,
+}
+
+pub struct BtcKillSubnetParams {
+    pub subnet_id: SubnetID,
+}

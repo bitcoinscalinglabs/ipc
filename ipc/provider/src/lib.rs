@@ -14,8 +14,8 @@ use ipc_api::checkpoint::{BottomUpCheckpointBundle, QuorumReachedEvent};
 use ipc_api::evm::payload_to_evm_address;
 use ipc_api::staking::{StakingChangeRequest, ValidatorInfo};
 use ipc_api::subnet::{
-    BtcFundParams, BtcJoinParams, ConstructParams, EthFundParams, EthJoinParams, FundParams,
-    JoinParams, PreFundParams,
+    BtcFundParams, BtcJoinParams, BtcKillSubnetParams, ConstructParams, EthFundParams,
+    EthJoinParams, EthKillSubnetParams, FundParams, JoinParams, KillSubnetParams, PreFundParams,
 };
 use ipc_api::{cross::IpcEnvelope, subnet_id::SubnetID};
 use ipc_wallet::{
@@ -492,11 +492,23 @@ impl IpcProvider {
         from: Option<Address>,
     ) -> anyhow::Result<()> {
         let parent = subnet.parent().ok_or_else(|| anyhow!("no parent found"))?;
-        let conn = self.get_connection(&parent)?;
+        let parent_conn = self.get_connection(&parent)?;
+        let parent_subnet = parent_conn.subnet();
 
-        let sender = self.check_sender(from)?;
+        let params = match &parent_subnet.config {
+            config::subnet::SubnetConfig::Fevm(_) => {
+                let sender = self.check_sender(from)?;
+                KillSubnetParams::Eth(EthKillSubnetParams {
+                    subnet_id: subnet,
+                    sender: sender,
+                })
+            }
+            config::subnet::SubnetConfig::Btc(_) => {
+                KillSubnetParams::Btc(BtcKillSubnetParams { subnet_id: subnet })
+            }
+        };
 
-        conn.manager().kill_subnet(subnet, sender).await
+        parent_conn.manager().kill_subnet(params).await
     }
 
     pub async fn list_child_subnets(

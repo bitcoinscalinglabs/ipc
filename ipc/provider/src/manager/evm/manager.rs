@@ -21,8 +21,8 @@ use reqwest::Client;
 use std::net::{IpAddr, SocketAddr};
 
 use ipc_api::subnet::{
-    Asset, AssetKind, ConstructParams, EthFundParams, EthJoinParams, FundParams, JoinParams,
-    PermissionMode, PreFundParams,
+    Asset, AssetKind, ConstructParams, EthFundParams, EthJoinParams, EthKillSubnetParams,
+    FundParams, JoinParams, KillSubnetParams, PermissionMode, PreFundParams,
 };
 use ipc_api::{eth_to_fil_amount, ethers_address_to_fil_address};
 
@@ -515,11 +515,19 @@ impl SubnetManager for EthSubnetManager {
         Ok(())
     }
 
-    async fn kill_subnet(&self, subnet: SubnetID, from: Address) -> Result<()> {
-        let address = contract_address_from_subnet(&subnet)?;
-        tracing::info!("kill evm subnet: {subnet:} at contract: {address:}");
+    async fn kill_subnet(&self, params: KillSubnetParams) -> Result<()> {
+        let params: EthKillSubnetParams = match params {
+            KillSubnetParams::Eth(params) => params,
+            KillSubnetParams::Btc(_) => return Err(anyhow!("Unsupported subnet configuration")),
+        };
 
-        let signer = Arc::new(self.get_signer_with_fee_estimator(&from)?);
+        let address = contract_address_from_subnet(&params.subnet_id)?;
+        tracing::info!(
+            "kill evm subnet: {:?} at contract: {address:}",
+            params.subnet_id
+        );
+
+        let signer = Arc::new(self.get_signer_with_fee_estimator(&params.sender)?);
         let contract =
             subnet_actor_manager_facet::SubnetActorManagerFacet::new(address, signer.clone());
 

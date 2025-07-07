@@ -18,8 +18,8 @@ use ipc_api::checkpoint::{
 };
 use ipc_api::evm::payload_to_evm_address;
 use ipc_api::subnet::{
-    Asset, AssetKind, BtcConstructParams, BtcFundParams, ConstructParams, FundParams,
-    PermissionMode, PreFundParams,
+    Asset, AssetKind, BtcConstructParams, BtcFundParams, BtcKillSubnetParams, ConstructParams,
+    FundParams, KillSubnetParams, PermissionMode, PreFundParams,
 };
 use ipc_api::subnet::{BtcJoinParams, JoinParams};
 use ipc_api::validator::Validator;
@@ -490,7 +490,9 @@ impl SubnetManager for BtcSubnetManager {
             ));
         }
 
-        tracing::info!("unstakecollateral request successful");
+        let current_height = self.chain_head_height().await?;
+        tracing::info!("unstakecollateral submitted at height {current_height}");
+
         Ok(())
     }
 
@@ -499,9 +501,67 @@ impl SubnetManager for BtcSubnetManager {
         todo!()
     }
 
-    async fn kill_subnet(&self, subnet: SubnetID, _from: Address) -> Result<()> {
-        tracing::info!("killing subnet on btc with params: {subnet:?}");
-        todo!()
+    async fn kill_subnet(&self, params: KillSubnetParams) -> Result<()> {
+        let params: BtcKillSubnetParams = match params {
+            KillSubnetParams::Eth(_) => return Err(anyhow!("Unsupported subnet configuration")),
+            KillSubnetParams::Btc(params) => params,
+        };
+
+        tracing::info!("killing subnet on btc with params: {:?}", params.subnet_id);
+
+        // We don't need to send the public key because the RPC method
+        // will use the one from the wallet, same as in unstakecollateral.
+        let body = json!({
+            "jsonrpc": "2.0",
+            "method": "killsubnet",
+            "id": 1,
+            "params": {
+                "subnet_id":     params.subnet_id.to_string(),
+            }
+        });
+        tracing::info!("Request body: {body:?}");
+
+        let resp = self
+            .client
+            .post(self.rpc_url.clone())
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(anyhow!(
+                "killsubnet request failed with status: {}",
+                resp.status()
+            ));
+        }
+
+        let data = resp.json::<Value>().await?;
+
+        if let Some(err_obj) = data.get("error") {
+            let code = err_obj
+                .get("code")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            let message = err_obj
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("Unknown error");
+            let error_data = err_obj
+                .get("data")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            return Err(anyhow!(
+                "JSON-RPC error: code={}, message={}, details={}",
+                code,
+                message,
+                error_data
+            ));
+        }
+
+        let current_height = self.chain_head_height().await?;
+        tracing::info!("killsubnet submitted at height {current_height}");
+
+        Ok(())
     }
 
     async fn list_child_subnets(
