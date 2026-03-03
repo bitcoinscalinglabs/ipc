@@ -38,7 +38,7 @@ use fvm_shared::{
 use num_traits::Zero;
 use serde::{de, Serialize};
 
-use super::{exec::MachineBlockstore, FvmExecState, FvmStateParams};
+use super::{exec::MachineBlockstore, FvmExecState, FvmStateParams, RewardState};
 
 /// Create an empty state tree.
 pub fn empty_state_tree<DB: Blockstore>(store: DB) -> anyhow::Result<StateTree<DB>> {
@@ -138,6 +138,7 @@ where
         circ_supply: TokenAmount,
         chain_id: u64,
         power_scale: PowerScale,
+        reward_state: Option<RewardState>,
     ) -> anyhow::Result<()> {
         self.stage = match &mut self.stage {
             Stage::Exec(_) => bail!("execution engine already initialized"),
@@ -155,6 +156,7 @@ where
                     power_scale,
                     app_version: 0,
                     consensus_params: None,
+                    reward_state,
                 };
 
                 let exec_state =

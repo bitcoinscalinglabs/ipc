@@ -294,6 +294,7 @@ fn set_ipc_gateway(genesis_file: &PathBuf, args: &GenesisIpcGatewayArgs) -> anyh
             }
             None => ipc::IpcParams {
                 gateway: gateway_params,
+                reward: None,
             },
         };
 
@@ -373,6 +374,10 @@ async fn new_genesis_from_parent(
             majority_percentage: genesis_info.majority_percentage,
             active_validators_limit: genesis_info.active_validators_limit,
         },
+        reward: genesis_info.reward.map(|r| ipc::RewardParams {
+            activation_height: r.activation_height,
+            snapshot_length: r.snapshot_length,
+        }),
     };
     let mut genesis = Genesis {
         // We set the genesis epoch as the genesis timestamp so it can be

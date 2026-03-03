@@ -29,6 +29,8 @@ use crate::{
 
 define_id!(GATEWAY { id: 64 });
 define_id!(SUBNETREGISTRY { id: 65 });
+define_id!(REWARD_TOKEN { id: 66 });
+define_id!(REWARD_CONFIG { id: 67 });
 
 lazy_static! {
     /// Contracts deployed at genesis with well-known IDs.
@@ -136,6 +138,22 @@ lazy_static! {
                             abi: ia::subnet_getter_facet::SUBNETGETTERFACET_ABI.to_owned(),
                         },
                     ],
+                },
+            ),
+            (
+                reward_token::CONTRACT_NAME,
+                EthContract {
+                    actor_id: REWARD_TOKEN_ACTOR_ID,
+                    abi: ia::reward_token::REWARDTOKEN_ABI.to_owned(),
+                    facets: vec![],
+                },
+            ),
+            (
+                reward_config::CONTRACT_NAME,
+                EthContract {
+                    actor_id: REWARD_CONFIG_ACTOR_ID,
+                    abi: ia::reward_config::REWARDCONFIG_ABI.to_owned(),
+                    facets: vec![],
                 },
             ),
         ]
@@ -333,6 +351,14 @@ abi_hash!(struct ipc_actors_abis::subnet_actor_checkpointing_facet::BottomUpChec
 abi_hash!(Vec<ipc_actors_abis::gateway_getter_facet::IpcEnvelope>);
 abi_hash!(Vec<ipc_actors_abis::subnet_actor_checkpointing_facet::IpcEnvelope>);
 abi_hash!(Vec<ipc_actors_abis::subnet_actor_getter_facet::IpcEnvelope>);
+
+pub mod reward_token {
+    pub const CONTRACT_NAME: &str = "RewardToken";
+}
+
+pub mod reward_config {
+    pub const CONTRACT_NAME: &str = "RewardConfig";
+}
 
 pub mod gateway {
     use super::subnet_id_to_eth;

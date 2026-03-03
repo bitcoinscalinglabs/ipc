@@ -40,6 +40,13 @@ pub type ActorAddressMap = HashMap<ActorID, Address>;
 /// The result of the message application bundled with any delegated addresses of event emitters.
 pub type ExecResult = anyhow::Result<(ApplyRet, ActorAddressMap)>;
 
+/// Reward mint state for emission chains. Persisted across blocks.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct RewardState {
+    /// Last snapshot for which rewards were minted.
+    pub last_minted_snapshot: u64,
+}
+
 /// Parts of the state which evolve during the lifetime of the chain.
 #[serde_as]
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
@@ -70,6 +77,9 @@ pub struct FvmStateParams {
     pub app_version: u64,
     /// Tendermint consensus params.
     pub consensus_params: Option<TendermintConsensusParams>,
+    /// Reward mint state for the Emission Chain. None when not an emission chain.
+    #[serde(default)]
+    pub reward_state: Option<RewardState>,
 }
 
 /// Custom implementation of Debug to exclude `consensus_params` from the debug output
@@ -97,6 +107,9 @@ impl fmt::Debug for FvmStateParams {
         if let Some(ref params) = self.consensus_params {
             ds.field("consensus_params", params);
         }
+        if let Some(ref reward_state) = self.reward_state {
+            ds.field("reward_state", reward_state);
+        }
 
         ds.finish()
     }
@@ -121,6 +134,8 @@ pub struct FvmUpdatableParams {
     /// Doesn't change at the moment but in theory it could,
     /// and it doesn't have a place within the FVM.
     pub power_scale: PowerScale,
+    /// Reward mint state for the Emission Chain. Updated by end_block when minting.
+    pub reward_state: Option<RewardState>,
 }
 
 pub type MachineBlockstore<DB> = <DefaultMachine<DB, FendermintExterns<DB>> as Machine>::Blockstore;
@@ -196,6 +211,7 @@ where
                 base_fee: params.base_fee,
                 circ_supply: params.circ_supply,
                 power_scale: params.power_scale,
+                reward_state: params.reward_state,
             },
             params_dirty: false,
         })
@@ -390,6 +406,19 @@ where
         F: FnOnce(&mut TokenAmount),
     {
         self.update_params(|p| f(&mut p.circ_supply))
+    }
+
+    /// Update the reward state, effective from the next block.
+    pub fn update_reward_state<F>(&mut self, f: F)
+    where
+        F: FnOnce(&mut Option<RewardState>),
+    {
+        self.update_params(|p| f(&mut p.reward_state))
+    }
+
+    /// Get the current reward state.
+    pub fn reward_state(&self) -> Option<&RewardState> {
+        self.params.reward_state.as_ref()
     }
 
     /// Update the parameters and mark them as dirty.

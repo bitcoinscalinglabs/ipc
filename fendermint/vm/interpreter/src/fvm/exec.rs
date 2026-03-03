@@ -4,6 +4,7 @@
 use super::{
     checkpoint::{self, PowerUpdates},
     observe::{CheckpointFinalized, MsgExec, MsgExecPurpose},
+    reward_mint,
     state::FvmExecState,
     FvmMessage, FvmMessageInterpreter,
 };
@@ -210,6 +211,19 @@ where
         }
 
         let next_gas_market = state.finalize_gas_market()?;
+
+        let reward_state = state.reward_state().cloned();
+        if let Some(updated) = reward_mint::try_mint_rewards(
+            &self.gateway,
+            &mut state,
+            self.parent_manager.as_ref(),
+            reward_state.as_ref(),
+        )
+        .await
+        .context("reward mint failed")?
+        {
+            state.update_reward_state(|rs| *rs = Some(updated));
+        }
 
         // TODO: Consider doing this async, since it's purely informational and not consensus-critical.
         let _ = checkpoint::emit_trace_if_check_checkpoint_finalized(&self.gateway, &mut state)

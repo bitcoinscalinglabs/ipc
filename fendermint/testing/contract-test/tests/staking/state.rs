@@ -567,6 +567,7 @@ impl arbitrary::Arbitrary<'_> for StakingState {
                 majority_percentage: 51 + u8::arbitrary(u)? % 50,
                 active_validators_limit: 1 + u.choose_index(100)? as u16,
             },
+            reward: None,
         };
 
         // We cannot actually use this value because the real ID will only be
@@ -596,6 +597,7 @@ impl arbitrary::Arbitrary<'_> for StakingState {
                 majority_percentage: 51 + u8::arbitrary(u)? % 50,
                 active_validators_limit: num_max_validators as u16,
             },
+            reward: None,
         };
 
         let child_genesis = Genesis {

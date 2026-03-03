@@ -3,6 +3,7 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
+use ethers::types::Address as EthAddress;
 use fvm_shared::clock::ChainEpoch;
 use fvm_shared::{address::Address, econ::TokenAmount};
 use ipc_actors_abis::subnet_actor_activity_facet::ValidatorClaim;
@@ -13,7 +14,8 @@ use ipc_api::checkpoint::{
 use ipc_api::cross::IpcEnvelope;
 use ipc_api::staking::{StakingChangeRequest, ValidatorInfo};
 use ipc_api::subnet::{
-    Asset, ConstructParams, FundParams, JoinParams, KillSubnetParams, PermissionMode, PreFundParams,
+    Asset, ConstructParams, FundParams, JoinParams, KillSubnetParams, PermissionMode,
+    PreFundParams, RewardParams,
 };
 use ipc_api::subnet_id::SubnetID;
 use ipc_api::validator::Validator;
@@ -225,7 +227,22 @@ pub trait SubnetManager:
         subnet_id: &SubnetID,
     ) -> Result<ipc_api::checkpoint::BitcoinHandoverSignature>;
 
+    /// Fetches rewarded collaterals for a snapshot. Only supported when the parent subnet is Bitcoin.
+    async fn get_rewarded_collaterals(
+        &self,
+        snapshot_number: u64,
+    ) -> Result<GetRewardedCollateralsResponse>;
+
     fn as_any(&self) -> &dyn Any;
+}
+
+/// Response from the getrewardedcollaterals RPC.
+#[derive(Debug, Clone)]
+pub struct GetRewardedCollateralsResponse {
+    /// (validator eth address, collateral amount in sats)
+    pub collaterals: Vec<(EthAddress, u64)>,
+    pub total_rewarded_collateral: u64,
+    pub snapshot: u64,
 }
 
 #[derive(Debug)]
@@ -239,6 +256,8 @@ pub struct SubnetGenesisInfo {
     pub genesis_balances: BTreeMap<Address, TokenAmount>,
     pub permission_mode: PermissionMode,
     pub supply_source: Asset,
+    /// Reward params for the Emission Chain. Set when the subnet was created as an emission chain on the parent.
+    pub reward: Option<RewardParams>,
 }
 
 /// The generic payload that returns the block hash of the data returning block with the actual

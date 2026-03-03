@@ -376,6 +376,7 @@ mod tests {
             power_scale: 0,
             app_version: 0,
             consensus_params: None,
+            reward_state: None,
         };
         let block_height = 2048;
 

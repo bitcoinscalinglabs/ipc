@@ -189,3 +189,11 @@ pub struct EthKillSubnetParams {
 pub struct BtcKillSubnetParams {
     pub subnet_id: SubnetID,
 }
+
+/// Reward parameters for the Emission Chain. When present, the subnet is the Emission Chain
+/// and RewardToken and RewardConfig are deployed at genesis.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RewardParams {
+    pub activation_height: u64,
+    pub snapshot_length: u64,
+}

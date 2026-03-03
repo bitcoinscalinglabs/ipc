@@ -30,8 +30,8 @@ use crate::config::subnet::SubnetConfig;
 use crate::config::Subnet;
 use crate::lotus::message::ipc::SubnetInfo;
 use crate::manager::subnet::{
-    BottomUpCheckpointRelayer, GetBlockHashResult, SubnetGenesisInfo, TopDownFinalityQuery,
-    TopDownQueryPayload, ValidatorRewarder,
+    BottomUpCheckpointRelayer, GetBlockHashResult, GetRewardedCollateralsResponse,
+    SubnetGenesisInfo, TopDownFinalityQuery, TopDownQueryPayload, ValidatorRewarder,
 };
 
 use crate::manager::{EthManager, SubnetManager};
@@ -901,6 +901,8 @@ impl SubnetManager for EthSubnetManager {
                 kind: AssetKind::Native,
                 token_address: None,
             },
+            // EVM subnets do not support emission params; emission chains are children of Bitcoin.
+            reward: None,
         })
     }
 
@@ -1062,6 +1064,15 @@ impl SubnetManager for EthSubnetManager {
         _subnet_id: &SubnetID,
     ) -> Result<ipc_api::checkpoint::BitcoinHandoverSignature> {
         unimplemented!("Bootstrap handover is only required for bitcoin parent subnet")
+    }
+
+    async fn get_rewarded_collaterals(
+        &self,
+        _snapshot_number: u64,
+    ) -> Result<GetRewardedCollateralsResponse> {
+        Err(anyhow!(
+            "rewards are only supported for Bitcoin parent subnet"
+        ))
     }
 
     fn as_any(&self) -> &dyn Any {

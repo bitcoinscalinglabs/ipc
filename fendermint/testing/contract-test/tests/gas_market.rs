@@ -59,7 +59,6 @@ async fn tester_with_upgrader(
         1.05,
         false,
         upgrade_scheduler,
-        None,
     );
 
     let genesis = Genesis {

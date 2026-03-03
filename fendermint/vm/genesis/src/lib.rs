@@ -245,6 +245,15 @@ pub mod ipc {
     #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
     pub struct IpcParams {
         pub gateway: GatewayParams,
+        /// Reward config for emission chain. When present, RewardToken and RewardConfig are deployed.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub reward: Option<RewardParams>,
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+    pub struct RewardParams {
+        pub activation_height: u64,
+        pub snapshot_length: u64,
     }
 
     #[serde_as]

@@ -10,7 +10,7 @@ use std::time::Duration;
 use fendermint_materializer::{HasEthApi, ResourceId};
 use fendermint_vm_actor_interface::init::builtin_actor_eth_addr;
 use fendermint_vm_actor_interface::ipc;
-use fendermint_vm_message::conv::from_fvm::to_eth_address;
+use ipc_api::address::to_eth_address;
 use ipc_actors_abis::gateway_getter_facet::{GatewayGetterFacet, ParentFinality};
 use ipc_actors_abis::subnet_actor_getter_facet::SubnetActorGetterFacet;
 
