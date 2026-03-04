@@ -156,7 +156,6 @@ pub struct GenesisOutput {
     pub power_scale: PowerScale,
     pub circ_supply: TokenAmount,
     pub validators: Vec<Validator<Power>>,
-    /// Reward state for the Emission Chain. Set when genesis.ipc.reward is Some.
     pub reward_state: Option<RewardState>,
 }
 
@@ -275,15 +274,15 @@ impl GenesisBuilder {
             .map(|vc| vc.map_power(|c| c.into_power(genesis.power_scale)))
             .collect();
 
-        // Currently we just pass them back as they are, but later we should
-        // store them in the IPC actors; or in case of a snapshot restore them
-        // from the state.
+        //If genesis.ipc.reward is present, reward_state is Some; otherwise it is None.
         let reward_state = genesis
             .ipc
             .as_ref()
             .and_then(|ipc| ipc.reward.as_ref())
-            .map(|_| RewardState {
-                last_minted_snapshot: 0,
+            .and_then(|_| {
+                Some(RewardState {
+                    last_minted_snapshot: None,
+                })
             });
 
         let out = GenesisOutput {
@@ -640,16 +639,8 @@ fn deploy_contracts(
     // Emission chain gets real RewardConfig params; non-emission gets (0, 0, 0).
     {
         let minter = et::Address::from(init::builtin_actor_eth_addr(system::SYSTEM_ACTOR_ID).0);
-        let reward_token_params = (
-            "IPC Reward".to_string(),
-            "REWARD".to_string(),
-            minter,
-        );
-        deployer.deploy_contract(
-            state,
-            ipc::reward_token::CONTRACT_NAME,
-            reward_token_params,
-        )?;
+        let reward_token_params = ("IPC Reward".to_string(), "REWARD".to_string(), minter);
+        deployer.deploy_contract(state, ipc::reward_token::CONTRACT_NAME, reward_token_params)?;
     }
 
     {

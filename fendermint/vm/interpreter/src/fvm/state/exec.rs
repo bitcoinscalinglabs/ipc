@@ -43,8 +43,8 @@ pub type ExecResult = anyhow::Result<(ApplyRet, ActorAddressMap)>;
 /// Reward mint state for emission chains. Persisted across blocks.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RewardState {
-    /// Last snapshot for which rewards were minted.
-    pub last_minted_snapshot: u64,
+    /// Last snapshot for which rewards were minted. None when no snapshot rewards minted yet.
+    pub last_minted_snapshot: Option<u64>,
 }
 
 /// Parts of the state which evolve during the lifetime of the chain.
@@ -77,7 +77,10 @@ pub struct FvmStateParams {
     pub app_version: u64,
     /// Tendermint consensus params.
     pub consensus_params: Option<TendermintConsensusParams>,
-    /// Reward mint state for the Emission Chain. None when not an emission chain.
+    /// Reward mint state for the Emission Chain.
+    /// This is the source of truth for deciding whether the subnet is the Emission Chain:
+    /// if it is `Some`, then the subnet is the Emission Chain, otherwise it's not.
+    /// If it is `Some`, it is updated by end_block when minting.
     #[serde(default)]
     pub reward_state: Option<RewardState>,
 }
@@ -134,7 +137,10 @@ pub struct FvmUpdatableParams {
     /// Doesn't change at the moment but in theory it could,
     /// and it doesn't have a place within the FVM.
     pub power_scale: PowerScale,
-    /// Reward mint state for the Emission Chain. Updated by end_block when minting.
+    /// Reward mint state for the Emission Chain.
+    /// This is the source of truth for deciding whether the subnet is the Emission Chain:
+    /// if it is `Some`, then the subnet is the Emission Chain, otherwise it's not.
+    /// If is `Some`, it is updated by end_block when minting.
     pub reward_state: Option<RewardState>,
 }
 

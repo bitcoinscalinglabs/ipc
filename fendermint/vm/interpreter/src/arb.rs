@@ -24,7 +24,7 @@ impl Arbitrary for FvmStateParams {
             consensus_params: None,
             reward_state: if bool::arbitrary(g) {
                 Some(RewardState {
-                    last_minted_snapshot: u64::arbitrary(g),
+                    last_minted_snapshot: Some(u64::arbitrary(g)),
                 })
             } else {
                 None
