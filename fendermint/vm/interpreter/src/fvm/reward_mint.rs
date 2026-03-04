@@ -16,7 +16,7 @@ const REWARD_TOKEN_ACTOR_ID: fvm_shared::ActorID = ipc::REWARD_TOKEN_ACTOR_ID;
 const REWARD_CONFIG_ACTOR_ID: fvm_shared::ActorID = ipc::REWARD_CONFIG_ACTOR_ID;
 
 /// Try to mint rewards for the current snapshot. Updates reward state when minting occurs.
-pub async fn try_mint_rewards<DB>(
+pub async fn maybe_mint_rewards<DB>(
     gateway: &crate::fvm::state::ipc::GatewayCaller<DB>,
     state: &mut FvmExecState<DB>,
     parent_manager: Option<&BtcSubnetManager>,

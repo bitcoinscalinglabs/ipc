@@ -212,9 +212,16 @@ where
 
         let next_gas_market = state.finalize_gas_market()?;
 
-        reward_mint::try_mint_rewards(&self.gateway, &mut state, self.parent_manager.as_ref())
-            .await
-            .context("reward mint failed")?;
+        if let Err(e) =
+            reward_mint::maybe_mint_rewards(&self.gateway, &mut state, self.parent_manager.as_ref())
+                .await
+        {
+            tracing::error!(
+                error = %e,
+                "reward mint failed at subnet height: {}",
+                state.block_height()
+            );
+        }
 
         // TODO: Consider doing this async, since it's purely informational and not consensus-critical.
         let _ = checkpoint::emit_trace_if_check_checkpoint_finalized(&self.gateway, &mut state)

@@ -8,3 +8,5 @@ package-lock.json
 .vscode
 output/
 my_deploy.sh
+
+logs/
