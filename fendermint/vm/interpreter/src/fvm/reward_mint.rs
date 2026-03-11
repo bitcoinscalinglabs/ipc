@@ -3,7 +3,7 @@
 
 use anyhow::Context;
 use ethers::types as et;
-use fendermint_vm_actor_interface::{init::builtin_actor_eth_addr, ipc, system};
+use fendermint_vm_actor_interface::{init::builtin_actor_eth_addr, ipc};
 use fvm_ipld_blockstore::Blockstore;
 use ipc_actors_abis::reward_config::RewardConfig;
 use ipc_actors_abis::reward_token::RewardToken;
@@ -107,7 +107,6 @@ where
     } else {
         let total = response.total_rewarded_collateral as u128;
         let token_addr = builtin_actor_eth_addr(REWARD_TOKEN_ACTOR_ID);
-        let system_eth = et::Address::from(builtin_actor_eth_addr(system::SYSTEM_ACTOR_ID).0);
         let reward_token: ContractCaller<DB, RewardToken<MockProvider>, NoRevert> =
             ContractCaller::new(token_addr, RewardToken::new);
 
@@ -119,9 +118,8 @@ where
             }
 
             let mint_amount = et::U256::from(mint_tokens);
-            match reward_token
-                .call_with_return(state, |c| c.mint(*addr, mint_amount).from(system_eth))
-            {
+            // Keep `.from(...)` unset so ContractCaller defaults to system::SYSTEM_ACTOR_ADDR (t00).
+            match reward_token.call_with_return(state, |c| c.mint(*addr, mint_amount)) {
                 Ok(_) => {
                     tracing::info!(
                         addr = %addr,

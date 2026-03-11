@@ -362,15 +362,14 @@ impl<DB: Blockstore + Clone> GatewayCaller<DB> {
             .map(xnet_messaging_facet::IpcEnvelope::try_from)
             .collect::<Result<Vec<_>, _>>()
             .context("failed to convert cross messages")?;
-        tracing::debug!("apply_cross_messages: {:?}", messages);
         let r = self
             .xnet
             .call_with_return(state, |c| c.apply_cross_messages(messages))?;
         let r = r.into_return();
-        tracing::debug!("apply_cross_messages return: {:?}", r);
+        tracing::trace!("apply_cross_messages return: {:?}", r);
         for event in r.apply_ret.events.iter() {
             for entry in event.event.entries.iter() {
-                tracing::debug!(
+                tracing::trace!(
                     "key: {:?}, value: {:?}",
                     entry.key,
                     hex::encode(entry.value.clone())
