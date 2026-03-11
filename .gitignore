@@ -10,3 +10,4 @@ output/
 my_deploy.sh
 
 logs/
+.tmp/

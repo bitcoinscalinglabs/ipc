@@ -10,13 +10,14 @@ contract RewardToken is ERC20 {
 
     /// @param name Token name
     /// @param symbol Token symbol
-    /// @param _minter Address allowed to mint (system actor)
+    /// @param _minter Address allowed to mint (system actor alias on FEVM)
     constructor(
         string memory name,
         string memory symbol,
         address _minter
     ) ERC20(name, symbol) {
-        require(_minter != address(0), "RewardToken: zero minter");
+        // NOTE: On FEVM implicit system calls, msg.sender can resolve to 0x00..00.
+        // We intentionally allow that as a valid minter identity.
         minter = _minter;
     }
 
