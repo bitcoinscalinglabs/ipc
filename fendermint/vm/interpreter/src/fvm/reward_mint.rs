@@ -140,6 +140,7 @@ where
         tracing::info!(snapshot = snapshot, "reward mint completed");
     }
 
+    // TODO: Handle failures in minting rewards. Only advance `last_minted_snapshot` when all mints for this snapshot succeed.
     state.update_reward_state(|rs| {
         *rs = Some(RewardState {
             last_minted_snapshot: Some(snapshot),
