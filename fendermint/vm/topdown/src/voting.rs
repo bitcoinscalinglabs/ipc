@@ -199,7 +199,7 @@ where
         }
 
         if !self.has_power(&validator_key)? {
-            println!("Validator unpowered: {}", validator_key);
+            tracing::debug!(validator = %validator_key, "ignoring vote from unpowered validator");
 
             return abort(Error::UnpoweredValidator(validator_key));
         }

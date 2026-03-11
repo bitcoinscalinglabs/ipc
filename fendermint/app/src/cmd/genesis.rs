@@ -343,14 +343,14 @@ async fn new_genesis_from_parent(
         }
     };
 
-    println!("config: {:#?}", config);
+    tracing::debug!(?config, "constructed parent subnet config");
 
     let subnet_id = args
         .subnet_id
         .parent()
         .ok_or_else(|| anyhow!("subnet is not a child"))?;
 
-    println!("{}", subnet_id);
+    tracing::debug!(%subnet_id, "resolved parent subnet id");
 
     let parent_provider = IpcProvider::new_with_subnet(
         None,
@@ -360,11 +360,11 @@ async fn new_genesis_from_parent(
         },
     )?;
 
-    println!("getting genesis_info {:#?}", args.subnet_id);
+    tracing::debug!(subnet_id = %args.subnet_id, "fetching parent genesis info");
 
     let genesis_info = parent_provider.get_genesis_info(&args.subnet_id).await?;
 
-    println!("genesis cmd: genesis_info = {:?}", genesis_info);
+    tracing::debug!(?genesis_info, "received parent genesis info");
 
     // get gateway genesis
     let ipc_params = ipc::IpcParams {
