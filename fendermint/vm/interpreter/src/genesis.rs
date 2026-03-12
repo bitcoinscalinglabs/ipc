@@ -637,9 +637,9 @@ fn deploy_contracts(
     // RewardToken and RewardConfig: deploy on all chains for same-address consistency.
     // Emission chain gets real RewardConfig params; non-emission gets (0, 0, 0).
     {
-        // FEVM implicit system calls resolve to the Ethereum null-address alias for system.
-        // Keep RewardToken minter aligned with that runtime sender identity.
-        let minter = et::Address::zero();
+        // ContractCaller uses SYSTEM_ACTOR_ADDR (t00) as sender. The EVM resolves ID addresses
+        // to EthAddress::from_id (0xff00..00 format), not builtin_actor_eth_addr nor 0x00..00.
+        let minter = et::Address::from(EthAddress::from_id(system::SYSTEM_ACTOR_ID).0);
         let reward_token_params = ("IPC Reward".to_string(), "REWARD".to_string(), minter);
         deployer.deploy_contract(state, ipc::reward_token::CONTRACT_NAME, reward_token_params)?;
     }
