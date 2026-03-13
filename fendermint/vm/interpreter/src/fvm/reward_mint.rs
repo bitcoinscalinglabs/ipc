@@ -110,14 +110,16 @@ where
         let reward_token: ContractCaller<DB, RewardToken<MockProvider>, NoRevert> =
             ContractCaller::new(token_addr, RewardToken::new);
 
+        // tokens_per_snapshot is in whole tokens; scale to wei for ERC20 mint (18 decimals).
+        let unit = 10u128.pow(ipc::reward_token::DECIMALS as u32);
+
         for (addr, amount_sats) in &response.collaterals {
             let amount = *amount_sats as u128;
             let mint_tokens = (amount * tokens_per_snapshot) / total;
             if mint_tokens == 0 {
                 continue;
             }
-
-            let mint_amount = et::U256::from(mint_tokens);
+            let mint_amount = et::U256::from(mint_tokens * unit);
             // Keep `.from(...)` unset so ContractCaller defaults to system::SYSTEM_ACTOR_ADDR (t00).
             match reward_token.call_with_return(state, |c| c.mint(*addr, mint_amount)) {
                 Ok(_) => {

@@ -354,6 +354,8 @@ abi_hash!(Vec<ipc_actors_abis::subnet_actor_getter_facet::IpcEnvelope>);
 
 pub mod reward_token {
     pub const CONTRACT_NAME: &str = "RewardToken";
+    /// ERC20 decimals; must match RewardToken (OpenZeppelin ERC20 default).
+    pub const DECIMALS: u8 = 18;
 }
 
 pub mod reward_config {
