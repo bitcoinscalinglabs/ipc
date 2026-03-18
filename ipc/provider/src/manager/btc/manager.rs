@@ -886,6 +886,12 @@ impl SubnetManager for BtcSubnetManager {
                 snapshot_length: 10,
             });
 
+        if reward.is_some() {
+            tracing::info!("emission chain reward params enabled");
+        } else {
+            tracing::info!("emission chain reward params disabled (set EMISSION_CHAIN_FEATURES=true to enable)");
+        };
+
         Ok(SubnetGenesisInfo {
             active_validators_limit: active_validators_limit as u16,
             bottom_up_checkpoint_period: bottomup_check_period,
