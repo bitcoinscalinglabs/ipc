@@ -3,6 +3,7 @@
 
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
+use std::env;
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 
@@ -874,11 +875,16 @@ impl SubnetManager for BtcSubnetManager {
 
         // let reward = BtcSubnetManager::_parse_reward_params(result)?;
 
-        // TODO: Reward config is not written on the parent yet. Hardcoded for now.
-        let reward = Some(RewardParams {
-            activation_height: 10,
-            snapshot_length: 10,
-        });
+        // TODO: Reward config should be read from the genesis, but it is not written
+        // on the parent yet. Hardcoded for now.
+        // Enable reward params only when EMISSION_CHAIN_FEATURES=true
+        let reward = env::var("EMISSION_CHAIN_FEATURES")
+            .map(|v| v == "true")
+            .unwrap_or(false)
+            .then_some(RewardParams {
+                activation_height: 10,
+                snapshot_length: 10,
+            });
 
         Ok(SubnetGenesisInfo {
             active_validators_limit: active_validators_limit as u16,
