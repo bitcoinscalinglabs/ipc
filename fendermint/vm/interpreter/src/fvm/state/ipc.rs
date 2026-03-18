@@ -174,13 +174,11 @@ impl<DB: Blockstore + Clone> GatewayCaller<DB> {
             .current_membership(state)
             .context("failed to get current membership")?;
 
-        println!("current_power_table membership = {:#?}", membership);
-
         let power_table = membership_to_power_table(&membership, state.power_scale());
-
-        println!(
-            "current_power_table membership_to_power_table power_table = {:#?}",
-            power_table
+        tracing::debug!(
+            configuration_number = membership.configuration_number,
+            validators_len = power_table.len(),
+            "computed current power table from membership"
         );
 
         Ok((membership.configuration_number, power_table))
@@ -317,20 +315,18 @@ impl<DB: Blockstore + Clone> GatewayCaller<DB> {
         state: &mut FvmExecState<DB>,
         changes: Vec<StakingChangeRequest>,
     ) -> anyhow::Result<()> {
-        println!("store_validator_changes changes= {:#?}", changes);
-
         if changes.is_empty() {
             return Ok(());
         }
+        tracing::debug!(changes_len = changes.len(), "storing validator changes");
 
         let mut change_requests = vec![];
         for c in changes {
             change_requests.push(top_down_finality_facet::StakingChangeRequest::try_from(c)?);
         }
-
-        println!(
-            "store_validator_changes change_requests= {:#?}",
-            change_requests
+        tracing::debug!(
+            change_requests_len = change_requests.len(),
+            "converted validator changes to gateway requests"
         );
 
         self.topdown
@@ -362,15 +358,14 @@ impl<DB: Blockstore + Clone> GatewayCaller<DB> {
             .map(xnet_messaging_facet::IpcEnvelope::try_from)
             .collect::<Result<Vec<_>, _>>()
             .context("failed to convert cross messages")?;
-        tracing::debug!("apply_cross_messages: {:?}", messages);
         let r = self
             .xnet
             .call_with_return(state, |c| c.apply_cross_messages(messages))?;
         let r = r.into_return();
-        tracing::debug!("apply_cross_messages return: {:?}", r);
+        tracing::trace!("apply_cross_messages return: {:?}", r);
         for event in r.apply_ret.events.iter() {
             for entry in event.event.entries.iter() {
-                tracing::debug!(
+                tracing::trace!(
                     "key: {:?}, value: {:?}",
                     entry.key,
                     hex::encode(entry.value.clone())

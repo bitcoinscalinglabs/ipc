@@ -30,6 +30,10 @@ pub mod ownership_facet;
 #[allow(clippy::all)]
 pub mod register_subnet_facet;
 #[allow(clippy::all)]
+pub mod reward_config;
+#[allow(clippy::all)]
+pub mod reward_token;
+#[allow(clippy::all)]
 pub mod subnet_actor_activity_facet;
 #[allow(clippy::all)]
 pub mod subnet_actor_checkpointing_facet;

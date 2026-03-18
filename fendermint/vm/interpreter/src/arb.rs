@@ -6,7 +6,7 @@ use fendermint_vm_core::{chainid, Timestamp};
 use fvm_shared::version::NetworkVersion;
 use quickcheck::{Arbitrary, Gen};
 
-use crate::fvm::state::FvmStateParams;
+use crate::fvm::state::{FvmStateParams, RewardState};
 
 impl Arbitrary for FvmStateParams {
     fn arbitrary(g: &mut Gen) -> Self {
@@ -22,6 +22,13 @@ impl Arbitrary for FvmStateParams {
             power_scale: *g.choose(&[-1, 0, 3]).unwrap(),
             app_version: *g.choose(&[0, 1, 2]).unwrap(),
             consensus_params: None,
+            reward_state: if bool::arbitrary(g) {
+                Some(RewardState {
+                    last_minted_snapshot: Some(u64::arbitrary(g)),
+                })
+            } else {
+                None
+            },
         }
     }
 }

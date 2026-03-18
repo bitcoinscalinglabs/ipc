@@ -201,7 +201,6 @@ async fn test_applying_upgrades() {
         1.05,
         false,
         upgrade_scheduler,
-        None,
     );
 
     let genesis = Genesis {

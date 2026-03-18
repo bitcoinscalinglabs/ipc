@@ -22,6 +22,22 @@ pub fn create_temporary_subscriber() -> Subscriber {
         .finish()
 }
 
+/// Resolve the console log level: env vars (FM_LOG_LEVEL, RUST_LOG, LOG_LEVEL) override config.
+fn console_level(config: &TracingSettings) -> String {
+    std::env::var("FM_LOG_LEVEL")
+        .ok()
+        .or_else(|| std::env::var("RUST_LOG").ok())
+        .or_else(|| std::env::var("LOG_LEVEL").ok())
+        .or_else(|| {
+            config
+                .console
+                .as_ref()
+                .and_then(|c| c.level.clone())
+        })
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "info".to_string())
+}
+
 // Sets the global tracing subscriber.
 //
 // All traces emitted through the tracing library will be routed to this subscriber.
@@ -29,15 +45,12 @@ pub fn create_temporary_subscriber() -> Subscriber {
 // This subscriber bifurcates tracing events into two individual sinks: one for logs and one for
 // structured traces. We also set up the console sink, if requested by the configuration.
 //
+// Console log level: FM_LOG_LEVEL, RUST_LOG, or LOG_LEVEL (in that order) override config.
+//
 // Returns a guard that can be used to drop the subscriber.
 pub fn set_global_tracing_subscriber(config: &TracingSettings) -> Vec<WorkerGuard> {
     let console_layer = {
-        let filter: EnvFilter = config
-            .console
-            .as_ref()
-            .and_then(|c| c.level.clone())
-            .unwrap_or_default()
-            .into();
+        let filter: EnvFilter = console_level(config).into();
 
         // log all traces to stderr (reserving stdout for any actual output such as from the CLI commands)
         fmt::layer()

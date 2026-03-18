@@ -3,13 +3,14 @@
 
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
+use std::env;
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 use ethers::abi::ethereum_types;
 use ethers::providers::Authorization;
-use ethers::types::H256;
+use ethers::types::{Address as EthAddress, H256};
 use http::HeaderValue;
 use ipc_api::address::IPCAddress;
 use ipc_api::checkpoint::{
@@ -19,7 +20,7 @@ use ipc_api::checkpoint::{
 use ipc_api::evm::payload_to_evm_address;
 use ipc_api::subnet::{
     Asset, AssetKind, BtcConstructParams, BtcFundParams, BtcKillSubnetParams, ConstructParams,
-    FundParams, KillSubnetParams, PermissionMode, PreFundParams,
+    FundParams, KillSubnetParams, PermissionMode, PreFundParams, RewardParams,
 };
 use ipc_api::subnet::{BtcJoinParams, JoinParams};
 use ipc_api::validator::Validator;
@@ -33,8 +34,8 @@ use crate::config::subnet::SubnetConfig;
 use crate::config::Subnet;
 use crate::lotus::message::ipc::SubnetInfo;
 use crate::manager::subnet::{
-    BottomUpCheckpointRelayer, GetBlockHashResult, SubnetGenesisInfo, TopDownFinalityQuery,
-    TopDownQueryPayload, ValidatorRewarder,
+    BottomUpCheckpointRelayer, GetBlockHashResult, GetRewardedCollateralsResponse,
+    SubnetGenesisInfo, TopDownFinalityQuery, TopDownQueryPayload, ValidatorRewarder,
 };
 
 use crate::manager::SubnetManager;
@@ -153,7 +154,33 @@ impl BtcSubnetManager {
         let block_hash = H256::from_str(block_hash)?;
         Ok(block_hash)
     }
+
+    /// Parse reward params from a JSON value.
+    /// Returns Ok(None) if "reward" is not found.
+    /// Returns Ok(Some(...)) if "reward" is found and all required params parse.
+    /// Returns Err if "reward" is found but any required param is missing or invalid.
+    fn _parse_reward_params(value: &Value) -> Result<Option<RewardParams>, anyhow::Error> {
+        let reward = match value.get("reward") {
+            Some(r) => r,
+            None => return Ok(None),
+        };
+
+        let activation_height = reward
+            .get("activation_height")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| anyhow!("reward.activation_height missing or invalid"))?;
+        let snapshot_length = reward
+            .get("snapshot_length")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| anyhow!("reward.snapshot_length missing or invalid"))?;
+
+        Ok(Some(RewardParams {
+            activation_height,
+            snapshot_length,
+        }))
+    }
 }
+
 #[async_trait]
 impl SubnetManager for BtcSubnetManager {
     async fn create_subnet(
@@ -846,6 +873,25 @@ impl SubnetManager for BtcSubnetManager {
 
         let min_collateral = token_amount_from_satoshi(min_validator_stake);
 
+        // let reward = BtcSubnetManager::_parse_reward_params(result)?;
+
+        // TODO: Reward config should be read from the genesis, but it is not written
+        // on the parent yet. Hardcoded for now.
+        // Enable reward params only when EMISSION_CHAIN_FEATURES=true
+        let reward = env::var("EMISSION_CHAIN_FEATURES")
+            .map(|v| v == "true")
+            .unwrap_or(false)
+            .then_some(RewardParams {
+                activation_height: 10,
+                snapshot_length: 10,
+            });
+
+        if reward.is_some() {
+            tracing::info!("emission chain reward params enabled");
+        } else {
+            tracing::info!("emission chain reward params disabled (set EMISSION_CHAIN_FEATURES=true to enable)");
+        };
+
         Ok(SubnetGenesisInfo {
             active_validators_limit: active_validators_limit as u16,
             bottom_up_checkpoint_period: bottomup_check_period,
@@ -865,6 +911,7 @@ impl SubnetManager for BtcSubnetManager {
                 kind: AssetKind::Native,
                 token_address: None,
             },
+            reward,
         })
     }
 
@@ -1237,6 +1284,97 @@ impl SubnetManager for BtcSubnetManager {
         Ok(BitcoinHandoverSignature {
             unsigned_psbt: UnsignedPsbt(unsigned_psbt),
             signature,
+        })
+    }
+
+    async fn get_rewarded_collaterals(
+        &self,
+        snapshot_number: u64,
+    ) -> Result<GetRewardedCollateralsResponse> {
+        let body = json!({
+            "jsonrpc": "2.0",
+            "method": "getrewardedcollaterals",
+            "id": 1,
+            "params": {
+                "snapshot": snapshot_number,
+            }
+        });
+
+        let resp = self
+            .client
+            .post(self.rpc_url.clone())
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(anyhow!(
+                "getrewardedcollaterals request failed with status: {}",
+                resp.status()
+            ));
+        }
+
+        let data = resp.json::<Value>().await?;
+
+        if let Some(err_obj) = data.get("error") {
+            let code = err_obj
+                .get("code")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            let message = err_obj
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("Unknown error");
+            return Err(anyhow!(
+                "JSON-RPC error: code={}, message={}",
+                code,
+                message
+            ));
+        }
+
+        let result = data
+            .get("result")
+            .ok_or_else(|| anyhow!("Field result not found"))?;
+
+        let collaterals_arr = result
+            .get("collaterals")
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow!("collaterals array not found"))?;
+
+        let collaterals = collaterals_arr
+            .iter()
+            .map(|v| {
+                let arr = v
+                    .as_array()
+                    .ok_or_else(|| anyhow!("invalid collateral entry"))?;
+                let addr_str = arr
+                    .get(0)
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| anyhow!("address not found"))?;
+                let amount = arr
+                    .get(1)
+                    .and_then(Value::as_u64)
+                    .ok_or_else(|| anyhow!("amount not found"))?;
+                let addr = EthAddress::from_str(addr_str)
+                    .map_err(|e| anyhow!("invalid address: {}", e))?;
+                Ok((addr, amount))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let total_rewarded_collateral = result
+            .get("total_rewarded_collateral")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| anyhow!("total_rewarded_collateral not found"))?;
+
+        let snapshot = result
+            .get("snapshot")
+            .and_then(Value::as_u64)
+            .unwrap_or(snapshot_number);
+
+        Ok(GetRewardedCollateralsResponse {
+            collaterals,
+            total_rewarded_collateral,
+            snapshot,
         })
     }
 

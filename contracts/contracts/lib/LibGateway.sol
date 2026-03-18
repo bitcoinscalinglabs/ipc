@@ -27,7 +27,7 @@ library LibGateway {
     event NewTopDownMessage(address indexed subnet, IpcEnvelope message);
     /// @dev event emitted when there is a new bottom-up message batch to be signed.
     event NewBottomUpMsgBatch(uint256 indexed epoch);
-    
+
     event MustBeHere();
     event MustNotBeHere1(uint64 indexed appliedTopDownNonce, uint64 indexed nonce);
     event MustBeHere1();
@@ -382,7 +382,7 @@ library LibGateway {
                 // this means the subnet that sent the bottom up message is not registered,
                 // we cannot send the receipt back as top down because the subnet is not registered
                 // we ignore this message for as it's not valid, and it may be someone trying to forge it.
-               
+
                 return;
             }
             if (subnet.appliedBottomUpNonce != crossMsg.nonce) {
@@ -395,7 +395,7 @@ library LibGateway {
             // configuration of the subnet.
             supplySource = SubnetActorGetterFacet(subnet.id.getActor()).supplySource();
         } else if (applyType == IPCMsgType.TopDown) {
-            
+
             // Note: there is no need to load the subnet, as a top-down application means that _we_ are the subnet.
             if (s.appliedTopDownNonce != crossMsg.nonce) {
                 sendReceipt(crossMsg, OutcomeType.SystemErr, abi.encodeWithSelector(InvalidXnetMessage.selector, InvalidXnetMessageReason.Nonce));

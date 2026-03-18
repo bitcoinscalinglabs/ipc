@@ -356,11 +356,6 @@ where
                         .await
                         .context("failed to fetch validator changes")?;
 
-                    println!(
-                        "validator_changes_from {} to {}: {:?}",
-                        execution_fr, execution_to, validator_changes
-                    );
-
                     tracing::debug!(
                         from = execution_fr,
                         to = execution_to,

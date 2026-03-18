@@ -5,6 +5,7 @@ mod broadcast;
 mod check;
 mod checkpoint;
 mod exec;
+mod reward_mint;
 mod externs;
 pub mod observe;
 mod query;

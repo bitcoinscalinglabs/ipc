@@ -131,10 +131,24 @@ impl Arbitrary for ipc::GatewayParams {
     }
 }
 
+impl Arbitrary for ipc::RewardParams {
+    fn arbitrary(g: &mut quickcheck::Gen) -> Self {
+        Self {
+            activation_height: u64::arbitrary(g),
+            snapshot_length: u64::arbitrary(g).max(1),
+        }
+    }
+}
+
 impl Arbitrary for ipc::IpcParams {
     fn arbitrary(g: &mut quickcheck::Gen) -> Self {
         Self {
             gateway: ipc::GatewayParams::arbitrary(g),
+            reward: if bool::arbitrary(g) {
+                Some(ipc::RewardParams::arbitrary(g))
+            } else {
+                None
+            },
         }
     }
 }

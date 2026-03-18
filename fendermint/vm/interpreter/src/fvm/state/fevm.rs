@@ -272,9 +272,9 @@ where
             gas_premium: TokenAmount::from_atto(0),
         };
 
-        tracing::debug!("\nCALLING FVM: {msg:?}");
+        tracing::trace!("\nCALLING FVM: {msg:?}");
         let (ret, emitters) = state.execute_implicit(msg).context("failed to call FEVM")?;
-        tracing::debug!("\nRESULT FROM FVM: {ret:?}");
+        tracing::trace!("\nRESULT FROM FVM: {ret:?}");
 
         if !ret.msg_receipt.exit_code.is_success() {
             let output = ret.msg_receipt.return_data;

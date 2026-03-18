@@ -467,6 +467,7 @@ mod tests {
             power_scale: out.power_scale,
             app_version: 0,
             consensus_params: None,
+            reward_state: out.reward_state,
         };
 
         (state_params, store)

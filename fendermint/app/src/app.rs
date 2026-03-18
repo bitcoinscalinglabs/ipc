@@ -239,6 +239,7 @@ where
                     power_scale: 0,
                     app_version: 0,
                     consensus_params: None,
+                    reward_state: None,
                 },
             };
             self.set_committed_state(state)?;
@@ -902,6 +903,7 @@ where
                 base_fee,
                 circ_supply,
                 power_scale,
+                reward_state,
             },
             _,
         ) = exec_state.commit().context("failed to commit FVM")?;
@@ -911,6 +913,7 @@ where
         state.state_params.base_fee = base_fee;
         state.state_params.circ_supply = circ_supply;
         state.state_params.power_scale = power_scale;
+        state.state_params.reward_state = reward_state;
 
         let app_hash = state.app_hash();
         let block_height = state.block_height;

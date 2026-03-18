@@ -86,6 +86,7 @@ where
             power_scale: out.power_scale,
             app_version: 0,
             consensus_params: None,
+            reward_state: out.reward_state,
         };
 
         Ok(Self {
@@ -183,6 +184,7 @@ where
                 base_fee,
                 circ_supply,
                 power_scale,
+                reward_state,
             },
             _,
         ) = exec_state.commit().context("failed to commit FVM")?;
@@ -192,6 +194,7 @@ where
         self.state_params.base_fee = base_fee;
         self.state_params.circ_supply = circ_supply;
         self.state_params.power_scale = power_scale;
+        self.state_params.reward_state = reward_state;
 
         eprintln!("self.state_params: {:?}", self.state_params);
 

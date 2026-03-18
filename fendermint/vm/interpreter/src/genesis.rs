@@ -36,7 +36,7 @@ use ipc_actors_abis::i_diamond::FacetCut;
 use num_traits::Zero;
 
 use crate::fvm::state::snapshot::{derive_cid, StateTreeStreamer};
-use crate::fvm::state::{FvmGenesisState, FvmStateParams};
+use crate::fvm::state::{FvmGenesisState, FvmStateParams, RewardState};
 use crate::fvm::store::memory::MemoryBlockstore;
 use fendermint_vm_genesis::ipc::{GatewayParams, IpcParams};
 use serde::{Deserialize, Serialize};
@@ -64,6 +64,7 @@ impl GenesisMetadata {
             power_scale: out.power_scale,
             app_version: 0,
             consensus_params: None,
+            reward_state: out.reward_state,
         };
 
         GenesisMetadata {
@@ -155,6 +156,7 @@ pub struct GenesisOutput {
     pub power_scale: PowerScale,
     pub circ_supply: TokenAmount,
     pub validators: Vec<Validator<Power>>,
+    pub reward_state: Option<RewardState>,
 }
 
 pub struct GenesisBuilder {
@@ -272,9 +274,17 @@ impl GenesisBuilder {
             .map(|vc| vc.map_power(|c| c.into_power(genesis.power_scale)))
             .collect();
 
-        // Currently we just pass them back as they are, but later we should
-        // store them in the IPC actors; or in case of a snapshot restore them
-        // from the state.
+        //If genesis.ipc.reward is present, reward_state is Some; otherwise it is None.
+        let reward_state = genesis
+            .ipc
+            .as_ref()
+            .and_then(|ipc| ipc.reward.as_ref())
+            .and_then(|_| {
+                Some(RewardState {
+                    last_minted_snapshot: None,
+                })
+            });
+
         let out = GenesisOutput {
             chain_id,
             timestamp: genesis.timestamp,
@@ -283,6 +293,7 @@ impl GenesisBuilder {
             base_fee: genesis.base_fee,
             power_scale: genesis.power_scale,
             validators,
+            reward_state,
         };
 
         // STAGE 0: Declare the built-in EVM contracts we'll have to deploy.
@@ -478,6 +489,7 @@ impl GenesisBuilder {
                 out.circ_supply.clone(),
                 out.chain_id.into(),
                 out.power_scale,
+                out.reward_state.clone(),
             )
             .context("failed to init exec state")?;
 
@@ -564,8 +576,7 @@ fn deploy_contracts(
         } else {
             GatewayParams::new(SubnetID::new(config.chain_id.into(), vec![]))
         };
-
-        println!("fendermint vm genesis deploy contracts ipc_params={ipc_params:#?}");
+        tracing::debug!(?ipc_params, "using gateway params during genesis deployment");
 
         let params = ConstructorParameters::new(ipc_params, validators)
             .context("failed to create gateway constructor")?;
@@ -621,6 +632,31 @@ fn deploy_contracts(
         };
 
         deployer.deploy_contract(state, ipc::registry::CONTRACT_NAME, (facets, params))?;
+    }
+
+    // RewardToken and RewardConfig: deploy on all chains for same-address consistency.
+    // Emission chain gets real RewardConfig params; non-emission gets (0, 0, 0).
+    {
+        // ContractCaller uses SYSTEM_ACTOR_ADDR (t00) as sender. The EVM resolves ID addresses
+        // to EthAddress::from_id (0xff00..00 format), not builtin_actor_eth_addr nor 0x00..00.
+        let minter = et::Address::from(EthAddress::from_id(system::SYSTEM_ACTOR_ID).0);
+        let reward_token_params = ("IPC Reward".to_string(), "REWARD".to_string(), minter);
+        deployer.deploy_contract(state, ipc::reward_token::CONTRACT_NAME, reward_token_params)?;
+    }
+
+    {
+        let (activation_height, snapshot_length) = config
+            .ipc_params
+            .and_then(|p| p.reward.as_ref())
+            .map(|r| (r.activation_height, r.snapshot_length))
+            .unwrap_or((0u64, 0u64));
+
+        let reward_config_params = (activation_height, snapshot_length);
+        deployer.deploy_contract(
+            state,
+            ipc::reward_config::CONTRACT_NAME,
+            reward_config_params,
+        )?;
     }
 
     Ok(())
