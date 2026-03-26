@@ -181,6 +181,9 @@ library CrossMsgHelper {
         } else if (crossMsg.kind == IpcMsgKind.ErcTransfer) {
             _executeErcTransfer(crossMsg, recipient);
             return (true, EMPTY_BYTES);
+        } else if (crossMsg.kind == IpcMsgKind.ErcRegistration) {
+            _executeErcRegistration(crossMsg);
+            return (true, EMPTY_BYTES);
         }
         return (false, EMPTY_BYTES);
     }
@@ -237,6 +240,20 @@ library CrossMsgHelper {
                 s.wrappedTokens[key] = wrappedAddr;
             }
             IWrappedToken(wrappedAddr).mint(recipient, amount);
+        }
+    }
+
+    /// @notice Executes a top-down ErcRegistration message.
+    ///         Stores token metadata so that _executeErcTransfer can deploy WrappedTokens
+    ///         on first delivery. First write wins — metadata is immutable once registered.
+    /// @dev Called via delegatecall from LibGateway, so storage access via appStorage() is safe.
+    function _executeErcRegistration(IpcEnvelope calldata crossMsg) internal {
+        GatewayActorStorage storage s = LibGatewayActorStorage.appStorage();
+        (SubnetID memory homeSubnet, address homeToken, string memory name, string memory symbol, uint8 decimals) =
+            abi.decode(crossMsg.message, (SubnetID, address, string, string, uint8));
+        bytes32 key = keccak256(abi.encode(homeSubnet, homeToken));
+        if (bytes(s.tokenMetadata[key].name).length == 0) {
+            s.tokenMetadata[key] = TokenMetadata({name: name, symbol: symbol, decimals: decimals});
         }
     }
 }

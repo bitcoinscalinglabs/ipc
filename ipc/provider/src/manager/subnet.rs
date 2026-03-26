@@ -148,6 +148,27 @@ pub trait SubnetManager:
         dst_subnet: SubnetID,
     ) -> Result<ChainEpoch>;
 
+    /// Initiate a cross-subnet ERC20 transfer. `local_token` is either a plain ERC20 (locked in
+    /// gateway) or a WrappedToken (burned). The gateway resolves home subnet and home token via ERC165.
+    async fn transfer_erc_token(
+        &self,
+        gateway_addr: Option<Address>,
+        from: Address,
+        to: Address,
+        local_token: Address,
+        amount: TokenAmount,
+        dst_subnet: SubnetID,
+    ) -> Result<ChainEpoch>;
+
+    /// Returns the WrappedToken address on this subnet for the given (homeSubnet, homeToken) pair.
+    /// Returns address(0) if not yet deployed.
+    async fn get_wrapped_token(
+        &self,
+        gateway_addr: Option<Address>,
+        home_subnet: SubnetID,
+        home_token: Address,
+    ) -> Result<Address>;
+
     /// Propagate a cross-net message forward. For `postbox_msg_key`, we are using bytes because different
     /// runtime have different representations. For FVM, it should be `CID` as bytes. For EVM, it is
     /// `bytes32`.

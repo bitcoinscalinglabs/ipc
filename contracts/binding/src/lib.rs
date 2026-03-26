@@ -10,6 +10,8 @@ pub mod diamond_loupe_facet;
 #[allow(clippy::all)]
 pub mod gateway_diamond;
 #[allow(clippy::all)]
+pub mod gateway_erc_facet;
+#[allow(clippy::all)]
 pub mod gateway_getter_facet;
 #[allow(clippy::all)]
 pub mod gateway_manager_facet;
@@ -53,6 +55,10 @@ pub mod subnet_getter_facet;
 pub mod subnet_registry_diamond;
 #[allow(clippy::all)]
 pub mod top_down_finality_facet;
+#[allow(clippy::all)]
+pub mod wrapped_token;
+#[allow(clippy::all)]
+pub mod wrapped_token_factory;
 #[allow(clippy::all)]
 pub mod xnet_messaging_facet;
 

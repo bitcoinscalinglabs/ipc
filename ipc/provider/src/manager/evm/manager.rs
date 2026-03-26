@@ -8,10 +8,10 @@ use std::time::Duration;
 
 use ethers_contract::{ContractError, EthLogDecode, LogMeta};
 use ipc_actors_abis::{
-    checkpointing_facet, gateway_getter_facet, gateway_manager_facet, gateway_messenger_facet,
-    lib_gateway, lib_quorum, lib_staking_change_log, register_subnet_facet,
-    subnet_actor_activity_facet, subnet_actor_checkpointing_facet, subnet_actor_getter_facet,
-    subnet_actor_manager_facet, subnet_actor_reward_facet,
+    checkpointing_facet, gateway_getter_facet, gateway_manager_facet,
+    gateway_messenger_facet, lib_gateway, lib_quorum, lib_staking_change_log,
+    register_subnet_facet, subnet_actor_activity_facet, subnet_actor_checkpointing_facet,
+    subnet_actor_getter_facet, subnet_actor_manager_facet, subnet_actor_reward_facet,
 };
 use ipc_api::checkpoint::{BitcoinCheckpointSignatureQuorum, BottomUpCheckpointBundle};
 use ipc_api::evm::{fil_to_eth_amount, payload_to_evm_address, subnet_id_to_evm_addresses};
@@ -54,7 +54,7 @@ use ipc_api::checkpoint::{
     consensus::ValidatorData, BottomUpCheckpoint, QuorumReachedEvent, Signature,
     VALIDATOR_REWARD_FIELDS,
 };
-use ipc_api::cross::IpcEnvelope;
+use ipc_api::cross::{IpcEnvelope, IpcMsgKind};
 use ipc_api::merkle::MerkleGen;
 use ipc_api::staking::{StakingChangeRequest, ValidatorInfo, ValidatorStakingInfo};
 use ipc_api::subnet::EthConstructParams;
@@ -170,7 +170,16 @@ impl TopDownFinalityQuery for EthSubnetManager {
                 hash = Some(meta.block_hash);
             }
 
-            messages.push(IpcEnvelope::try_from(event.message)?);
+            let envelope = IpcEnvelope::try_from(event.message)?;
+            if matches!(
+                envelope.kind,
+                IpcMsgKind::ErcTransfer | IpcMsgKind::ErcRegistration
+            ) {
+                return Err(anyhow!(
+                    "ErcTransfer/ErcRegistration top-down delivery requires Bitcoin as parent subnet"
+                ));
+            }
+            messages.push(envelope);
         }
 
         let block_hash = if let Some(h) = hash {
@@ -754,6 +763,74 @@ impl SubnetManager for EthSubnetManager {
         let pending_tx = txn.send().await?;
         let receipt = pending_tx.retries(TRANSACTION_RECEIPT_RETRIES).await?;
         block_number_from_receipt(receipt)
+    }
+
+    async fn transfer_erc_token(
+        &self,
+        gateway_addr: Option<Address>,
+        from: Address,
+        to: Address,
+        local_token: Address,
+        amount: TokenAmount,
+        dst_subnet: SubnetID,
+    ) -> Result<ChainEpoch> {
+        let gateway_addr =
+            gateway_addr.ok_or_else(|| anyhow!("gateway address must be provided"))?;
+        self.ensure_same_gateway(&gateway_addr)?;
+
+        let value = fil_amount_to_eth_amount(&amount)?;
+        let local_token_addr = payload_to_evm_address(local_token.payload())?;
+        let to_addr = payload_to_evm_address(to.payload())?;
+        let evm_dst_subnet = gateway_manager_facet::SubnetID::try_from(&dst_subnet)?;
+
+        tracing::info!(
+            "transfer_erc_token: gateway={gateway_addr:}, local_token={local_token_addr:}, \
+             amount={amount}, to={to_addr:}, dst_subnet={dst_subnet:}"
+        );
+
+        let signer = Arc::new(self.get_signer_with_fee_estimator(&from)?);
+
+        // Approve gateway to spend local_token on behalf of `from`
+        let token_contract = IERC20::new(local_token_addr, signer.clone());
+        let txn = token_contract.approve(self.ipc_contract_info.gateway_addr, value);
+        let txn = extend_call_with_pending_block(txn).await?;
+        let pending_tx = txn.send().await?;
+        pending_tx.retries(TRANSACTION_RECEIPT_RETRIES).await?;
+
+        // Call gateway.transferErc(to, dstSubnet, localToken, amount)
+        let gateway_contract = gateway_manager_facet::GatewayManagerFacet::new(
+            self.ipc_contract_info.gateway_addr,
+            signer.clone(),
+        );
+        let txn = gateway_contract.transfer_erc(to_addr, evm_dst_subnet, local_token_addr, value);
+        let txn = extend_call_with_pending_block(txn).await?;
+        let pending_tx = txn.send().await?;
+        let receipt = pending_tx.retries(TRANSACTION_RECEIPT_RETRIES).await?;
+        block_number_from_receipt(receipt)
+    }
+
+    async fn get_wrapped_token(
+        &self,
+        gateway_addr: Option<Address>,
+        home_subnet: SubnetID,
+        home_token: Address,
+    ) -> Result<Address> {
+        let _gateway_addr =
+            gateway_addr.ok_or_else(|| anyhow!("gateway address must be provided"))?;
+
+        let home_subnet_evm = gateway_getter_facet::SubnetID::try_from(&home_subnet)?;
+        let home_token_addr = payload_to_evm_address(home_token.payload())?;
+
+        let provider = Arc::new(self.ipc_contract_info.provider.clone());
+        let getter = gateway_getter_facet::GatewayGetterFacet::new(
+            self.ipc_contract_info.gateway_addr,
+            provider,
+        );
+        let wrapped_addr = getter
+            .get_wrapped_token(home_subnet_evm, home_token_addr)
+            .call()
+            .await?;
+        ethers_address_to_fil_address(&wrapped_addr)
     }
 
     /// Propagate the postbox message key. The key should be `bytes32`.

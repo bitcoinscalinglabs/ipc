@@ -61,7 +61,9 @@ enum IpcMsgKind {
     /// (currently limited to `Transfer` messages)
     Result,
     /// @dev cross-subnet ERC20 token transfer. value=0; message=abi.encode(homeSubnet, homeToken, amount).
-    ErcTransfer
+    ErcTransfer,
+    /// @dev top-down ERC20 token metadata registration. value=0; message=abi.encode(homeSubnet, homeToken, name, symbol, decimals).
+    ErcRegistration
 }
 
 /// @notice Envelope used to propagate IPC cross-net messages

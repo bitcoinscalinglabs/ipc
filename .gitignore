@@ -11,3 +11,5 @@ my_deploy.sh
 
 logs/
 .tmp/
+
+CLAUDE.md

@@ -120,6 +120,10 @@ pub enum IpcMsgKind {
     /// receipt from the execution of cross-net messages
     /// (currently limited to `Transfer` messages)
     Receipt,
+    /// cross-subnet ERC20 token transfer. value=0; message=abi.encode(homeSubnet, homeToken, amount).
+    ErcTransfer,
+    /// top-down ERC20 token metadata registration. value=0; message=abi.encode(homeSubnet, homeToken, name, symbol, decimals).
+    ErcRegistration,
 }
 
 impl TryFrom<u8> for IpcMsgKind {
@@ -130,6 +134,8 @@ impl TryFrom<u8> for IpcMsgKind {
             0 => IpcMsgKind::Transfer,
             1 => IpcMsgKind::Call,
             2 => IpcMsgKind::Receipt,
+            3 => IpcMsgKind::ErcTransfer,
+            4 => IpcMsgKind::ErcRegistration,
             _ => return Err(anyhow!("invalid ipc msg kind")),
         })
     }

@@ -42,6 +42,7 @@ use crate::manager::SubnetManager;
 use anyhow::Result;
 
 use anyhow::anyhow;
+use num_traits::Zero;
 use fvm_shared::clock::ChainEpoch;
 use fvm_shared::{address::Address, econ::TokenAmount};
 use ipc_actors_abis::subnet_actor_activity_facet::ValidatorClaim;
@@ -711,6 +712,31 @@ impl SubnetManager for BtcSubnetManager {
         );
     }
 
+    async fn transfer_erc_token(
+        &self,
+        _gateway_addr: Option<Address>,
+        _from: Address,
+        _to: Address,
+        _local_token: Address,
+        _amount: TokenAmount,
+        _dst_subnet: SubnetID,
+    ) -> Result<ChainEpoch> {
+        unimplemented!(
+            "transfer_erc_token on bitcoin is not supported, it is not meant to be used as a child subnet"
+        )
+    }
+
+    async fn get_wrapped_token(
+        &self,
+        _gateway_addr: Option<Address>,
+        _home_subnet: SubnetID,
+        _home_token: Address,
+    ) -> Result<Address> {
+        Err(anyhow!(
+            "get_wrapped_token is only supported on EVM child subnets, not the Bitcoin parent"
+        ))
+    }
+
     async fn propagate(
         &self,
         subnet: SubnetID,
@@ -1074,6 +1100,11 @@ impl SubnetManager for BtcSubnetManager {
                 }
                 //TODO(btc): add receipt handling
                 ipc_api::cross::IpcMsgKind::Receipt => {}
+                // ERC token registration and transfer are top-down only; skip in bottom-up checkpoints
+                ipc_api::cross::IpcMsgKind::ErcTransfer
+                | ipc_api::cross::IpcMsgKind::ErcRegistration => {
+                    tracing::info!("ignoring ErcTransfer/ErcRegistration in bottom-up checkpoint")
+                }
             }
         }
 
@@ -1903,47 +1934,7 @@ impl TopDownFinalityQuery for BtcSubnetManager {
             .and_then(Value::as_array)
             .ok_or_else(|| anyhow!("Field result not found"))?;
         for result in results {
-            // parse kind
-            let kind = match result.get("kind").and_then(Value::as_str) {
-                Some("fund") => IpcMsgKind::Transfer,
-                Some(_) => return Err(anyhow!("Unknown kind in result")),
-                None => return Err(anyhow!("Field kind not found in result")),
-            };
-
-            // parse subnet_id
-            let target_subnet_id = result
-                .get("msg")
-                .and_then(|msg| msg.get("subnet_id"))
-                .and_then(Value::as_str)
-                .ok_or_else(|| anyhow!("Field subnet_id not found in result"))?;
-            let target_subnet_id = SubnetID::from_str(target_subnet_id)?;
-
-            // parse value
-            let value = result
-                .get("msg")
-                .and_then(|msg| msg.get("amount"))
-                .and_then(Value::as_i64)
-                .ok_or_else(|| anyhow!("Field amount not found in result"))?;
-
-            // parse address
-            let target_address = result
-                .get("msg")
-                .and_then(|msg| msg.get("address"))
-                .and_then(Value::as_str)
-                .ok_or_else(|| anyhow!("Field address not found in result"))?;
-            let address = ethers::types::Address::from_str(target_address)?;
-            let target_address = ethers_address_to_fil_address(&address)?;
-
-            // TODO(Orestis): add "from" argument to RPC
-            // parse from
-            // let from = result
-            //     .get("from")
-            //     .and_then(Value::as_str)
-            //     .ok_or_else(|| anyhow!("No from address found in result"))?;
-            // let from = ethers::types::Address::from_str(from)?;
-            // let from = ethers_address_to_fil_address(&from)?;
-
-            // parse block_hash
+            // parse block_hash (common to all kinds)
             let block_hash = result
                 .get("block_hash")
                 .and_then(Value::as_str)
@@ -1954,24 +1945,167 @@ impl TopDownFinalityQuery for BtcSubnetManager {
             }
             prev_block_hash = Some(block_hash);
 
-            // parse nonce
+            // parse nonce (common to all kinds)
             let nonce = result
                 .get("nonce")
                 .and_then(Value::as_u64)
                 .ok_or_else(|| anyhow!("Field nonce not found in result"))?;
 
-            let envelope = IpcEnvelope {
-                kind,
-                to: IPCAddress::new(&target_subnet_id, &target_address)?,
-                value: token_amount_from_satoshi(value),
-                // TODO(Orestis): The following should only work for fund/prefund messages.
-                // Change when we implement transfers.
-                from: IPCAddress::new(
-                    &SubnetID::new_root(subnet_id.root_id()),
-                    &Address::new_delegated(BTC_NAMESPACE, &vec![0; 20])?,
-                )?,
-                message: vec![],
-                nonce,
+            let btc_root_addr =
+                Address::new_delegated(BTC_NAMESPACE, &vec![0; 20])?;
+            let from_root =
+                IPCAddress::new(&SubnetID::new_root(subnet_id.root_id()), &btc_root_addr)?;
+
+            let envelope = match result.get("kind").and_then(Value::as_str) {
+                Some("fund") => {
+                    let msg = result
+                        .get("msg")
+                        .ok_or_else(|| anyhow!("Field msg not found in fund result"))?;
+
+                    let target_subnet_id = msg
+                        .get("subnet_id")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| anyhow!("Field subnet_id not found in fund result"))?;
+                    let target_subnet_id = SubnetID::from_str(target_subnet_id)?;
+
+                    let value = msg
+                        .get("amount")
+                        .and_then(Value::as_i64)
+                        .ok_or_else(|| anyhow!("Field amount not found in fund result"))?;
+
+                    let target_address = msg
+                        .get("address")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| anyhow!("Field address not found in fund result"))?;
+                    let eth_addr = ethers::types::Address::from_str(target_address)?;
+                    let target_address = ethers_address_to_fil_address(&eth_addr)?;
+
+                    IpcEnvelope {
+                        kind: IpcMsgKind::Transfer,
+                        to: IPCAddress::new(&target_subnet_id, &target_address)?,
+                        value: token_amount_from_satoshi(value),
+                        from: from_root,
+                        message: vec![],
+                        nonce,
+                    }
+                }
+                Some("erc_registration") => {
+                    // ErcRegistration JSON structure (from bitcoin-ipc RootnetMessage):
+                    // { "kind": "erc_registration", "home_subnet_id": "...",
+                    //   "registration": { "home_token_address": "0x...", "name": "...", "symbol": "...", "decimals": N },
+                    //   "block_height": N, "block_hash": "...", "nonce": N, "txid": "..." }
+                    // Note: no "msg" wrapper and no "subnet_id" — the destination is the subnet we queried for.
+
+                    let home_subnet_id = result
+                        .get("home_subnet_id")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| anyhow!("Field home_subnet_id not found in erc_registration result"))?;
+                    let home_subnet_id = SubnetID::from_str(home_subnet_id)?;
+
+                    let registration = result
+                        .get("registration")
+                        .ok_or_else(|| anyhow!("Field registration not found in erc_registration result"))?;
+
+                    let home_token = registration
+                        .get("home_token_address")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| anyhow!("Field home_token_address not found in registration"))?;
+                    let home_token = ethers::types::Address::from_str(home_token)?;
+
+                    let name = registration
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| anyhow!("Field name not found in registration"))?;
+
+                    let symbol = registration
+                        .get("symbol")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| anyhow!("Field symbol not found in registration"))?;
+
+                    let decimals = registration
+                        .get("decimals")
+                        .and_then(Value::as_u64)
+                        .ok_or_else(|| anyhow!("Field decimals not found in registration"))?
+                        as u8;
+
+                    let message = abi_encode_erc_registration_msg(
+                        &home_subnet_id,
+                        home_token,
+                        name,
+                        symbol,
+                        decimals,
+                    )?;
+
+                    // Destination is the subnet we queried for (subnet_id parameter)
+                    IpcEnvelope {
+                        kind: IpcMsgKind::ErcRegistration,
+                        to: IPCAddress::new(subnet_id, &btc_root_addr)?,
+                        from: from_root,
+                        value: TokenAmount::zero(),
+                        message,
+                        nonce,
+                    }
+                }
+                Some("erc_transfer") => {
+                    // ErcTransfer JSON structure (from bitcoin-ipc RootnetMessage):
+                    // { "kind": "erc_transfer",
+                    //   "msg": { "home_subnet_id": "...", "home_token_address": "0x...",
+                    //            "amount": [0,0,...,3,232], "destination_subnet_id": "...", "recipient": "0x..." },
+                    //   "block_height": N, "block_hash": "...", "nonce": N, "txid": "..." }
+                    let msg = result
+                        .get("msg")
+                        .ok_or_else(|| anyhow!("Field msg not found in erc_transfer result"))?;
+
+                    let home_subnet_id = msg
+                        .get("home_subnet_id")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| anyhow!("Field home_subnet_id not found in erc_transfer msg"))?;
+                    let home_subnet_id = SubnetID::from_str(home_subnet_id)?;
+
+                    let home_token = msg
+                        .get("home_token_address")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| anyhow!("Field home_token_address not found in erc_transfer msg"))?;
+                    let home_token = ethers::types::Address::from_str(home_token)?;
+
+                    // amount is serialized as a JSON array of 32 bytes (big-endian U256)
+                    let amount_arr = msg
+                        .get("amount")
+                        .and_then(Value::as_array)
+                        .ok_or_else(|| anyhow!("Field amount not found or not array in erc_transfer msg"))?;
+                    let mut amount_bytes = [0u8; 32];
+                    if amount_arr.len() != 32 {
+                        return Err(anyhow!("amount array must have exactly 32 elements, got {}", amount_arr.len()));
+                    }
+                    for (i, v) in amount_arr.iter().enumerate() {
+                        amount_bytes[i] = v.as_u64().ok_or_else(|| anyhow!("amount[{}] is not a number", i))? as u8;
+                    }
+                    let amount = ethers::types::U256::from_big_endian(&amount_bytes);
+
+                    let recipient = msg
+                        .get("recipient")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| anyhow!("Field recipient not found in erc_transfer msg"))?;
+                    let recipient_eth = ethers::types::Address::from_str(recipient)?;
+                    let recipient_fil = ethers_address_to_fil_address(&recipient_eth)?;
+
+                    let message =
+                        abi_encode_erc_transfer_msg(&home_subnet_id, home_token, amount)?;
+
+                    // Destination is the subnet we queried for
+                    IpcEnvelope {
+                        kind: IpcMsgKind::ErcTransfer,
+                        to: IPCAddress::new(subnet_id, &recipient_fil)?,
+                        from: from_root,
+                        value: TokenAmount::zero(),
+                        message,
+                        nonce,
+                    }
+                }
+                Some(unknown) => {
+                    return Err(anyhow!("Unknown kind in getrootnetmessages result: {}", unknown))
+                }
+                None => return Err(anyhow!("Field kind not found in result")),
             };
             messages.push(envelope);
         }
@@ -2253,6 +2387,48 @@ fn get_validators_from_response(
         .collect();
 
     Ok(validators)
+}
+
+fn subnet_id_to_abi_token(subnet: &SubnetID) -> anyhow::Result<ethers::abi::Token> {
+    use ipc_api::evm::subnet_id_to_evm_addresses;
+    let route = subnet_id_to_evm_addresses(subnet)?
+        .into_iter()
+        .map(ethers::abi::Token::Address)
+        .collect();
+    Ok(ethers::abi::Token::Tuple(vec![
+        ethers::abi::Token::Uint(ethers::types::U256::from(subnet.root_id())),
+        ethers::abi::Token::Array(route),
+    ]))
+}
+
+fn abi_encode_erc_transfer_msg(
+    home_subnet: &SubnetID,
+    home_token: ethers::types::Address,
+    amount: ethers::types::U256,
+) -> anyhow::Result<Vec<u8>> {
+    let subnet_tok = subnet_id_to_abi_token(home_subnet)?;
+    Ok(ethers::abi::encode(&[
+        subnet_tok,
+        ethers::abi::Token::Address(home_token),
+        ethers::abi::Token::Uint(amount),
+    ]))
+}
+
+fn abi_encode_erc_registration_msg(
+    home_subnet: &SubnetID,
+    home_token: ethers::types::Address,
+    name: &str,
+    symbol: &str,
+    decimals: u8,
+) -> anyhow::Result<Vec<u8>> {
+    let subnet_tok = subnet_id_to_abi_token(home_subnet)?;
+    Ok(ethers::abi::encode(&[
+        subnet_tok,
+        ethers::abi::Token::Address(home_token),
+        ethers::abi::Token::String(name.to_string()),
+        ethers::abi::Token::String(symbol.to_string()),
+        ethers::abi::Token::Uint(ethers::types::U256::from(decimals)),
+    ]))
 }
 
 #[cfg(test)]

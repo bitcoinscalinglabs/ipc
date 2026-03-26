@@ -63,6 +63,9 @@ fn main() {
         "LibQuorum",
         "RewardToken",
         "RewardConfig",
+        "GatewayErcFacet",
+        "WrappedToken",
+        "WrappedTokenFactory",
     ] {
         let module_name = camel_to_snake(contract_name);
         let input_path =
