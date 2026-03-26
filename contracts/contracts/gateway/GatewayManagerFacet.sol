@@ -4,15 +4,17 @@ pragma solidity ^0.8.23;
 import {GatewayActorModifiers} from "../lib/LibGatewayActorStorage.sol";
 import {SubnetActorGetterFacet} from "../subnet/SubnetActorGetterFacet.sol";
 import {BURNT_FUNDS_ACTOR} from "../constants/Constants.sol";
-import {IpcEnvelope} from "../structs/CrossNet.sol";
+import {IpcEnvelope, IpcMsgKind} from "../structs/CrossNet.sol";
+import {IWrappedToken} from "../interfaces/IWrappedToken.sol";
+import {IERC165} from "../interfaces/IERC165.sol";
+import {CrossMsgHelper} from "../lib/CrossMsgHelper.sol";
 import {FvmAddress} from "../structs/FvmAddress.sol";
 import {FvmAddressHelper} from "../lib/FvmAddressHelper.sol";
 import {SubnetID, IPCAddress, Subnet, Asset} from "../structs/Subnet.sol";
 import {Membership, AssetKind} from "../structs/Subnet.sol";
-import {AlreadyRegisteredSubnet, CannotReleaseZero, MethodNotAllowed, NotEnoughFunds, NotEnoughFundsToRelease, NotEnoughCollateral, NotEmptySubnetCircSupply, NotRegisteredSubnet, InvalidXnetMessage, InvalidXnetMessageReason} from "../errors/IPCErrors.sol";
+import {AlreadyRegisteredSubnet, CannotReleaseZero, MethodNotAllowed, NotEnoughFunds, NotEnoughFundsToRelease, NotEnoughCollateral, NotEmptySubnetCircSupply, NotRegisteredSubnet, InvalidXnetMessage, InvalidXnetMessageReason, TokenNotRegistered} from "../errors/IPCErrors.sol";
 import {LibGateway} from "../lib/LibGateway.sol";
 import {SubnetIDHelper} from "../lib/SubnetIDHelper.sol";
-import {CrossMsgHelper} from "../lib/CrossMsgHelper.sol";
 import {FilAddress} from "fevmate/contracts/utils/FilAddress.sol";
 import {ReentrancyGuard} from "../lib/LibReentrancyGuard.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -245,5 +247,64 @@ contract GatewayManagerFacet is GatewayActorModifiers, ReentrancyGuard {
         LibGateway.commitBottomUpMsg(crossMsg);
         // burn funds that are being released
         payable(BURNT_FUNDS_ACTOR).sendValue(msg.value);
+    }
+
+    /// @notice Initiate a cross-subnet ERC20 transfer, transfering `localToken`.
+    ///         Case A — `localToken` is natively/locally deployed on this subnet:
+    ///                   the amount is locked in the Gateway.
+    ///         Case B — `localToken` is natively/locally deployed on a different
+    ///                   subnet: the amount is burned.
+    /// @param to           Recipient address on the destination subnet.
+    /// @param dstSubnet    Destination subnet ID.
+    /// @param localToken   Address of the token on this subnet (plain ERC20 or WrappedToken).
+    /// @param amount       Amount to transfer.
+    function transferErc(
+        address to,
+        SubnetID calldata dstSubnet,
+        address localToken,
+        uint256 amount
+    ) external nonReentrant {
+        SubnetID memory homeSubnet;
+        address homeToken;
+        bool isBurn;
+
+        // Detect WrappedToken via ERC165 — burn path; else lock path.
+        bool isWrapped = false;
+        try IERC165(localToken).supportsInterface(type(IWrappedToken).interfaceId) returns (bool result) {
+            isWrapped = result;
+        } catch {}
+
+        // Case B: The token is natively/locally deployed on another subnet,
+        // denoted `homeSubnet`, where its address is `homeToken`.
+        if (isWrapped) {
+            homeSubnet = IWrappedToken(localToken).homeSubnet();
+            homeToken = IWrappedToken(localToken).homeTokenAddress();
+            IWrappedToken(localToken).burnFrom(msg.sender, amount);
+            isBurn = true;
+        } else {
+        // Case A: The token is native on this subnet. It must be declared
+        // as Bridgeable in order to support transfers to other subnets.
+            if (!s.registeredBridgeableTokens[localToken]) {
+                revert TokenNotRegistered();
+            }
+            IERC20(localToken).transferFrom(msg.sender, address(this), amount);
+            homeSubnet = s.networkName;
+            homeToken = localToken;
+            isBurn = false;
+        }
+
+        // Pre-read the nonce so we can compute the envelope hash after nonce assignment.
+        uint64 assignedNonce = s.bottomUpNonce;
+
+        IpcEnvelope memory envelope = IpcEnvelope({
+            kind: IpcMsgKind.ErcTransfer,
+            from: IPCAddress({subnetId: s.networkName, rawAddress: FvmAddressHelper.from(msg.sender)}),
+            to: IPCAddress({subnetId: dstSubnet, rawAddress: FvmAddressHelper.from(to)}),
+            value: 0,
+            nonce: assignedNonce,
+            message: abi.encode(homeSubnet, homeToken, amount)
+        });
+
+        LibGateway.commitBottomUpMsg(envelope);
     }
 }

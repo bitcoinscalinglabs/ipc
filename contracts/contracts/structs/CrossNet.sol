@@ -59,7 +59,9 @@ enum IpcMsgKind {
     Call,
     /// @dev receipt from the execution of cross-net messages
     /// (currently limited to `Transfer` messages)
-    Result
+    Result,
+    /// @dev cross-subnet ERC20 token transfer. value=0; message=abi.encode(homeSubnet, homeToken, amount).
+    ErcTransfer
 }
 
 /// @notice Envelope used to propagate IPC cross-net messages

@@ -19,6 +19,7 @@ import {SubnetActorDiamond} from "../contracts/SubnetActorDiamond.sol";
 import {GatewayGetterFacet} from "../contracts/gateway/GatewayGetterFacet.sol";
 import {GatewayMessengerFacet} from "../contracts/gateway/GatewayMessengerFacet.sol";
 import {GatewayManagerFacet} from "../contracts/gateway/GatewayManagerFacet.sol";
+import {GatewayErcFacet} from "../contracts/gateway/GatewayErcFacet.sol";
 
 import {CheckpointingFacet} from "../contracts/gateway/router/CheckpointingFacet.sol";
 import {XnetMessagingFacet} from "../contracts/gateway/router/XnetMessagingFacet.sol";
@@ -135,6 +136,8 @@ contract TestGatewayActor is Test, TestParams {
     bytes4[] gwGetterSelectors;
     bytes4[] gwMessengerSelectors;
 
+    bytes4[] gwErcFacetSelectors;
+
     bytes4[] gwCutterSelectors;
     bytes4[] gwLoupeSelectors;
 
@@ -150,6 +153,7 @@ contract TestGatewayActor is Test, TestParams {
         gwGetterSelectors = SelectorLibrary.resolveSelectors("GatewayGetterFacet");
         gwManagerSelectors = SelectorLibrary.resolveSelectors("GatewayManagerFacet");
         gwMessengerSelectors = SelectorLibrary.resolveSelectors("GatewayMessengerFacet");
+        gwErcFacetSelectors = SelectorLibrary.resolveSelectors("GatewayErcFacet");
         gwCutterSelectors = SelectorLibrary.resolveSelectors("DiamondCutFacet");
         gwLoupeSelectors = SelectorLibrary.resolveSelectors("DiamondLoupeFacet");
 
@@ -320,7 +324,8 @@ contract IntegrationTestBase is Test, TestParams, TestRegistry, TestSubnetActor,
             majorityPercentage: DEFAULT_MAJORITY_PERCENTAGE,
             genesisValidators: new Validator[](0),
             activeValidatorsLimit: DEFAULT_ACTIVE_VALIDATORS_LIMIT,
-            commitSha: DEFAULT_COMMIT_SHA
+            commitSha: DEFAULT_COMMIT_SHA,
+            wrappedTokenFactory: address(0)
         });
         return params;
     }
@@ -332,7 +337,8 @@ contract IntegrationTestBase is Test, TestParams, TestRegistry, TestSubnetActor,
             majorityPercentage: DEFAULT_MAJORITY_PERCENTAGE,
             genesisValidators: new Validator[](0),
             activeValidatorsLimit: DEFAULT_ACTIVE_VALIDATORS_LIMIT,
-            commitSha: DEFAULT_COMMIT_SHA
+            commitSha: DEFAULT_COMMIT_SHA,
+            wrappedTokenFactory: address(0)
         });
         return params;
     }
@@ -344,11 +350,12 @@ contract IntegrationTestBase is Test, TestParams, TestRegistry, TestSubnetActor,
         GatewayManagerFacet manager = new GatewayManagerFacet();
         GatewayGetterFacet getter = new GatewayGetterFacet();
         GatewayMessengerFacet messenger = new GatewayMessengerFacet();
+        GatewayErcFacet ercFacet = new GatewayErcFacet();
         DiamondCutFacet cutter = new DiamondCutFacet();
         DiamondLoupeFacet louper = new DiamondLoupeFacet();
         OwnershipFacet ownership = new OwnershipFacet();
 
-        IDiamond.FacetCut[] memory gwDiamondCut = new IDiamond.FacetCut[](9);
+        IDiamond.FacetCut[] memory gwDiamondCut = new IDiamond.FacetCut[](10);
 
         gwDiamondCut[0] = (
             IDiamond.FacetCut({
@@ -419,6 +426,14 @@ contract IntegrationTestBase is Test, TestParams, TestRegistry, TestSubnetActor,
                 facetAddress: address(ownership),
                 action: IDiamond.FacetCutAction.Add,
                 functionSelectors: gwOwnershipSelectors
+            })
+        );
+
+        gwDiamondCut[9] = (
+            IDiamond.FacetCut({
+                facetAddress: address(ercFacet),
+                action: IDiamond.FacetCutAction.Add,
+                functionSelectors: gwErcFacetSelectors
             })
         );
 

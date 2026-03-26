@@ -13,6 +13,11 @@ import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 import {Asset} from "../structs/Subnet.sol";
 import {AssetHelper} from "./AssetHelper.sol";
 import {IIpcHandler} from "../../sdk/interfaces/IIpcHandler.sol";
+import {GatewayActorStorage, TokenMetadata, LibGatewayActorStorage} from "../lib/LibGatewayActorStorage.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IWrappedToken} from "../interfaces/IWrappedToken.sol";
+import {WrappedTokenFactory} from "../token/WrappedTokenFactory.sol";
+import {TokenMetadataNotFound} from "../errors/IPCErrors.sol";
 
 /// @title Helper library for manipulating IpcEnvelope-related structs
 library CrossMsgHelper {
@@ -173,6 +178,9 @@ library CrossMsgHelper {
                     abi.encodeCall(IIpcHandler.handleIpcMessage, (crossMsg)),
                     crossMsg.value
                 );
+        } else if (crossMsg.kind == IpcMsgKind.ErcTransfer) {
+            _executeErcTransfer(crossMsg, recipient);
+            return (true, EMPTY_BYTES);
         }
         return (false, EMPTY_BYTES);
     }
@@ -198,5 +206,37 @@ library CrossMsgHelper {
         }
 
         return true;
+    }
+
+    /// @notice Executes a top-down ErcTransfer message on arrival.
+    ///         Case A — arriving at the home subnet: unlocks the original
+    ///                  ERC20 tokens.
+    ///         Case B — arriving at a non-home subnet: mints WrappedToken,
+    ///                  deploying it via the WrappedTokenFactory on first encounter.
+    /// @dev Called via delegatecall from LibGateway, so storage access via appStorage() is safe.
+    function _executeErcTransfer(IpcEnvelope calldata crossMsg, address recipient) internal {
+        GatewayActorStorage storage s = LibGatewayActorStorage.appStorage();
+        (SubnetID memory homeSubnet, address homeToken, uint256 amount) =
+            abi.decode(crossMsg.message, (SubnetID, address, uint256));
+
+        if (s.networkName.equals(homeSubnet)) {
+            // Case A: this is the home subnet — release the locked tokens to the recipient.
+            IERC20(homeToken).transfer(recipient, amount);
+        } else {
+            // Case B: non-home subnet — mint a WrappedToken for the recipient.
+            bytes32 key = keccak256(abi.encode(homeSubnet, homeToken));
+            address wrappedAddr = s.wrappedTokens[key];
+            if (wrappedAddr == address(0)) {
+                TokenMetadata storage meta = s.tokenMetadata[key];
+                if (bytes(meta.name).length == 0) {
+                    revert TokenMetadataNotFound();
+                }
+                wrappedAddr = WrappedTokenFactory(s.wrappedTokenFactory).deployWrappedToken(
+                    homeSubnet, homeToken, meta.name, meta.symbol, meta.decimals
+                );
+                s.wrappedTokens[key] = wrappedAddr;
+            }
+            IWrappedToken(wrappedAddr).mint(recipient, amount);
+        }
     }
 }

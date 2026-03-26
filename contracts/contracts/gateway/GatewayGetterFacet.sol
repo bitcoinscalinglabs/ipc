@@ -8,7 +8,7 @@ import {Membership} from "../structs/Subnet.sol";
 import {LibGateway} from "../lib/LibGateway.sol";
 import {LibStaking} from "../lib/LibStaking.sol";
 import {LibQuorum} from "../lib/LibQuorum.sol";
-import {GatewayActorStorage} from "../lib/LibGatewayActorStorage.sol";
+import {GatewayActorStorage, TokenMetadata} from "../lib/LibGatewayActorStorage.sol";
 import {SubnetIDHelper} from "../lib/SubnetIDHelper.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
@@ -264,4 +264,35 @@ contract GatewayGetterFacet {
         (exists, epoch, checkpoint) = LibGateway.getCurrentBottomUpCheckpoint();
         return (exists, epoch, checkpoint);
     }
+
+    // =========================================================================
+    // ERC Token Bridging getters
+    // =========================================================================
+
+    /// @notice Returns stored metadata for a bridgeable token.
+    /// @param homeSubnet       The subnet where the token is natively deployed.
+    /// @param homeToken        The token address on its home subnet.
+    function getTokenMetadata(
+        SubnetID calldata homeSubnet,
+        address homeToken
+    ) external view returns (TokenMetadata memory) {
+        bytes32 key = keccak256(abi.encode(homeSubnet, homeToken));
+        return s.tokenMetadata[key];
+    }
+
+    /// @notice Returns the deployed WrappedToken address for a given (homeSubnet, homeToken) pair.
+    ///         Returns address(0) if not yet deployed.
+    function getWrappedToken(
+        SubnetID calldata homeSubnet,
+        address homeToken
+    ) external view returns (address) {
+        bytes32 key = keccak256(abi.encode(homeSubnet, homeToken));
+        return s.wrappedTokens[key];
+    }
+
+    /// @notice Returns the WrappedTokenFactory address configured on this gateway.
+    function getWrappedTokenFactory() external view returns (address) {
+        return s.wrappedTokenFactory;
+    }
+
 }
