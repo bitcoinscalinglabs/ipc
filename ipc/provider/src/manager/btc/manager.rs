@@ -2068,19 +2068,15 @@ impl TopDownFinalityQuery for BtcSubnetManager {
                         .ok_or_else(|| anyhow!("Field home_token_address not found in erc_transfer msg"))?;
                     let home_token = ethers::types::Address::from_str(home_token)?;
 
-                    // amount is serialized as a JSON array of 32 bytes (big-endian U256)
-                    let amount_arr = msg
+                    // amount is serialized as a hex string by alloy_primitives::U256 (e.g. "0x3e8")
+                    let amount_str = msg
                         .get("amount")
-                        .and_then(Value::as_array)
-                        .ok_or_else(|| anyhow!("Field amount not found or not array in erc_transfer msg"))?;
-                    let mut amount_bytes = [0u8; 32];
-                    if amount_arr.len() != 32 {
-                        return Err(anyhow!("amount array must have exactly 32 elements, got {}", amount_arr.len()));
-                    }
-                    for (i, v) in amount_arr.iter().enumerate() {
-                        amount_bytes[i] = v.as_u64().ok_or_else(|| anyhow!("amount[{}] is not a number", i))? as u8;
-                    }
-                    let amount = ethers::types::U256::from_big_endian(&amount_bytes);
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| anyhow!("Field amount not found or not string in erc_transfer msg"))?;
+                    let amount = ethers::types::U256::from_str_radix(
+                        amount_str.strip_prefix("0x").unwrap_or(amount_str),
+                        16,
+                    ).map_err(|e| anyhow!("Failed to parse amount '{}': {}", amount_str, e))?;
 
                     let recipient = msg
                         .get("recipient")
