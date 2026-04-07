@@ -1071,9 +1071,12 @@ impl SubnetManager for BtcSubnetManager {
     ) -> Result<BitcoinCheckpointSignature> {
         tracing::debug!("Creating bitcoin signatures for checkpoint: {checkpoint:?}");
 
-        // collect all withdrawals and transfers from the checkpoint msgs
+        // collect all withdrawals, transfers, and ERC token data from the checkpoint msgs
         let mut releases = Vec::new();
         let mut transfers = Vec::new();
+        let mut token_registrations = Vec::new();
+        let mut token_supply_adjustments = Vec::new();
+        let mut token_transfers = Vec::new();
 
         for msg in checkpoint.msgs {
             match msg.kind {
@@ -1100,10 +1103,42 @@ impl SubnetManager for BtcSubnetManager {
                 }
                 //TODO(btc): add receipt handling
                 ipc_api::cross::IpcMsgKind::Receipt => {}
-                // ERC token registration and transfer are top-down only; skip in bottom-up checkpoints
-                ipc_api::cross::IpcMsgKind::ErcTransfer
-                | ipc_api::cross::IpcMsgKind::ErcRegistration => {
-                    tracing::info!("ignoring ErcTransfer/ErcRegistration in bottom-up checkpoint")
+                ipc_api::cross::IpcMsgKind::ErcTransfer => {
+                    let (home_subnet, home_token, amount) =
+                        abi_decode_erc_transfer_msg(&msg.message)?;
+                    let mut destination_subnet = msg.to.subnet()?;
+                    destination_subnet.root_network_type = NetworkType::Btc;
+                    let mut home_subnet_btc = home_subnet;
+                    home_subnet_btc.root_network_type = NetworkType::Btc;
+                    let recipient = ipc_api::address::to_eth_address(&msg.to.raw_addr()?)?
+                        .ok_or_else(|| anyhow!("ErcTransfer recipient must be an eth address"))?;
+                    token_transfers.push(json!({
+                        "home_subnet_id": home_subnet_btc.to_string(),
+                        "home_token_address": format!("{:?}", home_token),
+                        "amount": amount.to_string(),
+                        "destination_subnet_id": destination_subnet.to_string(),
+                        "recipient": format!("{:?}", recipient),
+                    }));
+                }
+                ipc_api::cross::IpcMsgKind::ErcRegistration => {
+                    let (_home_subnet, home_token, name, symbol, decimals, initial_supply) =
+                        abi_decode_erc_registration_msg(&msg.message)?;
+                    // home_subnet_id is NOT in the bitcoin-ipc struct —
+                    // derived from the checkpoint's OP_RETURN subnet ID.
+                    token_registrations.push(json!({
+                        "home_token_address": format!("{:?}", home_token),
+                        "name": name,
+                        "symbol": symbol,
+                        "decimals": decimals,
+                        "initial_supply": initial_supply.to_string(),
+                    }));
+                }
+                ipc_api::cross::IpcMsgKind::ErcSupplyDelta => {
+                    let (home_token, delta) = abi_decode_erc_supply_delta_msg(&msg.message)?;
+                    token_supply_adjustments.push(json!({
+                        "home_token_address": format!("{:?}", home_token),
+                        "delta": delta.to_string(),
+                    }));
                 }
             }
         }
@@ -1120,6 +1155,9 @@ impl SubnetManager for BtcSubnetManager {
                 "next_committee_configuration_number": checkpoint.next_configuration_number,
                 "withdrawals":          releases,
                 "transfers":            transfers,
+                "token_registrations":  token_registrations,
+                "token_supply_adjustments": token_supply_adjustments,
+                "token_transfers":      token_transfers,
             }
         });
 
@@ -2028,12 +2066,20 @@ impl TopDownFinalityQuery for BtcSubnetManager {
                         .ok_or_else(|| anyhow!("Field decimals not found in registration"))?
                         as u8;
 
+                    let initial_supply = registration
+                        .get("initial_supply")
+                        .and_then(Value::as_str)
+                        .unwrap_or("0");
+                    let initial_supply =
+                        ethers::types::U256::from_dec_str(initial_supply).unwrap_or_default();
+
                     let message = abi_encode_erc_registration_msg(
                         &home_subnet_id,
                         home_token,
                         name,
                         symbol,
                         decimals,
+                        initial_supply,
                     )?;
 
                     // Destination is the subnet we queried for (subnet_id parameter)
@@ -2416,6 +2462,7 @@ fn abi_encode_erc_registration_msg(
     name: &str,
     symbol: &str,
     decimals: u8,
+    initial_supply: ethers::types::U256,
 ) -> anyhow::Result<Vec<u8>> {
     let subnet_tok = subnet_id_to_abi_token(home_subnet)?;
     Ok(ethers::abi::encode(&[
@@ -2424,15 +2471,256 @@ fn abi_encode_erc_registration_msg(
         ethers::abi::Token::String(name.to_string()),
         ethers::abi::Token::String(symbol.to_string()),
         ethers::abi::Token::Uint(ethers::types::U256::from(decimals)),
+        ethers::abi::Token::Uint(initial_supply),
     ]))
+}
+
+/// Inverse of `subnet_id_to_abi_token`: reconstructs a SubnetID from ABI-decoded tokens.
+fn abi_token_to_subnet_id(
+    root: ethers::types::U256,
+    route: Vec<ethers::abi::Token>,
+) -> anyhow::Result<SubnetID> {
+    let children = route
+        .into_iter()
+        .map(|tok| {
+            let addr = tok
+                .into_address()
+                .ok_or_else(|| anyhow!("expected address in subnet route"))?;
+            ipc_api::ethers_address_to_fil_address(&addr)
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    Ok(SubnetID::new(root.as_u64(), children))
+}
+
+/// Decode abi.encode(homeSubnet, homeToken, amount) — inverse of `abi_encode_erc_transfer_msg`.
+fn abi_decode_erc_transfer_msg(
+    data: &[u8],
+) -> anyhow::Result<(SubnetID, ethers::types::Address, ethers::types::U256)> {
+    use ethers::abi::{decode, ParamType};
+    let tokens = decode(
+        &[
+            ParamType::Tuple(vec![
+                ParamType::Uint(256),
+                ParamType::Array(Box::new(ParamType::Address)),
+            ]),
+            ParamType::Address,
+            ParamType::Uint(256),
+        ],
+        data,
+    )?;
+    let subnet_tuple = tokens[0]
+        .clone()
+        .into_tuple()
+        .ok_or_else(|| anyhow!("expected tuple for subnet"))?;
+    let root = subnet_tuple[0]
+        .clone()
+        .into_uint()
+        .ok_or_else(|| anyhow!("expected uint for root"))?;
+    let route = subnet_tuple[1]
+        .clone()
+        .into_array()
+        .ok_or_else(|| anyhow!("expected array for route"))?;
+    let subnet = abi_token_to_subnet_id(root, route)?;
+    let home_token = tokens[1]
+        .clone()
+        .into_address()
+        .ok_or_else(|| anyhow!("expected address for home_token"))?;
+    let amount = tokens[2]
+        .clone()
+        .into_uint()
+        .ok_or_else(|| anyhow!("expected uint for amount"))?;
+    Ok((subnet, home_token, amount))
+}
+
+/// Decode abi.encode(homeSubnet, homeToken, name, symbol, decimals, initialSupply).
+fn abi_decode_erc_registration_msg(
+    data: &[u8],
+) -> anyhow::Result<(
+    SubnetID,
+    ethers::types::Address,
+    String,
+    String,
+    u8,
+    ethers::types::U256,
+)> {
+    use ethers::abi::{decode, ParamType};
+    let tokens = decode(
+        &[
+            ParamType::Tuple(vec![
+                ParamType::Uint(256),
+                ParamType::Array(Box::new(ParamType::Address)),
+            ]),
+            ParamType::Address,
+            ParamType::String,
+            ParamType::String,
+            ParamType::Uint(8),
+            ParamType::Uint(256),
+        ],
+        data,
+    )?;
+    let subnet_tuple = tokens[0]
+        .clone()
+        .into_tuple()
+        .ok_or_else(|| anyhow!("expected tuple for subnet"))?;
+    let root = subnet_tuple[0]
+        .clone()
+        .into_uint()
+        .ok_or_else(|| anyhow!("expected uint for root"))?;
+    let route = subnet_tuple[1]
+        .clone()
+        .into_array()
+        .ok_or_else(|| anyhow!("expected array for route"))?;
+    let subnet = abi_token_to_subnet_id(root, route)?;
+    let home_token = tokens[1]
+        .clone()
+        .into_address()
+        .ok_or_else(|| anyhow!("expected address"))?;
+    let name = tokens[2]
+        .clone()
+        .into_string()
+        .ok_or_else(|| anyhow!("expected string for name"))?;
+    let symbol = tokens[3]
+        .clone()
+        .into_string()
+        .ok_or_else(|| anyhow!("expected string for symbol"))?;
+    let decimals = tokens[4]
+        .clone()
+        .into_uint()
+        .ok_or_else(|| anyhow!("expected uint for decimals"))?
+        .as_u32() as u8;
+    let initial_supply = tokens[5]
+        .clone()
+        .into_uint()
+        .ok_or_else(|| anyhow!("expected uint for initial_supply"))?;
+    Ok((subnet, home_token, name, symbol, decimals, initial_supply))
+}
+
+/// Decode abi.encode(homeToken, delta) for ErcSupplyDelta messages.
+fn abi_decode_erc_supply_delta_msg(
+    data: &[u8],
+) -> anyhow::Result<(ethers::types::Address, ethers::types::I256)> {
+    use ethers::abi::{decode, ParamType};
+    let tokens = decode(&[ParamType::Address, ParamType::Int(256)], data)?;
+    let home_token = tokens[0]
+        .clone()
+        .into_address()
+        .ok_or_else(|| anyhow!("expected address for home_token"))?;
+    let delta = tokens[1]
+        .clone()
+        .into_int()
+        .ok_or_else(|| anyhow!("expected int for delta"))?;
+    Ok((home_token, ethers::types::I256::from_raw(delta)))
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
 
     #[test]
     fn test_create_manager() {
-        // let _ = super::BtcSubnetManager::new();
         assert!(true);
+    }
+
+    fn test_subnet_id() -> SubnetID {
+        let child =
+            fvm_shared::address::Address::from(fvm_shared::address::current_network::ACCOUNT_ACTOR);
+        SubnetID::new(4, vec![child])
+    }
+
+    #[test]
+    fn test_abi_decode_erc_transfer_msg_roundtrip() {
+        let subnet = test_subnet_id();
+        let token = ethers::types::Address::random();
+        let amount = ethers::types::U256::from(1_000_000u64);
+
+        let encoded = abi_encode_erc_transfer_msg(&subnet, token, amount).unwrap();
+        let (decoded_subnet, decoded_token, decoded_amount) =
+            abi_decode_erc_transfer_msg(&encoded).unwrap();
+
+        assert_eq!(decoded_subnet.root_id(), subnet.root_id());
+        assert_eq!(decoded_subnet.children().len(), subnet.children().len());
+        assert_eq!(decoded_token, token);
+        assert_eq!(decoded_amount, amount);
+    }
+
+    #[test]
+    fn test_abi_decode_erc_registration_msg_roundtrip() {
+        let subnet = test_subnet_id();
+        let token = ethers::types::Address::random();
+        let name = "TestToken";
+        let symbol = "TT";
+        let decimals = 18u8;
+        let initial_supply = ethers::types::U256::from(1_000_000_000u64);
+
+        let encoded = abi_encode_erc_registration_msg(
+            &subnet,
+            token,
+            name,
+            symbol,
+            decimals,
+            initial_supply,
+        )
+        .unwrap();
+        let (decoded_subnet, decoded_token, decoded_name, decoded_symbol, decoded_decimals, decoded_supply) =
+            abi_decode_erc_registration_msg(&encoded).unwrap();
+
+        assert_eq!(decoded_subnet.root_id(), subnet.root_id());
+        assert_eq!(decoded_token, token);
+        assert_eq!(decoded_name, name);
+        assert_eq!(decoded_symbol, symbol);
+        assert_eq!(decoded_decimals, decimals);
+        assert_eq!(decoded_supply, initial_supply);
+    }
+
+    #[test]
+    fn test_abi_decode_erc_supply_delta_msg_positive() {
+        let token = ethers::types::Address::random();
+        let delta = ethers::types::I256::from(500);
+        let encoded = ethers::abi::encode(&[
+            ethers::abi::Token::Address(token),
+            ethers::abi::Token::Int(delta.into_raw()),
+        ]);
+        let (decoded_token, decoded_delta) = abi_decode_erc_supply_delta_msg(&encoded).unwrap();
+        assert_eq!(decoded_token, token);
+        assert_eq!(decoded_delta, delta);
+    }
+
+    #[test]
+    fn test_abi_decode_erc_supply_delta_msg_negative() {
+        let token = ethers::types::Address::random();
+        let delta = ethers::types::I256::from(-300);
+        let encoded = ethers::abi::encode(&[
+            ethers::abi::Token::Address(token),
+            ethers::abi::Token::Int(delta.into_raw()),
+        ]);
+        let (decoded_token, decoded_delta) = abi_decode_erc_supply_delta_msg(&encoded).unwrap();
+        assert_eq!(decoded_token, token);
+        assert_eq!(decoded_delta, delta);
+    }
+
+    #[test]
+    fn test_abi_decode_erc_supply_delta_msg_zero() {
+        let token = ethers::types::Address::random();
+        let delta = ethers::types::I256::zero();
+        let encoded = ethers::abi::encode(&[
+            ethers::abi::Token::Address(token),
+            ethers::abi::Token::Int(delta.into_raw()),
+        ]);
+        let (decoded_token, decoded_delta) = abi_decode_erc_supply_delta_msg(&encoded).unwrap();
+        assert_eq!(decoded_token, token);
+        assert_eq!(decoded_delta, delta);
+    }
+
+    #[test]
+    fn test_abi_token_to_subnet_id_roundtrip() {
+        let subnet = test_subnet_id();
+        let token = subnet_id_to_abi_token(&subnet).unwrap();
+        let tuple = token.into_tuple().unwrap();
+        let root = tuple[0].clone().into_uint().unwrap();
+        let route = tuple[1].clone().into_array().unwrap();
+        let decoded = abi_token_to_subnet_id(root, route).unwrap();
+
+        assert_eq!(decoded.root_id(), subnet.root_id());
+        assert_eq!(decoded.children().len(), subnet.children().len());
     }
 }

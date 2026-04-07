@@ -92,6 +92,12 @@ struct GatewayActorStorage {
     mapping(bytes32 => address) wrappedTokens;
     /// @notice Address of the WrappedTokenFactory used for lazy WrappedToken deployment.
     address wrappedTokenFactory;
+    /// @notice Iterable list of token addresses registered for bridging on this subnet.
+    ///         Used by getTokenSupplyDeltas() to scan totalSupply at checkpoint time.
+    address[] registeredTokenAddresses;
+    /// @notice Last checkpointed totalSupply per registered token.
+    ///         Used to compute supply deltas (IPC:ETS) between checkpoints.
+    mapping(address => uint256) lastCheckpointedSupply;
 }
 
 struct TokenMetadata {

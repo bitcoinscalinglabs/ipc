@@ -3,7 +3,7 @@ pragma solidity ^0.8.23;
 
 import "forge-std/Test.sol";
 
-import {IpcEnvelope, IpcMsgKind, BottomUpCheckpoint} from "../../contracts/structs/CrossNet.sol";
+import {IpcEnvelope, IpcMsgKind, BottomUpCheckpoint, BottomUpMsgBatch} from "../../contracts/structs/CrossNet.sol";
 import {SubnetID, IPCAddress, Subnet, Validator} from "../../contracts/structs/Subnet.sol";
 import {FvmAddress} from "../../contracts/structs/FvmAddress.sol";
 import {FvmAddressHelper} from "../../contracts/lib/FvmAddressHelper.sol";
@@ -532,5 +532,158 @@ contract GatewayDiamondErcTransferTest is Test, IntegrationTestBase {
         assertEq(nativeRecipient.balance, transferValue);
         address wrappedAddr = targetGateway.getter().getWrappedToken(homeSubnetId, address(token));
         assertEq(IERC20(wrappedAddr).balanceOf(ercRecipient), 42);
+    }
+
+    // =========================================================================
+    // Protocol 2 Part A — registerBridgeableToken commits bottom-up ErcRegistration
+    // =========================================================================
+
+    function getNextEpoch(uint256 blockNumber, uint256 checkPeriod) internal pure returns (uint256) {
+        return ((uint64(blockNumber) / checkPeriod) + 1) * checkPeriod;
+    }
+
+    function test_registerBridgeableToken_commitsBottomUpMsg() public {
+        // Use targetGateway (a child subnet) because commitBottomUpMsg requires a parent.
+        uint64 nonceBefore = targetGateway.getter().bottomUpNonce();
+        ercFacet(targetGateway).registerBridgeableToken(address(token));
+        uint64 nonceAfter = targetGateway.getter().bottomUpNonce();
+
+        // Registration must have committed exactly one bottom-up message.
+        assertEq(nonceAfter, nonceBefore + 1);
+
+        // Read the batch and verify the message.
+        uint256 epoch = getNextEpoch(block.number, DEFAULT_CHECKPOINT_PERIOD);
+        BottomUpMsgBatch memory batch = targetGateway.getter().bottomUpMsgBatch(epoch);
+        assertEq(batch.msgs.length, 1);
+
+        IpcEnvelope memory env = batch.msgs[0];
+        assertEq(uint8(env.kind), uint8(IpcMsgKind.ErcRegistration));
+        assertEq(env.value, 0);
+
+        // Decode message payload: (homeSubnet, token, name, symbol, decimals, initialSupply)
+        (, address decodedToken, string memory name, string memory symbol, uint8 decimals, uint256 initialSupply) =
+            abi.decode(env.message, (SubnetID, address, string, string, uint8, uint256));
+        assertEq(decodedToken, address(token));
+        assertEq(name, "HomeToken");
+        assertEq(symbol, "HT");
+        assertEq(decimals, 18);
+        assertEq(initialSupply, token.totalSupply());
+    }
+
+    function test_registerBridgeableToken_idempotent_noDoubleMsg() public {
+        ercFacet(targetGateway).registerBridgeableToken(address(token));
+        uint64 nonceAfterFirst = targetGateway.getter().bottomUpNonce();
+
+        // Second call should not commit another message.
+        ercFacet(targetGateway).registerBridgeableToken(address(token));
+        uint64 nonceAfterSecond = targetGateway.getter().bottomUpNonce();
+
+        assertEq(nonceAfterSecond, nonceAfterFirst);
+    }
+
+    // =========================================================================
+    // Protocol 2 Part B — getTokenSupplyDeltas / updateSupplySnapshots
+    // =========================================================================
+
+    function test_getTokenSupplyDeltas_afterMint() public {
+        ercFacet(targetGateway).registerBridgeableToken(address(token));
+
+        token.mint(address(this), 500);
+
+        (address[] memory tokens, int256[] memory deltas, uint256 count) =
+            ercFacet(targetGateway).getTokenSupplyDeltas();
+
+        assertEq(count, 1);
+        assertEq(tokens[0], address(token));
+        assertEq(deltas[0], int256(500));
+    }
+
+    function test_getTokenSupplyDeltas_noChange() public {
+        ercFacet(targetGateway).registerBridgeableToken(address(token));
+
+        // No supply change since registration → count should be 0.
+        (,, uint256 count) = ercFacet(targetGateway).getTokenSupplyDeltas();
+        assertEq(count, 0);
+    }
+
+    function test_getTokenSupplyDeltas_multipleTokens() public {
+        OwnableTestToken token2 = new OwnableTestToken("Other", "OTH", 6, address(this));
+
+        ercFacet(targetGateway).registerBridgeableToken(address(token));
+        ercFacet(targetGateway).registerBridgeableToken(address(token2));
+
+        // Mint on token A only.
+        token.mint(address(this), 100);
+
+        (address[] memory tokens, int256[] memory deltas, uint256 count) =
+            ercFacet(targetGateway).getTokenSupplyDeltas();
+
+        // Only token A has a non-zero delta.
+        assertEq(count, 1);
+        assertEq(tokens[0], address(token));
+        assertEq(deltas[0], int256(100));
+    }
+
+    function test_updateSupplySnapshots_resetsDeltas() public {
+        ercFacet(targetGateway).registerBridgeableToken(address(token));
+        token.mint(address(this), 500);
+
+        (,, uint256 countBefore) = ercFacet(targetGateway).getTokenSupplyDeltas();
+        assertEq(countBefore, 1);
+
+        ercFacet(targetGateway).updateSupplySnapshots();
+
+        (,, uint256 countAfter) = ercFacet(targetGateway).getTokenSupplyDeltas();
+        assertEq(countAfter, 0);
+    }
+
+    function test_registerBridgeableToken_initialSupplyInMessage() public {
+        OwnableTestToken bigToken = new OwnableTestToken("Big", "BIG", 18, address(this));
+        uint256 expectedSupply = bigToken.totalSupply();
+        assertTrue(expectedSupply > 0);
+
+        ercFacet(targetGateway).registerBridgeableToken(address(bigToken));
+
+        uint256 epoch = getNextEpoch(block.number, DEFAULT_CHECKPOINT_PERIOD);
+        BottomUpMsgBatch memory batch = targetGateway.getter().bottomUpMsgBatch(epoch);
+
+        bool found = false;
+        for (uint256 i = 0; i < batch.msgs.length; i++) {
+            if (uint8(batch.msgs[i].kind) == uint8(IpcMsgKind.ErcRegistration)) {
+                (, address decodedToken,,,, uint256 initialSupply) =
+                    abi.decode(batch.msgs[i].message, (SubnetID, address, string, string, uint8, uint256));
+                if (decodedToken == address(bigToken)) {
+                    assertEq(initialSupply, expectedSupply);
+                    found = true;
+                    break;
+                }
+            }
+        }
+        assertTrue(found);
+    }
+
+    function test_executeErcRegistration_newFormat() public {
+        // Build an ErcRegistration envelope with the new 6-field format (including initialSupply).
+        SubnetID memory fromNetwork = SubnetID({root: ROOTNET_CHAINID, route: new address[](0)});
+        SubnetID memory toNetwork = targetGateway.getter().getNetworkName();
+
+        IpcEnvelope[] memory msgs = new IpcEnvelope[](1);
+        msgs[0] = IpcEnvelope({
+            kind: IpcMsgKind.ErcRegistration,
+            from: IPCAddress({subnetId: fromNetwork, rawAddress: FvmAddressHelper.from(address(1))}),
+            to: IPCAddress({subnetId: toNetwork, rawAddress: FvmAddressHelper.from(address(0))}),
+            value: 0,
+            nonce: targetGateway.getter().appliedTopDownNonce(),
+            message: abi.encode(homeSubnetId, address(token), "HomeToken", "HT", uint8(18), uint256(1_000_000))
+        });
+
+        vm.prank(FilAddress.SYSTEM_ACTOR);
+        targetGateway.xnetMessenger().applyCrossMessages(msgs);
+
+        // Metadata should be stored (initialSupply is ignored by the contract).
+        TokenMetadata memory meta = targetGateway.getter().getTokenMetadata(homeSubnetId, address(token));
+        assertEq(meta.name, "HomeToken");
+        assertEq(meta.symbol, "HT");
+        assertEq(meta.decimals, 18);
     }
 }

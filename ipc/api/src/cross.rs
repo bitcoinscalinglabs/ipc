@@ -122,8 +122,11 @@ pub enum IpcMsgKind {
     Receipt,
     /// cross-subnet ERC20 token transfer. value=0; message=abi.encode(homeSubnet, homeToken, amount).
     ErcTransfer,
-    /// top-down ERC20 token metadata registration. value=0; message=abi.encode(homeSubnet, homeToken, name, symbol, decimals).
+    /// ERC20 token metadata registration. message=abi.encode(homeSubnet, homeToken, name, symbol, decimals, initialSupply).
     ErcRegistration,
+    /// ERC20 supply adjustment (mint/burn delta). message=abi.encode(homeToken, delta).
+    /// Injected synthetically by fendermint at checkpoint time.
+    ErcSupplyDelta,
 }
 
 impl TryFrom<u8> for IpcMsgKind {
@@ -136,6 +139,7 @@ impl TryFrom<u8> for IpcMsgKind {
             2 => IpcMsgKind::Receipt,
             3 => IpcMsgKind::ErcTransfer,
             4 => IpcMsgKind::ErcRegistration,
+            5 => IpcMsgKind::ErcSupplyDelta,
             _ => return Err(anyhow!("invalid ipc msg kind")),
         })
     }
@@ -224,5 +228,22 @@ mod tests {
             ),
             res
         );
+    }
+
+    #[test]
+    fn test_ipc_msg_kind_try_from() {
+        assert_eq!(IpcMsgKind::try_from(0u8).unwrap(), IpcMsgKind::Transfer);
+        assert_eq!(IpcMsgKind::try_from(1u8).unwrap(), IpcMsgKind::Call);
+        assert_eq!(IpcMsgKind::try_from(2u8).unwrap(), IpcMsgKind::Receipt);
+        assert_eq!(IpcMsgKind::try_from(3u8).unwrap(), IpcMsgKind::ErcTransfer);
+        assert_eq!(
+            IpcMsgKind::try_from(4u8).unwrap(),
+            IpcMsgKind::ErcRegistration
+        );
+        assert_eq!(
+            IpcMsgKind::try_from(5u8).unwrap(),
+            IpcMsgKind::ErcSupplyDelta
+        );
+        assert!(IpcMsgKind::try_from(6u8).is_err());
     }
 }
