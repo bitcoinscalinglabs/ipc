@@ -433,9 +433,6 @@ where
     let bootstrap_handover_psbt = parent_manager
         .get_bootstrap_handover_transaction(subnet_id)
         .await?;
-    tracing::info!(
-        "interpreter obtained bootstrap-handover PSBT from bitcoin provider: {bootstrap_handover_psbt:?}"
-    );
 
     let calldata = gateway
         .add_bitcoin_bootstrap_handover_signature_calldata(bootstrap_handover_psbt)

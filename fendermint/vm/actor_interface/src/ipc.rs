@@ -75,6 +75,10 @@ lazy_static! {
                             abi: ia::diamond_cut_facet::DIAMONDCUTFACET_ABI.to_owned(),
                         },
                         EthFacet {
+                            name: "GatewayErcFacet",
+                            abi: ia::gateway_erc_facet::GATEWAYERCFACET_ABI.to_owned(),
+                        },
+                        EthFacet {
                             name: "OwnershipFacet",
                             abi: ia::ownership_facet::OWNERSHIPFACET_ABI.to_owned(),
                         },

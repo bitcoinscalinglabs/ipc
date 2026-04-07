@@ -66,6 +66,7 @@ async function deployFacets(hre: HardhatRuntimeEnvironment, deployer: string): P
             libraries: ['AccountHelper', 'CrossMsgHelper', 'SubnetIDHelper'],
         },
         { name: 'TopDownFinalityFacet', libraries: ['AccountHelper'] },
+        { name: 'GatewayErcFacet' },
         { name: 'OwnershipFacet' },
     ]
 
