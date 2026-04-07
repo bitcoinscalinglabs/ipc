@@ -13,3 +13,4 @@ logs/
 .tmp/
 
 CLAUDE.md
+.pnpm-store/
