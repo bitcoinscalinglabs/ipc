@@ -31,6 +31,7 @@ define_id!(GATEWAY { id: 64 });
 define_id!(SUBNETREGISTRY { id: 65 });
 define_id!(REWARD_TOKEN { id: 66 });
 define_id!(REWARD_CONFIG { id: 67 });
+define_id!(WRAPPED_TOKEN_FACTORY { id: 68 });
 
 lazy_static! {
     /// Contracts deployed at genesis with well-known IDs.
@@ -157,6 +158,14 @@ lazy_static! {
                 EthContract {
                     actor_id: REWARD_CONFIG_ACTOR_ID,
                     abi: ia::reward_config::REWARDCONFIG_ABI.to_owned(),
+                    facets: vec![],
+                },
+            ),
+            (
+                wrapped_token_factory::CONTRACT_NAME,
+                EthContract {
+                    actor_id: WRAPPED_TOKEN_FACTORY_ACTOR_ID,
+                    abi: ia::wrapped_token_factory::WRAPPEDTOKENFACTORY_ABI.to_owned(),
                     facets: vec![],
                 },
             ),
@@ -366,6 +375,10 @@ pub mod reward_config {
     pub const CONTRACT_NAME: &str = "RewardConfig";
 }
 
+pub mod wrapped_token_factory {
+    pub const CONTRACT_NAME: &str = "WrappedTokenFactory";
+}
+
 pub mod gateway {
     use super::subnet_id_to_eth;
     use ethers::contract::{EthAbiCodec, EthAbiType};
@@ -396,12 +409,15 @@ pub mod gateway {
         pub majority_percentage: u8,
         pub network_name: GatewaySubnetID,
         pub validators: Vec<GatewayValidator>,
+        pub commit_sha: [u8; 32],
+        pub wrapped_token_factory: H160,
     }
 
     impl ConstructorParameters {
         pub fn new(
             params: GatewayParams,
             validators: Vec<Validator<Collateral>>,
+            wrapped_token_factory: H160,
         ) -> anyhow::Result<Self> {
             // Every validator has an Ethereum address.
             let validators = validators
@@ -426,6 +442,8 @@ pub mod gateway {
                 majority_percentage: params.majority_percentage,
                 network_name: GatewaySubnetID { root, route },
                 validators,
+                commit_sha: [0u8; 32],
+                wrapped_token_factory,
             })
         }
     }
@@ -466,6 +484,8 @@ pub mod gateway {
                     metadata: Bytes::new(),
                 }],
                 active_validators_limit: 100,
+                commit_sha: [0u8; 32],
+                wrapped_token_factory: H160::zero(),
             };
 
             // It looks like if we pass just the record then it will be passed as 5 tokens,

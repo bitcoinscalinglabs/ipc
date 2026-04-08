@@ -31,7 +31,7 @@ where
             (provider.genesis_epoch()?, None)
         };
 
-    tracing::debug!(
+    tracing::trace!(
         "commit finality parsed: prev_height {prev_height}, prev_finality: {prev_finality:?}"
     );
 

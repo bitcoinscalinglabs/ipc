@@ -566,6 +566,10 @@ fn deploy_contracts(
         deployer.deploy_library(state, &mut next_id, lib_src, &lib_name)?;
     }
 
+    // WrappedTokenFactory: deploy before gateway so we can pass its address to the constructor.
+    let wrapped_token_factory_addr =
+        deployer.deploy_contract(state, ipc::wrapped_token_factory::CONTRACT_NAME, ())?;
+
     // IPC Gateway actor.
     let gateway_addr = {
         use ipc::gateway::ConstructorParameters;
@@ -578,8 +582,9 @@ fn deploy_contracts(
         };
         tracing::debug!(?ipc_params, "using gateway params during genesis deployment");
 
-        let params = ConstructorParameters::new(ipc_params, validators)
-            .context("failed to create gateway constructor")?;
+        let params =
+            ConstructorParameters::new(ipc_params, validators, wrapped_token_factory_addr)
+                .context("failed to create gateway constructor")?;
 
         let facets = deployer
             .facets(ipc::gateway::CONTRACT_NAME)

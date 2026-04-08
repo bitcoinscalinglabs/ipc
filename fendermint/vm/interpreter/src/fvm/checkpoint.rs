@@ -427,7 +427,7 @@ where
             ipc_api::checkpoint::BottomUpCheckpoint::try_from(checkpoint.clone())?,
         )
         .await?;
-    tracing::info!(
+    tracing::trace!(
         "interpreter obtained checkpoint PSBT from bitcoin provider: {checkpoint_psbt:?}"
     );
 

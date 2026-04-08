@@ -42,7 +42,6 @@ use crate::manager::SubnetManager;
 use anyhow::Result;
 
 use anyhow::anyhow;
-use num_traits::Zero;
 use fvm_shared::clock::ChainEpoch;
 use fvm_shared::{address::Address, econ::TokenAmount};
 use ipc_actors_abis::subnet_actor_activity_facet::ValidatorClaim;
@@ -55,6 +54,7 @@ use ipc_api::staking::{
     StakingChange, StakingChangeRequest, StakingOperation, ValidatorInfo, ValidatorStakingInfo,
 };
 use ipc_api::subnet_id::{NetworkType, SubnetID, BTC_NAMESPACE};
+use num_traits::Zero;
 
 #[derive(Clone)]
 pub struct BtcSubnetManager {
@@ -108,7 +108,7 @@ impl BtcSubnetManager {
                 "height": height,
             }
         });
-        tracing::info!("Request body: {body:?}");
+        tracing::trace!("Request body: {body:?}");
 
         let resp = self
             .client
@@ -208,7 +208,7 @@ impl SubnetManager for BtcSubnetManager {
                 "whitelist":               params.validator_whitelist,
             }
         });
-        tracing::info!("Request body: {body:?}");
+        tracing::trace!("Request body: {body:?}");
 
         let resp = self
             .client
@@ -284,7 +284,7 @@ impl SubnetManager for BtcSubnetManager {
                 "backup_address":   params.backup_address,
             }
         });
-        tracing::info!("Request body: {body:?}");
+        tracing::trace!("Request body: {body:?}");
 
         let resp = self
             .client
@@ -348,7 +348,7 @@ impl SubnetManager for BtcSubnetManager {
                 "address":          payload_to_evm_address(params.dst_address.payload())?,
             }
         });
-        tracing::info!("Request body: {body:?}");
+        tracing::trace!("Request body: {body:?}");
 
         let resp = self
             .client
@@ -417,7 +417,7 @@ impl SubnetManager for BtcSubnetManager {
                 "pubkey":        params.public_key,
             }
         });
-        tracing::info!("Request body: {body:?}");
+        tracing::trace!("Request body: {body:?}");
 
         let resp = self
             .client
@@ -479,7 +479,7 @@ impl SubnetManager for BtcSubnetManager {
                 "amount":        token_amount_to_satoshi(params.collateral)?,
             }
         });
-        tracing::info!("Request body: {body:?}");
+        tracing::trace!("Request body: {body:?}");
 
         let resp = self
             .client
@@ -547,7 +547,7 @@ impl SubnetManager for BtcSubnetManager {
                 "subnet_id":     params.subnet_id.to_string(),
             }
         });
-        tracing::info!("Request body: {body:?}");
+        tracing::trace!("Request body: {body:?}");
 
         let resp = self
             .client
@@ -622,7 +622,7 @@ impl SubnetManager for BtcSubnetManager {
                 "address":          payload_to_evm_address(params.dst_address.payload())?,
             }
         });
-        tracing::info!("Request body: {body:?}");
+        tracing::trace!("Request body: {body:?}");
 
         let resp = self
             .client
@@ -1172,7 +1172,7 @@ impl SubnetManager for BtcSubnetManager {
             }
         });
 
-        tracing::info!("Request body: {body:?}");
+        tracing::trace!("Request body: {body:?}");
 
         let resp = self
             .client
@@ -1814,7 +1814,7 @@ impl TopDownFinalityQuery for BtcSubnetManager {
                 "subnet_id": subnet_id.to_string(),
             }
         });
-        tracing::info!("Request body: {body:?}");
+        tracing::trace!("Request body: {body:?}");
 
         let resp = self
             .client
@@ -1872,7 +1872,7 @@ impl TopDownFinalityQuery for BtcSubnetManager {
             "method": "getconfirmedcount",
             "id": 1,
         });
-        tracing::info!("Request body: {body:?}");
+        tracing::trace!("Request body: {body:?}");
 
         let resp = self
             .client
@@ -1936,7 +1936,7 @@ impl TopDownFinalityQuery for BtcSubnetManager {
                 "block_height":     epoch,
             }
         });
-        tracing::info!("Request body: {body:?}");
+        tracing::trace!("Request body: {body:?}");
 
         let resp = self
             .client
@@ -2000,8 +2000,7 @@ impl TopDownFinalityQuery for BtcSubnetManager {
                 .and_then(Value::as_u64)
                 .ok_or_else(|| anyhow!("Field nonce not found in result"))?;
 
-            let btc_root_addr =
-                Address::new_delegated(BTC_NAMESPACE, &vec![0; 20])?;
+            let btc_root_addr = Address::new_delegated(BTC_NAMESPACE, &vec![0; 20])?;
             let from_root =
                 IPCAddress::new(&SubnetID::new_root(subnet_id.root_id()), &btc_root_addr)?;
 
@@ -2048,17 +2047,21 @@ impl TopDownFinalityQuery for BtcSubnetManager {
                     let home_subnet_id = result
                         .get("home_subnet_id")
                         .and_then(Value::as_str)
-                        .ok_or_else(|| anyhow!("Field home_subnet_id not found in erc_registration result"))?;
+                        .ok_or_else(|| {
+                            anyhow!("Field home_subnet_id not found in erc_registration result")
+                        })?;
                     let home_subnet_id = SubnetID::from_str(home_subnet_id)?;
 
-                    let registration = result
-                        .get("registration")
-                        .ok_or_else(|| anyhow!("Field registration not found in erc_registration result"))?;
+                    let registration = result.get("registration").ok_or_else(|| {
+                        anyhow!("Field registration not found in erc_registration result")
+                    })?;
 
                     let home_token = registration
                         .get("home_token_address")
                         .and_then(Value::as_str)
-                        .ok_or_else(|| anyhow!("Field home_token_address not found in registration"))?;
+                        .ok_or_else(|| {
+                            anyhow!("Field home_token_address not found in registration")
+                        })?;
                     let home_token = ethers::types::Address::from_str(home_token)?;
 
                     let name = registration
@@ -2093,10 +2096,19 @@ impl TopDownFinalityQuery for BtcSubnetManager {
                         initial_supply,
                     )?;
 
-                    // Destination is the subnet we queried for (subnet_id parameter)
+                    // Destination is the subnet we queried for (subnet_id parameter).
+                    // The recipient address must be EAM-namespaced (namespace=10), not BTC-
+                    // namespaced (namespace=20), because CrossMsgHelper.execute() in the
+                    // gateway calls extractEvmAddress() unconditionally before dispatching by
+                    // kind, and extractEvmAddress() rejects anything that isn't EAM-delegated.
+                    // ErcRegistration has no real recipient (the metadata is written to a
+                    // gateway-global mapping), so we use the EAM-namespaced zero address —
+                    // it parses cleanly and is never read by _executeErcRegistration.
+                    let zero_recipient =
+                        ethers_address_to_fil_address(&ethers::types::Address::zero())?;
                     IpcEnvelope {
                         kind: IpcMsgKind::ErcRegistration,
-                        to: IPCAddress::new(subnet_id, &btc_root_addr)?,
+                        to: IPCAddress::new(subnet_id, &zero_recipient)?,
                         from: from_root,
                         value: TokenAmount::zero(),
                         message,
@@ -2116,24 +2128,29 @@ impl TopDownFinalityQuery for BtcSubnetManager {
                     let home_subnet_id = msg
                         .get("home_subnet_id")
                         .and_then(Value::as_str)
-                        .ok_or_else(|| anyhow!("Field home_subnet_id not found in erc_transfer msg"))?;
+                        .ok_or_else(|| {
+                            anyhow!("Field home_subnet_id not found in erc_transfer msg")
+                        })?;
                     let home_subnet_id = SubnetID::from_str(home_subnet_id)?;
 
                     let home_token = msg
                         .get("home_token_address")
                         .and_then(Value::as_str)
-                        .ok_or_else(|| anyhow!("Field home_token_address not found in erc_transfer msg"))?;
+                        .ok_or_else(|| {
+                            anyhow!("Field home_token_address not found in erc_transfer msg")
+                        })?;
                     let home_token = ethers::types::Address::from_str(home_token)?;
 
                     // amount is serialized as a hex string by alloy_primitives::U256 (e.g. "0x3e8")
-                    let amount_str = msg
-                        .get("amount")
-                        .and_then(Value::as_str)
-                        .ok_or_else(|| anyhow!("Field amount not found or not string in erc_transfer msg"))?;
+                    let amount_str =
+                        msg.get("amount").and_then(Value::as_str).ok_or_else(|| {
+                            anyhow!("Field amount not found or not string in erc_transfer msg")
+                        })?;
                     let amount = ethers::types::U256::from_str_radix(
                         amount_str.strip_prefix("0x").unwrap_or(amount_str),
                         16,
-                    ).map_err(|e| anyhow!("Failed to parse amount '{}': {}", amount_str, e))?;
+                    )
+                    .map_err(|e| anyhow!("Failed to parse amount '{}': {}", amount_str, e))?;
 
                     let recipient = msg
                         .get("recipient")
@@ -2142,8 +2159,7 @@ impl TopDownFinalityQuery for BtcSubnetManager {
                     let recipient_eth = ethers::types::Address::from_str(recipient)?;
                     let recipient_fil = ethers_address_to_fil_address(&recipient_eth)?;
 
-                    let message =
-                        abi_encode_erc_transfer_msg(&home_subnet_id, home_token, amount)?;
+                    let message = abi_encode_erc_transfer_msg(&home_subnet_id, home_token, amount)?;
 
                     // Destination is the subnet we queried for
                     IpcEnvelope {
@@ -2156,7 +2172,10 @@ impl TopDownFinalityQuery for BtcSubnetManager {
                     }
                 }
                 Some(unknown) => {
-                    return Err(anyhow!("Unknown kind in getrootnetmessages result: {}", unknown))
+                    return Err(anyhow!(
+                        "Unknown kind in getrootnetmessages result: {}",
+                        unknown
+                    ))
                 }
                 None => return Err(anyhow!("Field kind not found in result")),
             };
@@ -2201,7 +2220,7 @@ impl TopDownFinalityQuery for BtcSubnetManager {
                 "block_height":     epoch,
             }
         });
-        tracing::info!("Request body: {body:?}");
+        tracing::trace!("Request body: {body:?}");
 
         let resp = self
             .client
@@ -2664,17 +2683,17 @@ mod tests {
         let decimals = 18u8;
         let initial_supply = ethers::types::U256::from(1_000_000_000u64);
 
-        let encoded = abi_encode_erc_registration_msg(
-            &subnet,
-            token,
-            name,
-            symbol,
-            decimals,
-            initial_supply,
-        )
-        .unwrap();
-        let (decoded_subnet, decoded_token, decoded_name, decoded_symbol, decoded_decimals, decoded_supply) =
-            abi_decode_erc_registration_msg(&encoded).unwrap();
+        let encoded =
+            abi_encode_erc_registration_msg(&subnet, token, name, symbol, decimals, initial_supply)
+                .unwrap();
+        let (
+            decoded_subnet,
+            decoded_token,
+            decoded_name,
+            decoded_symbol,
+            decoded_decimals,
+            decoded_supply,
+        ) = abi_decode_erc_registration_msg(&encoded).unwrap();
 
         assert_eq!(decoded_subnet.root_id(), subnet.root_id());
         assert_eq!(decoded_token, token);
