@@ -12,7 +12,7 @@ import {FvmAddress} from "../structs/FvmAddress.sol";
 import {FvmAddressHelper} from "../lib/FvmAddressHelper.sol";
 import {SubnetID, IPCAddress, Subnet, Asset} from "../structs/Subnet.sol";
 import {Membership, AssetKind} from "../structs/Subnet.sol";
-import {AlreadyRegisteredSubnet, CannotReleaseZero, MethodNotAllowed, NotEnoughFunds, NotEnoughFundsToRelease, NotEnoughCollateral, NotEmptySubnetCircSupply, NotRegisteredSubnet, InvalidXnetMessage, InvalidXnetMessageReason, TokenNotRegistered} from "../errors/IPCErrors.sol";
+import {AlreadyRegisteredSubnet, CannotReleaseZero, MethodNotAllowed, NotEnoughFunds, NotEnoughFundsToRelease, NotEnoughCollateral, NotEmptySubnetCircSupply, NotRegisteredSubnet, InvalidXnetMessage, InvalidXnetMessageReason, TokenNotRegistered, InsufficientTokenAllowance, InsufficientTokenBalance, ZeroTransferAmount} from "../errors/IPCErrors.sol";
 import {LibGateway} from "../lib/LibGateway.sol";
 import {SubnetIDHelper} from "../lib/SubnetIDHelper.sol";
 import {FilAddress} from "fevmate/contracts/utils/FilAddress.sol";
@@ -268,6 +268,10 @@ contract GatewayManagerFacet is GatewayActorModifiers, ReentrancyGuard {
         address homeToken;
         bool isBurn;
 
+        if (amount == 0) {
+            revert ZeroTransferAmount();
+        }
+
         // Detect WrappedToken via ERC165 — burn path; else lock path.
         bool isWrapped = false;
         try IERC165(localToken).supportsInterface(type(IWrappedToken).interfaceId) returns (bool result) {
@@ -286,6 +290,14 @@ contract GatewayManagerFacet is GatewayActorModifiers, ReentrancyGuard {
         // as Bridgeable in order to support transfers to other subnets.
             if (!s.registeredBridgeableTokens[localToken]) {
                 revert TokenNotRegistered();
+            }
+            uint256 allowance = IERC20(localToken).allowance(msg.sender, address(this));
+            if (allowance < amount) {
+                revert InsufficientTokenAllowance(amount, allowance);
+            }
+            uint256 balance = IERC20(localToken).balanceOf(msg.sender);
+            if (balance < amount) {
+                revert InsufficientTokenBalance(amount, balance);
             }
             IERC20(localToken).transferFrom(msg.sender, address(this), amount);
             homeSubnet = s.networkName;

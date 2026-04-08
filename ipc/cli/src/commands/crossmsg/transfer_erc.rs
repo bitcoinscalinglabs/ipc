@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: MIT
 use async_trait::async_trait;
 use clap::Args;
-use ipc_api::{subnet_id::SubnetID, token_amount_from_satoshi};
+use fvm_shared::econ::TokenAmount;
+use ipc_api::subnet_id::SubnetID;
 use std::{fmt::Debug, str::FromStr};
 
 use crate::{get_ipc_provider, require_fil_addr_from_str, CommandLineHandler, GlobalArguments};
@@ -35,7 +36,8 @@ impl CommandLineHandler for TransferErc {
             None => None,
         };
 
-        let amount = token_amount_from_satoshi(arguments.amount);
+        // ERC20 amounts are in the token's smallest unit — no satoshi-to-atto conversion.
+        let amount = TokenAmount::from_atto(arguments.amount);
 
         println!(
             "transfer-erc performed in epoch: {:?}",

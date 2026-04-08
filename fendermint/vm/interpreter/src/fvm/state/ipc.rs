@@ -131,7 +131,7 @@ impl<DB: Blockstore + Clone> GatewayCaller<DB> {
     pub fn update_supply_snapshots(
         &self,
         state: &mut FvmExecState<DB>,
-    ) -> anyhow::Result<FvmApplyRet> {
+    ) -> anyhow::Result<()> {
         self.erc
             .call(state, |c| c.update_supply_snapshots())
             .context("failed to update supply snapshots")
