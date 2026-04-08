@@ -35,7 +35,7 @@ use crate::config::Subnet;
 use crate::lotus::message::ipc::SubnetInfo;
 use crate::manager::subnet::{
     BottomUpCheckpointRelayer, GetBlockHashResult, GetRewardedCollateralsResponse,
-    SubnetGenesisInfo, TopDownFinalityQuery, TopDownQueryPayload, ValidatorRewarder,
+    SubnetGenesisInfo, TokenMetadata, TopDownFinalityQuery, TopDownQueryPayload, ValidatorRewarder,
 };
 
 use crate::manager::SubnetManager;
@@ -734,6 +734,17 @@ impl SubnetManager for BtcSubnetManager {
     ) -> Result<Address> {
         Err(anyhow!(
             "get_wrapped_token is only supported on EVM child subnets, not the Bitcoin parent"
+        ))
+    }
+
+    async fn get_token_metadata(
+        &self,
+        _gateway_addr: Option<Address>,
+        _home_subnet: SubnetID,
+        _home_token: Address,
+    ) -> Result<TokenMetadata> {
+        Err(anyhow!(
+            "get_token_metadata is only supported on EVM child subnets, not the Bitcoin parent"
         ))
     }
 
@@ -2622,8 +2633,9 @@ mod tests {
     }
 
     fn test_subnet_id() -> SubnetID {
-        let child =
-            fvm_shared::address::Address::from(fvm_shared::address::current_network::ACCOUNT_ACTOR);
+        // The EVM ABI roundtrip helpers require child addresses to be EAM-delegated
+        // (f410f…) with a 20-byte subaddress; ID addresses are rejected.
+        let child = fvm_shared::address::Address::new_delegated(10, &[0u8; 20]).unwrap();
         SubnetID::new(4, vec![child])
     }
 

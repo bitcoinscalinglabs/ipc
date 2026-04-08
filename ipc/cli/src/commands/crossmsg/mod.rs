@@ -11,7 +11,7 @@ use crate::commands::crossmsg::release::Release;
 use crate::{CommandLineHandler, GlobalArguments};
 use fund::FundArgs;
 use propagate::PropagateArgs;
-use query_wrapped_token::{QueryWrappedToken, QueryWrappedTokenArgs};
+use query_token_metadata::{QueryTokenMetadata, QueryTokenMetadataArgs};
 use release::ReleaseArgs;
 use transfer_erc::{TransferErc, TransferErcArgs};
 
@@ -21,7 +21,7 @@ use transfer::{Transfer, TransferArgs};
 pub mod fund;
 pub mod propagate;
 pub mod release;
-mod query_wrapped_token;
+mod query_token_metadata;
 mod topdown_cross;
 mod transfer;
 mod transfer_erc;
@@ -47,7 +47,7 @@ impl CrossMsgsCommandsArgs {
             Commands::ParentFinality(args) => LatestParentFinality::handle(global, args).await,
             Commands::Transfer(args) => Transfer::handle(global, args).await,
             Commands::TransferErc(args) => TransferErc::handle(global, args).await,
-            Commands::QueryWrappedToken(args) => QueryWrappedToken::handle(global, args).await,
+            Commands::QueryTokenMetadata(args) => QueryTokenMetadata::handle(global, args).await,
         }
     }
 }
@@ -64,5 +64,5 @@ pub(crate) enum Commands {
     ParentFinality(LatestParentFinalityArgs),
     Transfer(TransferArgs),
     TransferErc(TransferErcArgs),
-    QueryWrappedToken(QueryWrappedTokenArgs),
+    QueryTokenMetadata(QueryTokenMetadataArgs),
 }

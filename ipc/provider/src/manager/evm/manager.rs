@@ -31,7 +31,7 @@ use crate::config::Subnet;
 use crate::lotus::message::ipc::SubnetInfo;
 use crate::manager::subnet::{
     BottomUpCheckpointRelayer, GetBlockHashResult, GetRewardedCollateralsResponse,
-    SubnetGenesisInfo, TopDownFinalityQuery, TopDownQueryPayload, ValidatorRewarder,
+    SubnetGenesisInfo, TokenMetadata, TopDownFinalityQuery, TopDownQueryPayload, ValidatorRewarder,
 };
 
 use crate::manager::{EthManager, SubnetManager};
@@ -831,6 +831,34 @@ impl SubnetManager for EthSubnetManager {
             .call()
             .await?;
         ethers_address_to_fil_address(&wrapped_addr)
+    }
+
+    async fn get_token_metadata(
+        &self,
+        gateway_addr: Option<Address>,
+        home_subnet: SubnetID,
+        home_token: Address,
+    ) -> Result<TokenMetadata> {
+        let _gateway_addr =
+            gateway_addr.ok_or_else(|| anyhow!("gateway address must be provided"))?;
+
+        let home_subnet_evm = gateway_getter_facet::SubnetID::try_from(&home_subnet)?;
+        let home_token_addr = payload_to_evm_address(home_token.payload())?;
+
+        let provider = Arc::new(self.ipc_contract_info.provider.clone());
+        let getter = gateway_getter_facet::GatewayGetterFacet::new(
+            self.ipc_contract_info.gateway_addr,
+            provider,
+        );
+        let meta = getter
+            .get_token_metadata(home_subnet_evm, home_token_addr)
+            .call()
+            .await?;
+        Ok(TokenMetadata {
+            name: meta.name,
+            symbol: meta.symbol,
+            decimals: meta.decimals,
+        })
     }
 
     /// Propagate the postbox message key. The key should be `bytes32`.

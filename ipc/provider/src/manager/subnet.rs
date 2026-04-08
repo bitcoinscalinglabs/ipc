@@ -26,6 +26,15 @@ use std::sync::{Arc, RwLock};
 
 use crate::lotus::message::ipc::SubnetInfo;
 
+/// Metadata of a bridgeable ERC20 token, as stored on a subnet's gateway.
+/// Returned by `SubnetManager::get_token_metadata`.
+#[derive(Debug, Clone, Default)]
+pub struct TokenMetadata {
+    pub name: String,
+    pub symbol: String,
+    pub decimals: u8,
+}
+
 /// Trait to interact with a subnet and handle its lifecycle.
 #[async_trait]
 pub trait SubnetManager:
@@ -168,6 +177,15 @@ pub trait SubnetManager:
         home_subnet: SubnetID,
         home_token: Address,
     ) -> Result<Address>;
+
+    /// Returns the stored TokenMetadata on this subnet for the given (homeSubnet, homeToken) pair.
+    /// Empty fields indicate the metadata has not been recorded yet.
+    async fn get_token_metadata(
+        &self,
+        gateway_addr: Option<Address>,
+        home_subnet: SubnetID,
+        home_token: Address,
+    ) -> Result<TokenMetadata>;
 
     /// Propagate a cross-net message forward. For `postbox_msg_key`, we are using bytes because different
     /// runtime have different representations. For FVM, it should be `CID` as bytes. For EVM, it is

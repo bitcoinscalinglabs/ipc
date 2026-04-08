@@ -5,7 +5,7 @@ pub use btc::BtcSubnetManager;
 pub use evm::{EthManager, EthSubnetManager};
 pub use subnet::{
     BottomUpCheckpointRelayer, GetBlockHashResult, GetRewardedCollateralsResponse, SubnetGenesisInfo,
-    SubnetManager, TopDownFinalityQuery, TopDownQueryPayload,
+    SubnetManager, TokenMetadata, TopDownFinalityQuery, TopDownQueryPayload,
 };
 
 pub mod btc;

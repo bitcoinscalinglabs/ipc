@@ -734,6 +734,27 @@ impl IpcProvider {
             .await
     }
 
+    /// Returns the stored TokenMetadata on `subnet` for the given (homeSubnet, homeToken) pair.
+    pub async fn get_token_metadata(
+        &self,
+        subnet: &SubnetID,
+        gateway_addr: Option<Address>,
+        home_subnet: SubnetID,
+        home_token: Address,
+    ) -> anyhow::Result<crate::manager::TokenMetadata> {
+        let conn = match self.connection(subnet) {
+            None => return Err(anyhow!("subnet not found: {subnet}")),
+            Some(conn) => conn,
+        };
+        let gateway_addr = match gateway_addr {
+            None => Some(conn.subnet().gateway_addr()),
+            Some(addr) => Some(addr),
+        };
+        conn.manager()
+            .get_token_metadata(gateway_addr, home_subnet, home_token)
+            .await
+    }
+
     /// Propagate a cross-net message forward. For `postbox_msg_key`, we are using bytes because different
     /// runtime have different representations. For FVM, it should be `CID` as bytes. For EVM, it is
     /// `bytes32`.
