@@ -8,8 +8,8 @@ WORKDIR /app
 
 COPY . .
 
-RUN rustup install 1.81.0 && \
-  rustup target add aarch64-unknown-linux-gnu --toolchain 1.81.0 && \
-  rustup component add --toolchain 1.81.0-aarch64-unknown-linux-gnu rustfmt && \
-  RUST_LOG=trace cargo install --locked --root output --path fendermint/app && \
-  RUST_LOG=trace cargo install --locked --root output --path ipc/cli
+# Same cargo invocation as builder.deps.Dockerfile so fingerprints match
+# and cached artifacts from fendermint-deps are actually reused.
+RUN cargo build --locked --release -p fendermint_app -p ipc-cli && \
+    mkdir -p output/bin && \
+    cp target/release/fendermint target/release/ipc-cli output/bin/
