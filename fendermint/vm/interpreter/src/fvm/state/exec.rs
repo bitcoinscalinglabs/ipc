@@ -195,6 +195,11 @@ where
         let mut mc = nc.for_epoch(block_height, params.timestamp.0, params.state_root);
         mc.set_base_fee(params.base_fee.clone());
         mc.set_circulating_supply(params.circ_supply.clone());
+        // Phase 3 diagnostic: enable per-call FVM exec traces so apply_cross_messages
+        // can surface inner sub-call exit codes / failure_info on revert.
+        // Has a perf cost but is invaluable for debugging the second-token deploy bug.
+        mc.enable_tracing();
+        mc.enable_actor_debugging();
 
         // Creating a new machine every time is prohibitively slow.
         // let ec = EngineConfig::from(&nc);

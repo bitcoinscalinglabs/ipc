@@ -128,10 +128,7 @@ impl<DB: Blockstore + Clone> GatewayCaller<DB> {
 
     /// Update stored supply snapshots to current totalSupply values.
     /// Must be called after get_token_supply_deltas so the next checkpoint starts fresh.
-    pub fn update_supply_snapshots(
-        &self,
-        state: &mut FvmExecState<DB>,
-    ) -> anyhow::Result<()> {
+    pub fn update_supply_snapshots(&self, state: &mut FvmExecState<DB>) -> anyhow::Result<()> {
         self.erc
             .call(state, |c| c.update_supply_snapshots())
             .context("failed to update supply snapshots")
@@ -391,15 +388,29 @@ impl<DB: Blockstore + Clone> GatewayCaller<DB> {
             .xnet
             .call_with_return(state, |c| c.apply_cross_messages(messages))?;
         let r = r.into_return();
-        tracing::trace!("apply_cross_messages return: {:?}", r);
+        tracing::debug!("apply_cross_messages return: {:?}", r);
+        //Each entry has a key like "t1"/"t2"/"d",
+        //see tmconv::to_events for the encoding.
         for event in r.apply_ret.events.iter() {
             for entry in event.event.entries.iter() {
-                tracing::trace!(
-                    "key: {:?}, value: {:?}",
+                tracing::debug!(
+                    "apply_cross_messages event emitter={} key={:?} value=0x{}",
+                    event.emitter,
                     entry.key,
                     hex::encode(entry.value.clone())
                 );
             }
+        }
+        // Phase 3 diagnostic: walk the FVM exec_trace and log every non-OK frame
+        // along with any failure_info. This is the only way to see the inner
+        // EAM/INIT/Exec4/CREATE failure that gets swallowed by the EVM actor's
+        // CREATE handler before it can reach the Solidity layer.
+        tracing::debug!(
+            "apply_cross_messages exec_trace has {} entries",
+            r.apply_ret.exec_trace.len()
+        );
+        for (i, entry) in r.apply_ret.exec_trace.iter().enumerate() {
+            tracing::debug!("apply_cross_messages exec_trace[{}] = {:?}", i, entry);
         }
         Ok(r)
     }

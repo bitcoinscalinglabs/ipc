@@ -17,6 +17,11 @@ contract WrappedToken is ERC20, ERC20Burnable, Ownable, ERC165, IWrappedToken {
     address private immutable _homeTokenAddress;
     uint8 private immutable _decimals;
 
+    /// @notice Phase 3 diagnostic markers emitted during construction.
+    ///         Survives only if the constructor itself completes successfully
+    ///         (events from a reverted CREATE frame are unwound).
+    event WTConstructorStep(uint8 step, uint256 data);
+
     constructor(
         SubnetID memory homeSubnet_,
         address homeTokenAddress_,
@@ -24,9 +29,13 @@ contract WrappedToken is ERC20, ERC20Burnable, Ownable, ERC165, IWrappedToken {
         string memory symbol_,
         uint8 decimals_
     ) ERC20(name_, symbol_) Ownable(msg.sender) {
+        emit WTConstructorStep(1, uint256(uint160(msg.sender)));
         _homeSubnet = homeSubnet_;
+        emit WTConstructorStep(2, homeSubnet_.route.length);
         _homeTokenAddress = homeTokenAddress_;
+        emit WTConstructorStep(3, uint256(uint160(homeTokenAddress_)));
         _decimals = decimals_;
+        emit WTConstructorStep(4, uint256(decimals_));
     }
 
     function homeSubnet() external view override returns (SubnetID memory) {

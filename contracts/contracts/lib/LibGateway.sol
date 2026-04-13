@@ -26,6 +26,16 @@ library LibGateway {
     event NewTopDownMessage(address indexed subnet, IpcEnvelope message);
     /// @dev event emitted when there is a new bottom-up message batch to be signed.
     event NewBottomUpMsgBatch(uint256 indexed epoch);
+    /// @dev emitted when `executeCrossMsg` returns success=false. The `returnData` is the
+    ///      ABI-encoded revert payload from the inner delegatecall — surfacing it here makes
+    ///      otherwise-silent cross-message execution failures observable.
+    event CrossMsgExecutionFailed(
+        IpcMsgKind kind,
+        uint64 nonce,
+        SubnetID fromSubnet,
+        SubnetID toSubnet,
+        bytes returnData
+    );
 
     /// @notice returns the current bottom-up checkpoint
     /// @return exists - whether the checkpoint exists
@@ -415,6 +425,13 @@ library LibGateway {
         if (success) {
             sendReceipt(crossMsg, OutcomeType.Ok, ret);
         } else {
+            emit CrossMsgExecutionFailed(
+                crossMsg.kind,
+                crossMsg.nonce,
+                crossMsg.from.subnetId,
+                crossMsg.to.subnetId,
+                ret
+            );
             sendReceipt(crossMsg, OutcomeType.ActorErr, ret);
         }
     }
