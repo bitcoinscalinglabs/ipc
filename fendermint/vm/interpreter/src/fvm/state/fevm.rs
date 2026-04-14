@@ -258,12 +258,16 @@ where
             .map(from_eth::to_fvm_tokens)
             .unwrap_or_else(|| TokenAmount::from_atto(0));
 
-        // We send off a read-only query to an EVM actor at the given address.
+        // Use block_height as the message sequence so that the FVM's
+        // next_actor_address (which hashes origin + sequence + num_actors_created)
+        // produces a unique robust f2 address per block. Without this, every
+        // implicit message gets sequence=0, and any two blocks that each CREATE
+        // an actor collide on the same f2 address in the init actor's address map.
         let msg = Message {
             version: Default::default(),
             from,
             to: self.addr,
-            sequence: 0,
+            sequence: state.block_height() as u64,
             value,
             method_num: evm::Method::InvokeContract as u64,
             params: calldata,
