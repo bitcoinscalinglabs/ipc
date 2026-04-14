@@ -2,14 +2,13 @@
 #
 # Deploy an ERC20 token on a fendermint subnet and register it for cross-subnet bridging.
 #
-# Required environment variables:
-#   RPC_URL          — subnet's Ethereum JSON-RPC endpoint (e.g. http://localhost:8545)
-#   PRIVATE_KEY      — deployer's private key (hex, with or without 0x prefix)
-#   GATEWAY_ADDRESS  — the subnet's GatewayDiamond contract address
-#
 # Usage:
 #   bash scripts/deploy_bridgeable_token.sh \
-#     --name "MyToken" --symbol "MTK" --decimals 18 --initial-supply 1000000
+#     --rpc-url http://localhost:8545 \
+#     --private-key 0xabcd... \
+#     --gateway 0x77aa... \
+#     --name "MyToken" --symbol "MTK" --decimals 18 --initial-supply 1000000 \
+#     --broadcast
 #
 set -euo pipefail
 
@@ -20,43 +19,42 @@ SYMBOL=""
 DECIMALS=""
 INITIAL_SUPPLY=""
 BROADCAST=""
+RPC_URL="${RPC_URL:-}"
+PRIVATE_KEY="${PRIVATE_KEY:-}"
+GATEWAY_ADDRESS="${GATEWAY_ADDRESS:-}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --name)       NAME="$2";           shift 2 ;;
-        --symbol)     SYMBOL="$2";         shift 2 ;;
-        --decimals)   DECIMALS="$2";       shift 2 ;;
+        --rpc-url)        RPC_URL="$2";        shift 2 ;;
+        --private-key)    PRIVATE_KEY="$2";    shift 2 ;;
+        --gateway)        GATEWAY_ADDRESS="$2"; shift 2 ;;
+        --name)           NAME="$2";           shift 2 ;;
+        --symbol)         SYMBOL="$2";         shift 2 ;;
+        --decimals)       DECIMALS="$2";       shift 2 ;;
         --initial-supply) INITIAL_SUPPLY="$2"; shift 2 ;;
-        --broadcast)  BROADCAST="--broadcast"; shift ;;
+        --broadcast)      BROADCAST="--broadcast"; shift ;;
         *)
             echo "error: unknown argument '$1'"
-            echo "usage: $0 --name <name> --symbol <symbol> --decimals <decimals> --initial-supply <amount> [--broadcast]"
+            echo "usage: $0 --rpc-url <url> --private-key <key> --gateway <addr> --name <name> --symbol <symbol> --decimals <decimals> --initial-supply <amount> [--broadcast]"
             exit 1
             ;;
     esac
 done
 
-# ── Check required environment variables ──
+# ── Check required params ──
 
 missing=()
-[[ -z "${RPC_URL:-}" ]]         && missing+=("RPC_URL")
-[[ -z "${PRIVATE_KEY:-}" ]]     && missing+=("PRIVATE_KEY")
-[[ -z "${GATEWAY_ADDRESS:-}" ]] && missing+=("GATEWAY_ADDRESS")
+[[ -z "$RPC_URL" ]]         && missing+=("--rpc-url")
+[[ -z "$PRIVATE_KEY" ]]     && missing+=("--private-key")
+[[ -z "$GATEWAY_ADDRESS" ]] && missing+=("--gateway")
+[[ -z "$NAME" ]]            && missing+=("--name")
+[[ -z "$SYMBOL" ]]          && missing+=("--symbol")
+[[ -z "$DECIMALS" ]]        && missing+=("--decimals")
+[[ -z "$INITIAL_SUPPLY" ]]  && missing+=("--initial-supply")
 
 if [[ ${#missing[@]} -gt 0 ]]; then
-    echo "error: missing required environment variables: ${missing[*]}"
-    echo ""
-    echo "  RPC_URL          — subnet's Ethereum JSON-RPC endpoint"
-    echo "  PRIVATE_KEY      — deployer's private key (hex)"
-    echo "  GATEWAY_ADDRESS  — the subnet's GatewayDiamond contract address"
-    exit 1
-fi
-
-# ── Check required arguments ──
-
-if [[ -z "$NAME" || -z "$SYMBOL" || -z "$DECIMALS" || -z "$INITIAL_SUPPLY" ]]; then
-    echo "error: all arguments are required"
-    echo "usage: $0 --name <name> --symbol <symbol> --decimals <decimals> --initial-supply <amount>"
+    echo "error: missing required arguments: ${missing[*]}"
+    echo "usage: $0 --rpc-url <url> --private-key <key> --gateway <addr> --name <name> --symbol <symbol> --decimals <decimals> --initial-supply <amount> [--broadcast]"
     exit 1
 fi
 
@@ -64,7 +62,6 @@ fi
 
 if ! command -v forge &>/dev/null; then
     echo "error: 'forge' (Foundry) is not installed or not in PATH"
-    echo "install: https://book.getfoundry.sh/getting-started/installation"
     exit 1
 fi
 
