@@ -139,6 +139,13 @@ fi
 
 # ── Register the token on the Gateway ──
 
+# Wait for the deploy transaction to be confirmed before registering,
+# otherwise cast send may fetch a stale nonce.
+DEPLOY_TX_HASH=$(echo "$DEPLOY_OUTPUT" | grep -i "Transaction hash:" | awk '{print $NF}')
+if [[ -n "$DEPLOY_TX_HASH" ]]; then
+    cast receipt "$DEPLOY_TX_HASH" --rpc-url "$RPC_URL" --confirmations 1 > /dev/null 2>&1 || true
+fi
+
 echo ""
 echo "Registering token on gateway $GATEWAY_ADDRESS ..."
 
@@ -147,7 +154,8 @@ REGISTER_OUTPUT=$(
         "registerBridgeableToken(address)" \
         "$TOKEN_ADDRESS" \
         --rpc-url "$RPC_URL" \
-        --private-key "$PRIVATE_KEY"
+        --private-key "$PRIVATE_KEY" \
+        --confirmations 1
 ) || {
     echo "error: registration failed"
     echo "$REGISTER_OUTPUT"
