@@ -401,17 +401,6 @@ impl<DB: Blockstore + Clone> GatewayCaller<DB> {
                 );
             }
         }
-        // Phase 3 diagnostic: walk the FVM exec_trace and log every non-OK frame
-        // along with any failure_info. This is the only way to see the inner
-        // EAM/INIT/Exec4/CREATE failure that gets swallowed by the EVM actor's
-        // CREATE handler before it can reach the Solidity layer.
-        tracing::debug!(
-            "apply_cross_messages exec_trace has {} entries",
-            r.apply_ret.exec_trace.len()
-        );
-        for (i, entry) in r.apply_ret.exec_trace.iter().enumerate() {
-            tracing::debug!("apply_cross_messages exec_trace[{}] = {:?}", i, entry);
-        }
         Ok(r)
     }
 

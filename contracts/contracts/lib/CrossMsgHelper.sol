@@ -26,12 +26,6 @@ library CrossMsgHelper {
     using FvmAddressHelper for FvmAddress;
     using AssetHelper for Asset;
 
-    /// @notice Phase 2 diagnostic marker. Emitted at each step of _executeErcTransfer
-    ///         so that, on revert, the last surviving marker (events emitted by the
-    ///         gateway delegatecall context survive a downstream sub-call revert)
-    ///         tells us exactly where the failure happened.
-    event ErcTransferStep(uint8 step, uint256 data);
-
     error CannotExecuteEmptyEnvelope();
 
     function createTransferMsg(
@@ -229,50 +223,35 @@ library CrossMsgHelper {
         GatewayActorStorage storage s = LibGatewayActorStorage.appStorage();
         (SubnetID memory homeSubnet, address homeToken, uint256 amount) =
             abi.decode(crossMsg.message, (SubnetID, address, uint256));
-        emit ErcTransferStep(1, uint256(uint160(homeToken)));
 
         if (s.networkName.equals(homeSubnet)) {
             // Case A: this is the home subnet — release the locked tokens to the recipient.
-            emit ErcTransferStep(10, amount);
             try IERC20(homeToken).transfer(recipient, amount) returns (bool) {
-                emit ErcTransferStep(11, 0);
                 return (true, EMPTY_BYTES);
             } catch (bytes memory e) {
-                emit ErcTransferStep(111, e.length);
                 return (false, e);
             }
         } else {
             // Case B: non-home subnet — mint a WrappedToken for the recipient.
-            emit ErcTransferStep(20, 0);
             bytes32 key = keccak256(abi.encode(homeSubnet, homeToken));
             address wrappedAddr = s.wrappedTokens[key];
-            emit ErcTransferStep(21, uint256(uint160(wrappedAddr)));
             if (wrappedAddr == address(0)) {
                 TokenMetadata storage meta = s.tokenMetadata[key];
-                emit ErcTransferStep(22, bytes(meta.name).length);
                 if (bytes(meta.name).length == 0) {
-                    emit ErcTransferStep(122, 0);
                     return (false, abi.encodeWithSelector(TokenMetadataNotFound.selector));
                 }
-                emit ErcTransferStep(23, uint256(uint160(s.wrappedTokenFactory)));
                 try WrappedTokenFactory(s.wrappedTokenFactory).deployWrappedToken(
                     homeSubnet, homeToken, meta.name, meta.symbol, meta.decimals
                 ) returns (address w) {
                     wrappedAddr = w;
-                    emit ErcTransferStep(24, uint256(uint160(w)));
                 } catch (bytes memory e) {
-                    emit ErcTransferStep(123, e.length);
                     return (false, e);
                 }
                 s.wrappedTokens[key] = wrappedAddr;
-                emit ErcTransferStep(25, 0);
             }
-            emit ErcTransferStep(26, amount);
             try IWrappedToken(wrappedAddr).mint(recipient, amount) {
-                emit ErcTransferStep(27, 0);
                 return (true, EMPTY_BYTES);
             } catch (bytes memory e) {
-                emit ErcTransferStep(127, e.length);
                 return (false, e);
             }
         }
