@@ -34,31 +34,27 @@ impl CommandLineHandler for QueryTokenMetadata {
             .get_token_metadata(&subnet, gateway_addr, home_subnet.clone(), home_token)
             .await?;
 
-        println!(
-            "Token metadata for (home_subnet={}, home_token={}) on {}:",
-            home_subnet, arguments.home_token, subnet
-        );
-        println!("  name:     {}", metadata.name);
-        println!("  symbol:   {}", metadata.symbol);
-        println!("  decimals: {}", metadata.decimals);
-
-        if subnet == home_subnet {
-            // Home subnet: by design holds the original token, not a wrapped copy.
-            println!("  (this subnet is the token's home subnet — no wrapped contract)");
+        let wrapped_token = if subnet == home_subnet {
+            None
         } else {
-            // Non-home subnet: always print the wrapped: line.
             let wrapped = provider
                 .get_wrapped_token(&subnet, gateway_addr, home_subnet, home_token)
                 .await?;
             let wrapped_eth = payload_to_evm_address(wrapped.payload())?;
             if wrapped_eth == ethers::types::Address::zero() {
-                println!(
-                    "  wrapped:  0x0000000000000000000000000000000000000000  (not yet deployed — no transfer received)"
-                );
+                None
             } else {
-                println!("  wrapped:  {:?}", wrapped_eth);
+                Some(format!("{:?}", wrapped_eth))
             }
-        }
+        };
+
+        let output = serde_json::json!({
+            "name": metadata.name,
+            "symbol": metadata.symbol,
+            "decimals": metadata.decimals,
+            "wrapped_token": wrapped_token,
+        });
+        println!("{}", serde_json::to_string_pretty(&output)?);
 
         Ok(())
     }
