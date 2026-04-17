@@ -349,11 +349,11 @@ where
             .await
             .context("failed to broadcast checkpoint signature")?;
 
-            // TODO(themis):
             // step 1: get checkpoint PSBT from provider
             // step 2: sign PSBT
-            // step 3: submit signature on some smart contract that stores map between checkpoint and signatures
-            // TODO(Orestis):
+            // step 3: submit signature on a contract that stores map between checkpoint and signatures
+
+            // TODO
             // Getting self.subnet_id here is a workaround, because the subnet_id that comes in the BottomUpCheckpoint
             // cannot give us the information about the parent network type, nor the the root id of the parent
             // with a "/b" prefix. If we change that, we can get rid of the subnet_id parameter in the function.
