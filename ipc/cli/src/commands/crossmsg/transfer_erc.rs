@@ -37,7 +37,11 @@ impl CommandLineHandler for TransferErc {
         };
 
         // ERC20 amounts are in the token's smallest unit — no satoshi-to-atto conversion.
-        let amount = TokenAmount::from_atto(arguments.amount);
+        let amount = TokenAmount::from_atto(
+            arguments.amount.parse::<fvm_shared::bigint::BigInt>().map_err(|e| {
+                anyhow::anyhow!("invalid amount '{}': {e}", arguments.amount)
+            })?,
+        );
 
         println!(
             "transfer-erc performed in epoch: {:?}",
@@ -72,6 +76,6 @@ pub(crate) struct TransferErcArgs {
     pub destination_address: String,
     #[arg(long, help = "The local ERC20 or WrappedToken address on the source subnet")]
     pub token: String,
-    #[arg(help = "The token amount to transfer (in the token's smallest unit, as integer)")]
-    pub amount: u64,
+    #[arg(help = "The token amount to transfer (in the token's smallest unit, as integer string)")]
+    pub amount: String,
 }
