@@ -1,7 +1,9 @@
 target/
 .idea
 node_modules/
+.pnpm-store/
 .DS_Store
+CLAUDE.md
 
 # we migrated from npm to pnpm.
 package-lock.json
