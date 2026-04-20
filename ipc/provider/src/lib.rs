@@ -679,6 +679,82 @@ impl IpcProvider {
             .await
     }
 
+    /// Initiate a cross-subnet ERC20 transfer from `source_subnet`.
+    pub async fn transfer_erc_token(
+        &mut self,
+        source_gateway_addr: Option<Address>,
+        source_subnet: SubnetID,
+        destination_subnet: SubnetID,
+        source_address: Option<Address>,
+        destination_address: Address,
+        local_token: Address,
+        amount: TokenAmount,
+    ) -> anyhow::Result<ChainEpoch> {
+        let source_conn = match self.connection(&source_subnet) {
+            None => return Err(anyhow!("source subnet not found: {source_subnet}")),
+            Some(conn) => conn,
+        };
+        let source_subnet_config = source_conn.subnet();
+        let source_address = self.check_sender(source_address)?;
+        let gateway_addr = match source_gateway_addr {
+            None => Some(source_subnet_config.gateway_addr()),
+            Some(addr) => Some(addr),
+        };
+        source_conn
+            .manager()
+            .transfer_erc_token(
+                gateway_addr,
+                source_address,
+                destination_address,
+                local_token,
+                amount,
+                destination_subnet,
+            )
+            .await
+    }
+
+    /// Returns the WrappedToken address on `subnet` for the given (homeSubnet, homeToken) pair.
+    pub async fn get_wrapped_token(
+        &self,
+        subnet: &SubnetID,
+        gateway_addr: Option<Address>,
+        home_subnet: SubnetID,
+        home_token: Address,
+    ) -> anyhow::Result<Address> {
+        let conn = match self.connection(subnet) {
+            None => return Err(anyhow!("subnet not found: {subnet}")),
+            Some(conn) => conn,
+        };
+        let gateway_addr = match gateway_addr {
+            None => Some(conn.subnet().gateway_addr()),
+            Some(addr) => Some(addr),
+        };
+        conn.manager()
+            .get_wrapped_token(gateway_addr, home_subnet, home_token)
+            .await
+    }
+
+    /// Returns the stored TokenMetadata on `subnet` for the given (homeSubnet, homeToken) pair.
+    pub async fn get_token_metadata(
+        &self,
+        subnet: &SubnetID,
+        gateway_addr: Option<Address>,
+        home_subnet: SubnetID,
+        home_token: Address,
+    ) -> anyhow::Result<crate::manager::TokenMetadata> {
+        let conn = match self.connection(subnet) {
+            None => return Err(anyhow!("subnet not found: {subnet}")),
+            Some(conn) => conn,
+        };
+        let gateway_addr = match gateway_addr {
+            None => Some(conn.subnet().gateway_addr()),
+            Some(addr) => Some(addr),
+        };
+        conn.manager()
+            .get_token_metadata(gateway_addr, home_subnet, home_token)
+            .await
+    }
+
     /// Propagate a cross-net message forward. For `postbox_msg_key`, we are using bytes because different
     /// runtime have different representations. For FVM, it should be `CID` as bytes. For EVM, it is
     /// `bytes32`.

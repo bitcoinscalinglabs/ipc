@@ -59,7 +59,15 @@ enum IpcMsgKind {
     Call,
     /// @dev receipt from the execution of cross-net messages
     /// (currently limited to `Transfer` messages)
-    Result
+    Result,
+    /// @dev cross-subnet ERC20 token transfer. value=0; message=abi.encode(homeSubnet, homeToken, amount).
+    ErcTransfer,
+    /// @dev ERC20 token metadata registration. Bottom-up: message=abi.encode(homeSubnet, homeToken, name, symbol, decimals, initialSupply).
+    ///      Top-down delivery: message=abi.encode(homeSubnet, homeToken, name, symbol, decimals, initialSupply).
+    ErcRegistration,
+    /// @dev ERC20 supply adjustment (mint/burn delta). value=0; message=abi.encode(homeToken, delta).
+    ///      Injected synthetically by fendermint at checkpoint time; not committed via commitBottomUpMsg.
+    ErcSupplyDelta
 }
 
 /// @notice Envelope used to propagate IPC cross-net messages

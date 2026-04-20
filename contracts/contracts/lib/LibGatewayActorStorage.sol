@@ -79,6 +79,31 @@ struct GatewayActorStorage {
     mapping(uint256 => bytes32[]) bitcoinCheckpointPsbtHashes;
     mapping(bytes32 => BitcoinBootstrapHandover) bitcoinBootstrapHandovers;
     bytes32[] bitcoinBootstrapHandoverPsbtHashes;
+    // =========== ERC Token Bridging ===========
+    /// @notice Tokens registered for bridging on this subnet (home-subnet registration).
+    /// Keyed by the local token address. True means registered.
+    mapping(address => bool) registeredBridgeableTokens;
+    /// @notice Token metadata for cross-subnet ERC20 bridging.
+    /// Key: keccak256(abi.encode(homeSubnet, homeTokenAddress)).
+    mapping(bytes32 => TokenMetadata) tokenMetadata;
+    /// @notice Deployed WrappedToken contract addresses.
+    /// A WrappedToken represents a token whose homeSubnet is a different chain.
+    /// Key: keccak256(abi.encode(homeSubnet, homeTokenAddress)). address(0) = not yet deployed.
+    mapping(bytes32 => address) wrappedTokens;
+    /// @notice Address of the WrappedTokenFactory used for lazy WrappedToken deployment.
+    address wrappedTokenFactory;
+    /// @notice Iterable list of token addresses registered for bridging on this subnet.
+    ///         Used by getTokenSupplyDeltas() to scan totalSupply at checkpoint time.
+    address[] registeredTokenAddresses;
+    /// @notice Last checkpointed totalSupply per registered token.
+    ///         Used to compute supply deltas (IPC:ETS) between checkpoints.
+    mapping(address => uint256) lastCheckpointedSupply;
+}
+
+struct TokenMetadata {
+    string name;
+    string symbol;
+    uint8 decimals;
 }
 
 library LibGatewayActorStorage {

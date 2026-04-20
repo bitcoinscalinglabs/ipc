@@ -20,6 +20,7 @@ use fendermint_vm_message::signed::sign_secp256k1;
 use fendermint_vm_topdown::IPCParentFinality;
 
 use ipc_actors_abis::checkpointing_facet::CheckpointingFacet;
+use ipc_actors_abis::gateway_erc_facet::GatewayErcFacet;
 use ipc_actors_abis::gateway_getter_facet::GatewayGetterFacet;
 use ipc_actors_abis::gateway_getter_facet::{self as getter, gateway_getter_facet};
 use ipc_actors_abis::top_down_finality_facet::TopDownFinalityFacet;
@@ -49,6 +50,7 @@ pub struct GatewayCaller<DB> {
         top_down_finality_facet::TopDownFinalityFacetErrors,
     >,
     xnet: ContractCaller<DB, XnetMessagingFacet<MockProvider>, NoRevert>,
+    erc: ContractCaller<DB, GatewayErcFacet<MockProvider>, NoRevert>,
 }
 
 impl<DB> Default for GatewayCaller<DB> {
@@ -69,6 +71,7 @@ impl<DB> GatewayCaller<DB> {
             checkpointing: ContractCaller::new(addr, CheckpointingFacet::new),
             topdown: ContractCaller::new(addr, TopDownFinalityFacet::new),
             xnet: ContractCaller::new(addr, XnetMessagingFacet::new),
+            erc: ContractCaller::new(addr, GatewayErcFacet::new),
         }
     }
 
@@ -106,6 +109,29 @@ impl<DB: Blockstore + Clone> GatewayCaller<DB> {
             c.bottom_up_msg_batch(ethers::types::U256::from(height))
         })?;
         Ok(batch)
+    }
+
+    /// Read supply deltas for all registered ERC20 tokens since the last checkpoint.
+    /// Returns (tokens, deltas) where deltas are signed (positive=mint, negative=burn).
+    pub fn get_token_supply_deltas(
+        &self,
+        state: &mut FvmExecState<DB>,
+    ) -> anyhow::Result<Vec<(ethers::types::Address, ethers::types::I256)>> {
+        let (tokens, deltas, count) = self.erc.call(state, |c| c.get_token_supply_deltas())?;
+        Ok(tokens
+            .into_iter()
+            .zip(deltas)
+            .take(count.as_usize())
+            .filter(|(_, delta)| !delta.is_zero())
+            .collect())
+    }
+
+    /// Update stored supply snapshots to current totalSupply values.
+    /// Must be called after get_token_supply_deltas so the next checkpoint starts fresh.
+    pub fn update_supply_snapshots(&self, state: &mut FvmExecState<DB>) -> anyhow::Result<()> {
+        self.erc
+            .call(state, |c| c.update_supply_snapshots())
+            .context("failed to update supply snapshots")
     }
 
     /// Insert a new checkpoint at the period boundary.
@@ -362,11 +388,14 @@ impl<DB: Blockstore + Clone> GatewayCaller<DB> {
             .xnet
             .call_with_return(state, |c| c.apply_cross_messages(messages))?;
         let r = r.into_return();
-        tracing::trace!("apply_cross_messages return: {:?}", r);
+        tracing::debug!("apply_cross_messages return: {:?}", r);
+        //Each entry has a key like "t1"/"t2"/"d",
+        //see tmconv::to_events for the encoding.
         for event in r.apply_ret.events.iter() {
             for entry in event.event.entries.iter() {
-                tracing::trace!(
-                    "key: {:?}, value: {:?}",
+                tracing::debug!(
+                    "apply_cross_messages event emitter={} key={:?} value=0x{}",
+                    event.emitter,
                     entry.key,
                     hex::encode(entry.value.clone())
                 );

@@ -567,13 +567,13 @@ where
     }
 
     /// Query the application for data at the current or past height.
-    #[instrument(skip(self))]
+    #[instrument(level = "trace", skip(self))]
     async fn query(&self, request: request::Query) -> AbciResult<response::Query> {
         let db = self.state_store_clone();
         let height = FvmQueryHeight::from(request.height.value());
         let (state_params, block_height) = self.state_params_at_height(height)?;
 
-        tracing::debug!(
+        tracing::trace!(
             query_height = request.height.value(),
             block_height,
             state_root = state_params.state_root.to_string(),

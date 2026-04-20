@@ -85,10 +85,18 @@ docker-deps: $(BUILTIN_ACTORS_BUNDLE) $(CUSTOM_ACTORS_BUNDLE) $(IPC_ACTORS_GEN)
 	cp $(BUILTIN_ACTORS_BUNDLE) docker/.artifacts
 	cp $(CUSTOM_ACTORS_BUNDLE) docker/.artifacts
 
+# Build fendermint-deps image if it doesn't exist (pre-compiled Rust dependencies).
+# Only needs rebuilding when Cargo.lock changes: `docker rmi fendermint-deps:latest`
+fendermint-deps:
+	@if ! docker images --format '{{.Repository}}' | grep -q '^fendermint-deps$$'; then \
+		echo "Building fendermint-deps image (one-time, caches Rust dependencies)..."; \
+		DOCKER_BUILDKIT=1 docker build -f docker/builder.deps.Dockerfile -t fendermint-deps:latest $(PWD)/..; \
+	fi
+
 # To use `buildx` locally to produce multiplatform images, one needs to run `docker buildx create --use`.
 # After that it looks like even the regular docker build needs the `--load` parameter, which hopefully
 # it can handle for anyone with `DOCKER_BUILDKIT=1`.
-docker-build: docker-deps $(FENDERMINT_CODE)
+docker-build: fendermint-deps docker-deps $(FENDERMINT_CODE)
 	if [ "$(PROFILE)" = "ci" ]; then \
 		cat docker/builder.ci.Dockerfile docker/runner.Dockerfile > docker/Dockerfile ; \
 		docker buildx build \

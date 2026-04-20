@@ -357,10 +357,10 @@ impl FinalityWithNull {
         Ok(
             if let Some(block_hash) = self.block_hash_at_height(proposal.height)? {
                 let r = block_hash == proposal.block_hash;
-                tracing::debug!(proposal = proposal.to_string(), is_same = r, "same hash?");
+                tracing::trace!(proposal = proposal.to_string(), is_same = r, "same hash?");
                 r
             } else {
-                tracing::debug!(proposal = proposal.to_string(), "reject, hash not found");
+                tracing::trace!(proposal = proposal.to_string(), "reject, hash not found");
                 false
             },
         )

@@ -30,6 +30,7 @@ contract GatewayDiamond {
         SubnetID networkName;
         Validator[] genesisValidators;
         bytes32 commitSha;
+        address wrappedTokenFactory;
     }
 
     constructor(IDiamond.FacetCut[] memory _diamondCut, ConstructorParams memory params) {
@@ -61,6 +62,7 @@ contract GatewayDiamond {
         s.majorityPercentage = params.majorityPercentage;
         s.checkpointQuorumMap.retentionHeight = 1;
         s.commitSha = params.commitSha;
+        s.wrappedTokenFactory = params.wrappedTokenFactory;
 
         // BottomUpMsgBatch config parameters.
         // NOTE: Let's fix them for now, but we could make them configurable

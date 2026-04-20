@@ -106,7 +106,7 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
     }
 
     function testGatewayDiamond_LoupeFunction() public view {
-        require(gatewayDiamond.diamondLouper().facets().length == 9, "unexpected length");
+        require(gatewayDiamond.diamondLouper().facets().length == 10, "unexpected length");
         require(
             gatewayDiamond.diamondLouper().supportsInterface(type(IERC165).interfaceId) == true,
             "IERC165 not supported"
@@ -203,7 +203,8 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             majorityPercentage: DEFAULT_MAJORITY_PERCENTAGE,
             genesisValidators: new Validator[](0),
             activeValidatorsLimit: 100,
-            commitSha: DEFAULT_COMMIT_SHA
+            commitSha: DEFAULT_COMMIT_SHA,
+            wrappedTokenFactory: address(0)
         });
 
         GatewayDiamond dep = createGatewayDiamond(constructorParams);
@@ -236,7 +237,8 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             majorityPercentage: 100,
             genesisValidators: new Validator[](0),
             activeValidatorsLimit: 100,
-            commitSha: DEFAULT_COMMIT_SHA
+            commitSha: DEFAULT_COMMIT_SHA,
+            wrappedTokenFactory: address(0)
         });
 
         IDiamond.FacetCut[] memory diamondCut = new IDiamond.FacetCut[](2);
@@ -740,7 +742,8 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             majorityPercentage: DEFAULT_MAJORITY_PERCENTAGE,
             genesisValidators: new Validator[](0),
             activeValidatorsLimit: 100,
-            commitSha: DEFAULT_COMMIT_SHA
+            commitSha: DEFAULT_COMMIT_SHA,
+            wrappedTokenFactory: address(0)
         });
         gatewayDiamond = createGatewayDiamond(constructorParams);
 
@@ -768,7 +771,8 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             majorityPercentage: DEFAULT_MAJORITY_PERCENTAGE,
             genesisValidators: new Validator[](0),
             activeValidatorsLimit: 100,
-            commitSha: DEFAULT_COMMIT_SHA
+            commitSha: DEFAULT_COMMIT_SHA,
+            wrappedTokenFactory: address(0)
         });
 
         gatewayDiamond = createGatewayDiamond(constructorParams);
@@ -795,7 +799,8 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             majorityPercentage: DEFAULT_MAJORITY_PERCENTAGE,
             genesisValidators: new Validator[](0),
             activeValidatorsLimit: 100,
-            commitSha: DEFAULT_COMMIT_SHA
+            commitSha: DEFAULT_COMMIT_SHA,
+            wrappedTokenFactory: address(0)
         });
 
         gatewayDiamond = createGatewayDiamond(constructorParams);
@@ -823,7 +828,8 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             majorityPercentage: DEFAULT_MAJORITY_PERCENTAGE,
             genesisValidators: new Validator[](0),
             activeValidatorsLimit: 100,
-            commitSha: DEFAULT_COMMIT_SHA
+            commitSha: DEFAULT_COMMIT_SHA,
+            wrappedTokenFactory: address(0)
         });
 
         gatewayDiamond = createGatewayDiamond(constructorParams);
@@ -986,7 +992,8 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             majorityPercentage: DEFAULT_MAJORITY_PERCENTAGE,
             genesisValidators: genesisValidators,
             activeValidatorsLimit: DEFAULT_ACTIVE_VALIDATORS_LIMIT,
-            commitSha: DEFAULT_COMMIT_SHA
+            commitSha: DEFAULT_COMMIT_SHA,
+            wrappedTokenFactory: address(0)
         });
         gatewayDiamond = createGatewayDiamond(gwConstructorParams);
 
@@ -2207,7 +2214,8 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             majorityPercentage: DEFAULT_MAJORITY_PERCENTAGE,
             genesisValidators: new Validator[](0),
             activeValidatorsLimit: 100,
-            commitSha: DEFAULT_COMMIT_SHA
+            commitSha: DEFAULT_COMMIT_SHA,
+            wrappedTokenFactory: address(0)
         });
 
         gatewayDiamond = createGatewayDiamond(constructorParams);

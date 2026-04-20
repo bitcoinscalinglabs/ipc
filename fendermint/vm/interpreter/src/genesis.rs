@@ -566,6 +566,11 @@ fn deploy_contracts(
         deployer.deploy_library(state, &mut next_id, lib_src, &lib_name)?;
     }
 
+    // WrappedTokenFactory: deploy before gateway so we can pass its address to the constructor.
+    // This contract has no Solidity constructor, so use deploy_contract_no_cons.
+    let wrapped_token_factory_addr =
+        deployer.deploy_contract_no_cons(state, ipc::wrapped_token_factory::CONTRACT_NAME)?;
+
     // IPC Gateway actor.
     let gateway_addr = {
         use ipc::gateway::ConstructorParameters;
@@ -578,8 +583,9 @@ fn deploy_contracts(
         };
         tracing::debug!(?ipc_params, "using gateway params during genesis deployment");
 
-        let params = ConstructorParameters::new(ipc_params, validators)
-            .context("failed to create gateway constructor")?;
+        let params =
+            ConstructorParameters::new(ipc_params, validators, wrapped_token_factory_addr)
+                .context("failed to create gateway constructor")?;
 
         let facets = deployer
             .facets(ipc::gateway::CONTRACT_NAME)
@@ -761,6 +767,39 @@ where
         );
 
         // The Ethereum address is more usable inside the EVM than the ID address.
+        Ok(eth_addr)
+    }
+
+    /// Deploy a top-level contract that has no Solidity constructor.
+    fn deploy_contract_no_cons(
+        &self,
+        state: &mut FvmGenesisState<DB>,
+        contract_name: &str,
+    ) -> anyhow::Result<et::Address> {
+        let contract = self.top_contract(contract_name)?;
+        let contract_id = contract.actor_id;
+        let contract_src = contract_src(contract_name);
+
+        let bytecode = self
+            .hardhat
+            .bytecode(contract_src, contract_name, &self.lib_addrs)
+            .with_context(|| format!("failed to load {contract_name} bytecode"))?;
+
+        let eth_addr = state
+            .create_evm_actor(contract_id, bytecode)
+            .with_context(|| format!("failed to create {contract_name} actor"))?;
+
+        let id_addr = et::Address::from(EthAddress::from_id(contract_id).0);
+        let eth_addr = et::Address::from(eth_addr.0);
+
+        tracing::info!(
+            actor_id = contract_id,
+            ?eth_addr,
+            ?id_addr,
+            contract_name,
+            "deployed Ethereum contract (no constructor)"
+        );
+
         Ok(eth_addr)
     }
 

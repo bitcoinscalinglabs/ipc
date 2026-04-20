@@ -63,9 +63,55 @@ where
         .block_hash()
         .ok_or_else(|| anyhow!("block hash not set"))?;
 
-    let Some((msgs, subnet_id)) = should_create_checkpoint(gateway, state, height)? else {
+    let Some((mut msgs, subnet_id)) = should_create_checkpoint(gateway, state, height)? else {
         return Ok(None);
     };
+
+    // Collect ERC20 supply adjustments (IPC:ETS).
+    // We snapshot totalSupply() for each registered token once per checkpoint period,
+    // compute the delta from the previous snapshot, and append the results to msgs.
+    let supply_deltas = gateway
+        .get_token_supply_deltas(state)
+        .context("failed to get token supply deltas")?;
+    if !supply_deltas.is_empty() {
+        let delta_count = supply_deltas.len();
+        gateway
+            .update_supply_snapshots(state)
+            .context("failed to update supply snapshots")?;
+
+        let empty_subnet_id = checkpoint::SubnetID {
+            root: 0,
+            route: vec![],
+        };
+        let empty_addr = checkpoint::FvmAddress {
+            addr_type: 0,
+            payload: ethers::types::Bytes::default(),
+        };
+        let empty_ipc_addr = checkpoint::Ipcaddress {
+            subnet_id: empty_subnet_id,
+            raw_address: empty_addr,
+        };
+
+        for (token, delta) in supply_deltas {
+            // message = abi.encode(token, delta) — matches the Solidity ErcSupplyDelta format
+            let message = ethers::abi::encode(&[
+                ethers::abi::Token::Address(token),
+                ethers::abi::Token::Int(delta.into_raw()),
+            ]);
+            msgs.push(checkpoint::IpcEnvelope {
+                kind: 5, // IpcMsgKind::ErcSupplyDelta
+                to: empty_ipc_addr.clone(),
+                from: empty_ipc_addr.clone(),
+                nonce: 0,
+                value: ethers::types::U256::zero(),
+                message: ethers::types::Bytes::from(message),
+            });
+        }
+        tracing::info!(
+            delta_count,
+            "injected ERC supply delta messages into checkpoint"
+        );
+    }
 
     // Get the current power table from the ledger, not CometBFT.
     let (curr_configuration_number, curr_power_table) =
@@ -303,11 +349,11 @@ where
             .await
             .context("failed to broadcast checkpoint signature")?;
 
-            // TODO(themis):
             // step 1: get checkpoint PSBT from provider
             // step 2: sign PSBT
-            // step 3: submit signature on some smart contract that stores map between checkpoint and signatures
-            // TODO(Orestis):
+            // step 3: submit signature on a contract that stores map between checkpoint and signatures
+
+            // TODO
             // Getting self.subnet_id here is a workaround, because the subnet_id that comes in the BottomUpCheckpoint
             // cannot give us the information about the parent network type, nor the the root id of the parent
             // with a "/b" prefix. If we change that, we can get rid of the subnet_id parameter in the function.
@@ -381,7 +427,7 @@ where
             ipc_api::checkpoint::BottomUpCheckpoint::try_from(checkpoint.clone())?,
         )
         .await?;
-    tracing::info!(
+    tracing::trace!(
         "interpreter obtained checkpoint PSBT from bitcoin provider: {checkpoint_psbt:?}"
     );
 
@@ -433,9 +479,6 @@ where
     let bootstrap_handover_psbt = parent_manager
         .get_bootstrap_handover_transaction(subnet_id)
         .await?;
-    tracing::info!(
-        "interpreter obtained bootstrap-handover PSBT from bitcoin provider: {bootstrap_handover_psbt:?}"
-    );
 
     let calldata = gateway
         .add_bitcoin_bootstrap_handover_signature_calldata(bootstrap_handover_psbt)

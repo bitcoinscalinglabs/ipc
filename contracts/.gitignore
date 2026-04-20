@@ -1,5 +1,6 @@
 cache/
 cache_hardhat/
+src
 crytic-export/
 .vscode
 .idea
