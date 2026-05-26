@@ -5,7 +5,6 @@ use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
 use std::env;
 use std::str::FromStr;
-use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 use ethers::abi::ethereum_types;
@@ -25,8 +24,6 @@ use ipc_api::subnet::{
 use ipc_api::subnet::{BtcJoinParams, JoinParams};
 use ipc_api::validator::Validator;
 use ipc_api::{ethers_address_to_fil_address, token_amount_from_satoshi, token_amount_to_satoshi};
-use ipc_wallet::{EthKeyAddress, EvmKeyStore, PersistentKeyStore};
-use libsecp256k1::SecretKey;
 use reqwest::Client;
 use serde_json::{json, Value};
 
@@ -1467,7 +1464,6 @@ impl SubnetManager for BtcSubnetManager {
 impl BottomUpCheckpointRelayer for BtcSubnetManager {
     async fn submit_checkpoint(
         &self,
-        keystore: Arc<RwLock<PersistentKeyStore<EthKeyAddress>>>,
         _submitter: &Option<Address>,
         checkpoint: BottomUpCheckpoint,
         _signatures: Vec<Signature>,
@@ -1484,10 +1480,9 @@ impl BottomUpCheckpointRelayer for BtcSubnetManager {
             }
         };
 
-        let signatures_json = split_signatures_and_zip_with_signatories(
+        let signatures_json = zip_pubkeys_with_chunked_signatures(
             bitcoin_signatures.signatures,
             bitcoin_signatures.signatories,
-            &keystore,
         )?;
 
         let body = json!({
@@ -1642,15 +1637,13 @@ impl BottomUpCheckpointRelayer for BtcSubnetManager {
     async fn submit_bootstrap_handover(
         &self,
         subnet_id: &SubnetID,
-        keystore: Arc<RwLock<PersistentKeyStore<EthKeyAddress>>>,
         handover_signatures: ipc_api::checkpoint::BitcoinHandoverSignatureQuorum,
     ) -> Result<ChainEpoch> {
         tracing::info!("submitting bootstrap handover transaction on btc");
 
-        let signatures_json = split_signatures_and_zip_with_signatories(
+        let signatures_json = zip_pubkeys_with_chunked_signatures(
             handover_signatures.signatures,
             handover_signatures.signatories,
-            &keystore,
         )?;
 
         let body = json!({
@@ -1717,31 +1710,15 @@ impl BottomUpCheckpointRelayer for BtcSubnetManager {
     }
 }
 
-// The `signatures` contains, for each signatory, multiple concatenated signatures from that signatory.
-// The `signatories` contains the ethereum addresses of the signatories.
-// (see the `get_checkpoint_transaction` for how this is created, we concatenate the signatures of each signatory).
+// Produce the JSON shape that bitcoin-ipc's `finalizebootstraphandover` and
+// `finalizecheckpointpsbt` RPCs expect: for each signatory, an array
+// `[xpub_hex, [sig_chunk_hex, ...]]`. The input `signatures[i]` is the
+// concatenation of fixed-size (64-byte) Schnorr signatures produced by
+// signatories[i]; this function splits each concatenated blob into its constituent
+// chunks and pairs them with the hex-encoded x-only Taproot pubkey of the signer.
 //
-// We need to split them again here, and then zip them with the XOnly public keys of the signatories,
-// because that's how the RPC methods `finalizebootstraphandover` and `finalizecheckpointpsbt` expect them.
-//
-// Example of what this code produces:
-// signatories_xonly_pubkey = vec![
-//     "5f0dfed3a527ac740c7d4a594cd3aa1059a936187399fc49e3fc6ea6ae177268",
-//     "67308c2f3915f4c36135f267ed709418c2880025d669e4ada7a206842d53c146",
-// ];
-//
-// split_signatures = vec![
-//     vec![
-//         "f245679ccda14b190213d4115ba8c10d484d5f0d1e0a37a493bd88f9fce3f05b5514debb23e83c693a1fdeb0622970fc3691dbbdee87b7430af41acdca58f44c",
-//         "ce02c09922cde3a671337baa86028a094d456a523286dccfcec015eff78fcf8b666db66c7368fe93f5d75fabf64451b2469931aab4386653194572261586e6dd",
-//     ],
-//     vec![
-//         "41592da0f93d2483ca227a75e36c8898d7097c61f56f2770ca8efe260b3d38011353edd64833cd6b5cc1b6e7c2be0b3a55fc55d5aa9cf34bfd4fa57d4ea551bf",
-//         "3e5f2635a43eab0560a038e300a5e1a4fb11cdfe0da4bf9842ca292db3538ff382d55ff05c2a32c412d558ff4333d0a0d16016b97b58971e16a93f43da01fe89",
-//     ],
-// ];
-//
-// "signatures_json": [
+// Example output (two signatories, two signatures each):
+// [
 //     [
 //         "5f0dfed3a527ac740c7d4a594cd3aa1059a936187399fc49e3fc6ea6ae177268",
 //         [
@@ -1752,50 +1729,29 @@ impl BottomUpCheckpointRelayer for BtcSubnetManager {
 //     [
 //         "67308c2f3915f4c36135f267ed709418c2880025d669e4ada7a206842d53c146",
 //         [
-//             "ce02c09922cde3a671337baa86028a094d456a523286dccfcec015eff78fcf8b666db66c7368fe93f5d75fabf64451b2469931aab4386653194572261586e6dd",
+//             "41592da0f93d2483ca227a75e36c8898d7097c61f56f2770ca8efe260b3d38011353edd64833cd6b5cc1b6e7c2be0b3a55fc55d5aa9cf34bfd4fa57d4ea551bf",
 //             "3e5f2635a43eab0560a038e300a5e1a4fb11cdfe0da4bf9842ca292db3538ff382d55ff05c2a32c412d558ff4333d0a0d16016b97b58971e16a93f43da01fe89"
 //         ]
 //     ]
 // ]
-fn split_signatures_and_zip_with_signatories(
+fn zip_pubkeys_with_chunked_signatures(
     signatures: Vec<BitcoinSignature>,
-    signatories: Vec<ethers::types::Address>,
-    keystore: &Arc<RwLock<PersistentKeyStore<EthKeyAddress>>>,
+    signatories: Vec<[u8; 32]>,
 ) -> Result<Vec<serde_json::Value>> {
-    // Split the signatures of each signatory into chunks of 64 bytes (see info above function for more details)
-    let mut split_signatures = Vec::new();
-    for concatenated_signatures_of_signatory in signatures.iter() {
-        let split_signatures_of_signatory = concatenated_signatures_of_signatory
-            .chunks(libsecp256k1::util::SIGNATURE_SIZE)
-            .map(|chunk| hex::encode(chunk.to_vec()))
-            .collect::<Vec<_>>();
-        split_signatures.push(split_signatures_of_signatory);
+    if signatures.len() != signatories.len() {
+        return Err(anyhow!(
+            "signatures/signatories length mismatch: {} vs {}",
+            signatures.len(),
+            signatories.len()
+        ));
     }
-    // Replace the IPC addresses with the XOnlyPubKey, as the RPC expects the XOnlyPubKey
-    let signatories_xonly_pubkey = signatories
-        .iter()
-        .map(|&s| -> Result<String> {
-            let sk = keystore
-                .read()
-                .map_err(|e| anyhow!("failed to read evm wallet: {e}"))?
-                .get(&s.into())
-                .map_err(|e| anyhow!("failed to get key from evm wallet: {e}"))?
-                .ok_or_else(|| anyhow!("key {} does not exist in evm wallet", s))?
-                .private_key()
-                .to_vec();
-            let x_only_pub_key = hex::encode(
-                ipc_wallet::get_xonly_public_key_serialized(&SecretKey::parse_slice(&sk)?)?
-                    .to_vec(),
-            );
-            Ok(x_only_pub_key)
-        })
-        .collect::<Result<Vec<String>>>()?;
-
-    // Construct the JSON array
-    let mut signatures_json = Vec::new();
-    for (signatory, signatures) in signatories_xonly_pubkey.iter().zip(split_signatures.iter()) {
-        let json_entry = json!([signatory, signatures]);
-        signatures_json.push(json_entry);
+    let mut signatures_json = Vec::with_capacity(signatures.len());
+    for (xonly_pubkey, concatenated_signatures) in signatories.iter().zip(signatures.iter()) {
+        let chunks = concatenated_signatures
+            .chunks(libsecp256k1::util::SIGNATURE_SIZE)
+            .map(|c| hex::encode(c.to_vec()))
+            .collect::<Vec<_>>();
+        signatures_json.push(json!([hex::encode(xonly_pubkey), chunks]));
     }
     Ok(signatures_json)
 }

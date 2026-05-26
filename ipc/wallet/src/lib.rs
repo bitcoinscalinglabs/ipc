@@ -11,7 +11,7 @@ mod fvm;
 
 pub use crate::evm::btc_keys::{
     get_xonly_public_key_serialized, parse_and_validate_secret_key, random_btc_secret_key,
-    DEFAULT_BTC_KEYSTORE_NAME,
+    xonly_from_pubkey_bytes, DEFAULT_BTC_KEYSTORE_NAME,
 };
 #[cfg(feature = "with-ethers")]
 pub use crate::evm::{random_eth_key_info, EthKeyAddress};

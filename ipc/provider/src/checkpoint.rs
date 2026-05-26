@@ -192,11 +192,7 @@ impl BottomUpCheckpointManager {
 
         let epoch = self
             .parent_handler
-            .submit_bootstrap_handover(
-                &self.metadata.child.id,
-                self.keystore.clone(),
-                handover_signatures,
-            )
+            .submit_bootstrap_handover(&self.metadata.child.id, handover_signatures)
             .await
             .map_err(|e| {
                 anyhow!(
@@ -284,13 +280,11 @@ impl BottomUpCheckpointManager {
                     .await
                     .unwrap();
 
-                let keystore = self.keystore.clone();
                 all_submit_tasks.push(tokio::task::spawn(async move {
                     let height = event.height;
                     let hash = bundle.checkpoint.block_hash.clone();
 
                     let result = Self::submit_checkpoint(
-                        keystore,
                         parent_handler_clone,
                         submitter,
                         bundle,
@@ -324,7 +318,6 @@ impl BottomUpCheckpointManager {
     }
 
     async fn submit_checkpoint(
-        keystore: Arc<RwLock<PersistentKeyStore<EthKeyAddress>>>,
         parent_handler: Arc<Box<dyn BottomUpCheckpointRelayer>>,
         submitter: Option<Address>,
         bundle: BottomUpCheckpointBundle,
@@ -349,7 +342,6 @@ impl BottomUpCheckpointManager {
 
         let epoch = parent_handler
             .submit_checkpoint(
-                keystore,
                 &submitter,
                 bundle.checkpoint,
                 bundle.signatures,
