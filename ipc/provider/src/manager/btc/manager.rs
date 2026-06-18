@@ -907,23 +907,32 @@ impl SubnetManager for BtcSubnetManager {
 
         let min_collateral = token_amount_from_satoshi(min_validator_stake);
 
-        // let reward = BtcSubnetManager::_parse_reward_params(result)?;
-
-        // TODO: Reward config should be read from the genesis, but it is not written
-        // on the parent yet. Hardcoded for now.
-        // Enable reward params only when EMISSION_CHAIN_FEATURES=true
-        let reward = env::var("EMISSION_CHAIN_FEATURES")
+        // Reward config is read from env (ACTIVATION_HEIGHT / SNAPSHOT_LENGTH) so the
+        // monitor and the subnet genesis derive snapshot boundaries from one source of
+        // truth. Enabled only when EMISSION_CHAIN_FEATURES=true; the values must match
+        // the monitor's .env or snapshot lookups in get_rewarded_collaterals will miss.
+        let reward = if env::var("EMISSION_CHAIN_FEATURES")
             .map(|v| v == "true")
             .unwrap_or(false)
-            .then_some(RewardParams {
-                activation_height: 10,
-                snapshot_length: 10,
-            });
-
-        if reward.is_some() {
-            tracing::info!("emission chain reward params enabled");
+        {
+            let activation_height = env::var("ACTIVATION_HEIGHT")
+                .map_err(|_| anyhow!("ACTIVATION_HEIGHT must be set when EMISSION_CHAIN_FEATURES=true"))?
+                .parse::<u64>()
+                .map_err(|_| anyhow!("ACTIVATION_HEIGHT must be a valid u64"))?;
+            let snapshot_length = env::var("SNAPSHOT_LENGTH")
+                .map_err(|_| anyhow!("SNAPSHOT_LENGTH must be set when EMISSION_CHAIN_FEATURES=true"))?
+                .parse::<u64>()
+                .map_err(|_| anyhow!("SNAPSHOT_LENGTH must be a valid u64"))?;
+            tracing::info!(
+                "emission chain reward params enabled: activation_height={activation_height}, snapshot_length={snapshot_length}"
+            );
+            Some(RewardParams {
+                activation_height,
+                snapshot_length,
+            })
         } else {
             tracing::info!("emission chain reward params disabled (set EMISSION_CHAIN_FEATURES=true to enable)");
+            None
         };
 
         Ok(SubnetGenesisInfo {

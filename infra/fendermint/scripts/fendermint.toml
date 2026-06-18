@@ -143,6 +143,9 @@ docker run \
   --volume ${BASE_DIR}:/data \
   --env LOG_LEVEL=${FM_LOG_LEVEL} \
   --env RUST_BACKTRACE=1 \
+  --env EMISSION_CHAIN_FEATURES \
+  --env ACTIVATION_HEIGHT \
+  --env SNAPSHOT_LENGTH \
   ${FM_DOCKER_IMAGE} \
   --network=${FM_NETWORK} \
   ${CMD}
