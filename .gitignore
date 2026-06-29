@@ -1,4 +1,5 @@
 target/
+target-*/
 .idea
 node_modules/
 .pnpm-store/

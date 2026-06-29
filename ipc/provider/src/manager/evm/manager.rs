@@ -8,10 +8,10 @@ use std::time::Duration;
 
 use ethers_contract::{ContractError, EthLogDecode, LogMeta};
 use ipc_actors_abis::{
-    checkpointing_facet, gateway_getter_facet, gateway_manager_facet,
-    gateway_messenger_facet, lib_gateway, lib_quorum, lib_staking_change_log,
-    register_subnet_facet, subnet_actor_activity_facet, subnet_actor_checkpointing_facet,
-    subnet_actor_getter_facet, subnet_actor_manager_facet, subnet_actor_reward_facet,
+    checkpointing_facet, gateway_getter_facet, gateway_manager_facet, gateway_messenger_facet,
+    lib_gateway, lib_quorum, lib_staking_change_log, register_subnet_facet,
+    subnet_actor_activity_facet, subnet_actor_checkpointing_facet, subnet_actor_getter_facet,
+    subnet_actor_manager_facet, subnet_actor_reward_facet,
 };
 use ipc_api::checkpoint::{BitcoinCheckpointSignatureQuorum, BottomUpCheckpointBundle};
 use ipc_api::evm::{fil_to_eth_amount, payload_to_evm_address, subnet_id_to_evm_addresses};
@@ -1423,7 +1423,6 @@ impl EthSubnetManager {
 impl BottomUpCheckpointRelayer for EthSubnetManager {
     async fn submit_checkpoint(
         &self,
-        _keystore: Arc<RwLock<PersistentKeyStore<EthKeyAddress>>>,
         submitter: &Option<Address>,
         checkpoint: BottomUpCheckpoint,
         signatures: Vec<Signature>,
@@ -1566,9 +1565,19 @@ impl BottomUpCheckpointRelayer for EthSubnetManager {
                 .map(|s| s.to_vec())
                 .collect::<Vec<_>>();
 
+            let (xonly_pubkeys, bitcoin_signatures) = resolve_signatories_to_xonly_pubkeys(
+                self.ipc_contract_info.gateway_addr,
+                Arc::new(self.ipc_contract_info.provider.clone()),
+                bitcoin_signatories,
+                bitcoin_signatures,
+                "checkpoint",
+                height,
+            )
+            .await?;
+
             Some(BitcoinCheckpointSignatureQuorum {
                 unsigned_psbt: ipc_api::checkpoint::UnsignedPsbt::encode(&psbt)?,
-                signatories: bitcoin_signatories,
+                signatories: xonly_pubkeys,
                 signatures: bitcoin_signatures,
                 transfer_tx: ipc_api::checkpoint::BitcoinTx::encode(&batch_transfer_tx)?,
             })
@@ -1621,7 +1630,6 @@ impl BottomUpCheckpointRelayer for EthSubnetManager {
     async fn submit_bootstrap_handover(
         &self,
         _subnet_id: &SubnetID,
-        _keystore: Arc<RwLock<PersistentKeyStore<EthKeyAddress>>>,
         _handover_signatures: ipc_api::checkpoint::BitcoinHandoverSignatureQuorum,
     ) -> anyhow::Result<ChainEpoch> {
         anyhow::bail!("handover does not need to be submitted on evm")
@@ -1659,12 +1667,70 @@ impl BottomUpCheckpointRelayer for EthSubnetManager {
             .map(|s| s.to_vec())
             .collect::<Vec<_>>();
 
+        let (xonly_pubkeys, signatures) = resolve_signatories_to_xonly_pubkeys(
+            self.ipc_contract_info.gateway_addr,
+            Arc::new(self.ipc_contract_info.provider.clone()),
+            signatories,
+            signatures,
+            "handover",
+            height,
+        )
+        .await?;
+
         Ok(ipc_api::checkpoint::BitcoinHandoverSignatureQuorum {
             unsigned_psbt: ipc_api::checkpoint::UnsignedPsbt::encode(&psbt)?,
-            signatories,
+            signatories: xonly_pubkeys,
             signatures,
         })
     }
+}
+
+/// Look up the x-only Taproot pubkey of each signatory via the gateway's current
+/// membership and return (pubkeys, signatures) pairs in the same order. Drops any
+/// signatory not present in current membership (with a warning), keeping the
+/// signature/pubkey alignment intact.
+async fn resolve_signatories_to_xonly_pubkeys(
+    gateway_addr: ethers::types::Address,
+    provider: Arc<Provider<Http>>,
+    signatories: Vec<ethers::types::Address>,
+    signatures: Vec<Vec<u8>>,
+    kind: &str,
+    height: ChainEpoch,
+) -> Result<(Vec<[u8; 32]>, Vec<Vec<u8>>)> {
+    let getter = gateway_getter_facet::GatewayGetterFacet::new(gateway_addr, provider);
+    let membership = getter.get_current_membership().call().await?;
+
+    let mut addr_to_xonly: HashMap<ethers::types::Address, [u8; 32]> = HashMap::new();
+    for v in membership.validators.iter() {
+        match ipc_wallet::xonly_from_pubkey_bytes(&v.metadata) {
+            Ok(x) => {
+                addr_to_xonly.insert(v.addr, x);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "skipping membership entry for validator {:?}: cannot derive x-only pubkey from metadata: {e}",
+                    v.addr
+                );
+            }
+        }
+    }
+
+    let mut kept_pubkeys = Vec::with_capacity(signatories.len());
+    let mut kept_signatures = Vec::with_capacity(signatures.len());
+    for (addr, sig) in signatories.into_iter().zip(signatures.into_iter()) {
+        match addr_to_xonly.get(&addr) {
+            Some(x) => {
+                kept_pubkeys.push(*x);
+                kept_signatures.push(sig);
+            }
+            None => {
+                tracing::warn!(
+                    "dropping bitcoin {kind} signature from validator {addr:?} at height {height}: not in current gateway membership"
+                );
+            }
+        }
+    }
+    Ok((kept_pubkeys, kept_signatures))
 }
 
 lazy_static!(

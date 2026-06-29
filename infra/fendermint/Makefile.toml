@@ -64,6 +64,12 @@ EAM_ALLOWED_ADDR_LIST = { value = "", condition = { env_not_set = ["EAM_ALLOWED_
 # where the `/p2p/<peer-id>` can for example be obtained by the `fendermint key show-peer-id` command.
 RESOLVER_BOOTSTRAPS = { value = "", condition = { env_not_set = ["RESOLVER_BOOTSTRAPS"] } }
 
+# Comma-separated list of multiaddresses this IPLD resolver is reachable on; advertised
+# to peers via libp2p's Identify protocol so they (and their gossipsub mesh) can dial back.
+# Required for multi-host deployments where the container's listen_addr (0.0.0.0) is not
+# routable from other hosts. Form: "/ip4/198.51.100.2/tcp/26655" (no /p2p/ suffix needed).
+RESOLVER_EXTERNAL_ADDRESSES = { value = "", condition = { env_not_set = ["RESOLVER_EXTERNAL_ADDRESSES"] } }
+
 PRIVATE_KEY_PATH = { value = "", condition = { env_not_set = ["PRIVATE_KEY_PATH"] } }
 
 # Deployment-related

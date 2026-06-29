@@ -19,10 +19,8 @@ use ipc_api::subnet::{
 };
 use ipc_api::subnet_id::SubnetID;
 use ipc_api::validator::Validator;
-use ipc_wallet::{EthKeyAddress, PersistentKeyStore};
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
-use std::sync::{Arc, RwLock};
 
 use crate::lotus::message::ipc::SubnetInfo;
 
@@ -348,7 +346,6 @@ pub trait BottomUpCheckpointRelayer: Send + Sync {
     /// Returns the epoch that the execution is successful
     async fn submit_checkpoint(
         &self,
-        keystore: Arc<RwLock<PersistentKeyStore<EthKeyAddress>>>,
         submitter: &Option<Address>,
         checkpoint: BottomUpCheckpoint,
         signatures: Vec<Signature>,
@@ -374,7 +371,6 @@ pub trait BottomUpCheckpointRelayer: Send + Sync {
     async fn submit_bootstrap_handover(
         &self,
         subnet_id: &SubnetID,
-        keystore: Arc<RwLock<PersistentKeyStore<EthKeyAddress>>>,
         handover_signatures: ipc_api::checkpoint::BitcoinHandoverSignatureQuorum,
     ) -> Result<ChainEpoch>;
 

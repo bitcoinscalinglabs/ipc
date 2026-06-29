@@ -25,6 +25,9 @@ BUILDX_STORE ?= --load
 BUILDX_FLAGS ?=
 # Set to the `<repo>/<image>:<tag>` label the image.
 BUILDX_TAG   ?= fendermint:latest
+# Output image and dependency-base image for the local docker-build (overridable).
+FM_IMAGE     ?= fendermint:latest
+DEPS_IMAGE   ?= fendermint-deps:latest
 
 all: lint build test diagrams docker-build
 
@@ -86,11 +89,11 @@ docker-deps: $(BUILTIN_ACTORS_BUNDLE) $(CUSTOM_ACTORS_BUNDLE) $(IPC_ACTORS_GEN)
 	cp $(CUSTOM_ACTORS_BUNDLE) docker/.artifacts
 
 # Build fendermint-deps image if it doesn't exist (pre-compiled Rust dependencies).
-# Only needs rebuilding when Cargo.lock changes: `docker rmi fendermint-deps:latest`
+# Only needs rebuilding when Cargo.lock changes: `docker rmi $(DEPS_IMAGE)`
 fendermint-deps:
-	@if ! docker images --format '{{.Repository}}' | grep -q '^fendermint-deps$$'; then \
-		echo "Building fendermint-deps image (one-time, caches Rust dependencies)..."; \
-		DOCKER_BUILDKIT=1 docker build -f docker/builder.deps.Dockerfile -t fendermint-deps:latest $(PWD)/..; \
+	@if ! docker images --format '{{.Repository}}:{{.Tag}}' | grep -q "^$(DEPS_IMAGE)$$"; then \
+		echo "Building $(DEPS_IMAGE) image (one-time, caches Rust dependencies)..."; \
+		DOCKER_BUILDKIT=1 docker build -f docker/builder.deps.Dockerfile -t $(DEPS_IMAGE) $(PWD)/..; \
 	fi
 
 # To use `buildx` locally to produce multiplatform images, one needs to run `docker buildx create --use`.
@@ -109,8 +112,9 @@ docker-build: fendermint-deps docker-deps $(FENDERMINT_CODE)
 		DOCKER_BUILDKIT=1 \
 		docker build \
 			$(BUILDX_STORE) \
+			--build-arg DEPS_IMAGE=$(DEPS_IMAGE) \
 			-f docker/Dockerfile \
-			-t fendermint:latest $(PWD)/..; \
+			-t $(FM_IMAGE) $(PWD)/..; \
 	fi
 
 # Build a bundle CAR; this is so we don't have to have a project reference,

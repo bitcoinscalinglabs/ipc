@@ -72,8 +72,8 @@ pub struct BottomUpCheckpointBundle {
 pub struct BitcoinCheckpointSignatureQuorum {
     /// The unsigned PSBT
     pub unsigned_psbt: UnsignedPsbt,
-    /// The signatories
-    pub signatories: Vec<ethers::types::Address>,
+    /// The 32-byte x-only Taproot pubkey of each signatory.
+    pub signatories: Vec<[u8; 32]>,
     /// The signatures of each signatory.
     /// `signatures[i]` contains the signature of `signatories[i]`.
     pub signatures: Vec<BitcoinSignature>,
@@ -97,8 +97,8 @@ pub struct BitcoinCheckpointSignature {
 pub struct BitcoinHandoverSignatureQuorum {
     /// The unsigned PSBT
     pub unsigned_psbt: UnsignedPsbt,
-    /// The signatories
-    pub signatories: Vec<ethers::types::Address>,
+    /// The 32-byte x-only Taproot pubkey of each signatory.
+    pub signatories: Vec<[u8; 32]>,
     /// The signatures of each signatory.
     /// `signatures[i]` contains the signature of `signatories[i]`.
     pub signatures: Vec<BitcoinSignature>,

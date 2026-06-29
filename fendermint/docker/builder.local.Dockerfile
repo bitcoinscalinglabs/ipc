@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1
 
-# Builder — uses fendermint-deps as base for pre-compiled dependencies.
-# fendermint-deps is auto-built by the Makefile if it doesn't exist.
-FROM fendermint-deps:latest AS builder
+# Pre-compiled-dependencies base image, auto-built by the Makefile.
+ARG DEPS_IMAGE=fendermint-deps:latest
+FROM ${DEPS_IMAGE} AS builder
 
 WORKDIR /app
 

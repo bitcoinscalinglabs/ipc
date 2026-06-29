@@ -67,7 +67,12 @@ where
         return Ok(());
     }
 
-    let snapshot = (parent_height - activation_height) / snapshot_length;
+    // Mint the last completed snapshot; the in-progress one isn't finalized on every validator's monitor yet.
+    let current_snapshot = (parent_height - activation_height) / snapshot_length;
+    if current_snapshot == 0 {
+        return Ok(());
+    }
+    let snapshot = current_snapshot - 1;
 
     if reward_state
         .last_minted_snapshot
@@ -87,10 +92,13 @@ where
         .call(state, |c| c.tokens_per_snapshot(et::U256::from(snapshot)))?
         .as_u128();
 
-    let response = parent_manager
+    let mut response = parent_manager
         .get_rewarded_collaterals(snapshot)
         .await
         .context("failed to get rewarded collaterals")?;
+
+    // Provider returns HashMap order (per-process-random); sort so mints apply identically on every validator.
+    response.collaterals.sort_by(|a, b| a.0.cmp(&b.0));
 
     tracing::info!(
         snapshot = snapshot,
