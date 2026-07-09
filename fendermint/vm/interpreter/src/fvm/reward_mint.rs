@@ -118,29 +118,29 @@ where
         let reward_token: ContractCaller<DB, RewardToken<MockProvider>, NoRevert> =
             ContractCaller::new(token_addr, RewardToken::new);
 
-        // tokens_per_snapshot is in whole tokens; scale to wei for ERC20 mint (18 decimals).
+        // Each validator's share is collateral/total of tokens_per_snapshot whole tokens, scales to wei (18 decimals)
         let unit = 10u128.pow(ipc::ipc_btc::DECIMALS as u32);
+        let scaled_per_snapshot = et::U256::from(tokens_per_snapshot) * et::U256::from(unit);
+        let total = et::U256::from(total);
 
         for (addr, amount_sats) in &response.collaterals {
-            let amount = *amount_sats as u128;
-            let mint_tokens = (amount * tokens_per_snapshot) / total;
-            if mint_tokens == 0 {
+            let mint_amount = et::U256::from(*amount_sats as u128) * scaled_per_snapshot / total;
+            if mint_amount.is_zero() {
                 continue;
             }
-            let mint_amount = et::U256::from(mint_tokens * unit);
             // Keep `.from(...)` unset so ContractCaller defaults to system::SYSTEM_ACTOR_ADDR (t00).
             match reward_token.call_with_return(state, |c| c.mint(*addr, mint_amount)) {
                 Ok(_) => {
                     tracing::info!(
                         addr = %addr,
-                        mint_amount = mint_tokens,
+                        mint_amount = %mint_amount,
                         "reward minted successfully"
                     );
                 }
                 Err(e) => {
                     tracing::warn!(
                         addr = %addr,
-                        mint_amount = %mint_tokens,
+                        mint_amount = %mint_amount,
                         error = %e,
                         "reward mint failed for address, skipping"
                     );
