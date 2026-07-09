@@ -571,21 +571,47 @@ fn deploy_contracts(
     let wrapped_token_factory_addr =
         deployer.deploy_contract_no_cons(state, ipc::wrapped_token_factory::CONTRACT_NAME)?;
 
+    use ipc::gateway::ConstructorParameters;
+    use ipc_api::subnet_id::SubnetID;
+
+    // This subnet's gateway params — the single source of its subnet id.
+    let gateway_params = match config.ipc_params {
+        Some(p) => p.gateway.clone(),
+        None => GatewayParams::new(SubnetID::new(config.chain_id.into(), vec![])),
+    };
+
+    // Pre-register IPC-BTC contract.
+    let is_emission = config.ipc_params.and_then(|p| p.reward.as_ref()).is_some();
+    let emission_subnet = config
+        .ipc_params
+        .map(|p| p.ipc_btc_emission_subnet.clone())
+        .context("genesis has no ipc params; cannot pre-register IPC-BTC")?;
+    // ipc_btc_token address is id-derived, so it is the same in all subnets
+    let ipc_btc_token =
+        et::Address::from(init::builtin_actor_eth_addr(ipc::REWARD_TOKEN_ACTOR_ID).0);
+    let ipc_btc_seed = ipc::gateway::IpcBtcSeed {
+        token: ipc_btc_token,
+        emission_subnet: emission_subnet.clone(),
+        name: ipc::ipc_btc::NAME.to_string(),
+        symbol: ipc::ipc_btc::SYMBOL.to_string(),
+        decimals: ipc::ipc_btc::DECIMALS,
+        register_native: is_emission,
+    };
+
     // IPC Gateway actor.
     let gateway_addr = {
-        use ipc::gateway::ConstructorParameters;
-        use ipc_api::subnet_id::SubnetID;
+        tracing::debug!(
+            ?gateway_params,
+            "using gateway params during genesis deployment"
+        );
 
-        let ipc_params = if let Some(p) = config.ipc_params {
-            p.gateway.clone()
-        } else {
-            GatewayParams::new(SubnetID::new(config.chain_id.into(), vec![]))
-        };
-        tracing::debug!(?ipc_params, "using gateway params during genesis deployment");
-
-        let params =
-            ConstructorParameters::new(ipc_params, validators, wrapped_token_factory_addr)
-                .context("failed to create gateway constructor")?;
+        let params = ConstructorParameters::new(
+            gateway_params,
+            validators,
+            wrapped_token_factory_addr,
+            ipc_btc_seed,
+        )
+        .context("failed to create gateway constructor")?;
 
         let facets = deployer
             .facets(ipc::gateway::CONTRACT_NAME)
@@ -640,14 +666,34 @@ fn deploy_contracts(
         deployer.deploy_contract(state, ipc::registry::CONTRACT_NAME, (facets, params))?;
     }
 
-    // RewardToken and RewardConfig: deploy on all chains for same-address consistency.
-    // Emission chain gets real RewardConfig params; non-emission gets (0, 0, 0).
-    {
+    // Actor 66: the native RewardToken on the emission chain, or a gateway-owned WrappedToken (so
+    // only the gateway can mint arrivals) at the same address on non-emission chains.
+    if is_emission {
         // ContractCaller uses SYSTEM_ACTOR_ADDR (t00) as sender. The EVM resolves ID addresses
         // to EthAddress::from_id (0xff00..00 format), not builtin_actor_eth_addr nor 0x00..00.
         let minter = et::Address::from(EthAddress::from_id(system::SYSTEM_ACTOR_ID).0);
-        let reward_token_params = ("IPC Reward".to_string(), "REWARD".to_string(), minter);
+        let reward_token_params = (
+            ipc::ipc_btc::NAME.to_string(),
+            ipc::ipc_btc::SYMBOL.to_string(),
+            minter,
+        );
         deployer.deploy_contract(state, ipc::reward_token::CONTRACT_NAME, reward_token_params)?;
+    } else {
+        let (root, route) = ipc::subnet_id_to_eth(&emission_subnet)?;
+        let emission_gw = ipc_actors_abis::gateway_diamond::SubnetID { root, route };
+        let wrapped_token_params = (
+            emission_gw,
+            ipc_btc_token,
+            ipc::ipc_btc::NAME.to_string(),
+            ipc::ipc_btc::SYMBOL.to_string(),
+            ipc::ipc_btc::DECIMALS,
+            gateway_addr, // owner: only the gateway may mint
+        );
+        deployer.deploy_contract(
+            state,
+            ipc::wrapped_token::CONTRACT_NAME,
+            wrapped_token_params,
+        )?;
     }
 
     {

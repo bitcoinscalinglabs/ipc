@@ -119,7 +119,7 @@ where
             ContractCaller::new(token_addr, RewardToken::new);
 
         // tokens_per_snapshot is in whole tokens; scale to wei for ERC20 mint (18 decimals).
-        let unit = 10u128.pow(ipc::reward_token::DECIMALS as u32);
+        let unit = 10u128.pow(ipc::ipc_btc::DECIMALS as u32);
 
         for (addr, amount_sats) in &response.collaterals {
             let amount = *amount_sats as u128;

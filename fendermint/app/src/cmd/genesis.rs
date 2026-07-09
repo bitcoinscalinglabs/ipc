@@ -295,6 +295,7 @@ fn set_ipc_gateway(genesis_file: &PathBuf, args: &GenesisIpcGatewayArgs) -> anyh
             None => ipc::IpcParams {
                 gateway: gateway_params,
                 reward: None,
+                ipc_btc_emission_subnet: args.subnet_id.clone(),
             },
         };
 
@@ -378,6 +379,10 @@ async fn new_genesis_from_parent(
             activation_height: r.activation_height,
             snapshot_length: r.snapshot_length,
         }),
+        ipc_btc_emission_subnet: args
+            .ipc_btc_emission_subnet
+            .clone()
+            .unwrap_or_else(|| args.subnet_id.clone()),
     };
     let mut genesis = Genesis {
         // We set the genesis epoch as the genesis timestamp so it can be

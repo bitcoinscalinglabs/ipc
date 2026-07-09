@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 pragma solidity ^0.8.23;
 
-import {GatewayActorStorage} from "./lib/LibGatewayActorStorage.sol";
+import {GatewayActorStorage, TokenMetadata} from "./lib/LibGatewayActorStorage.sol";
 import {IDiamond} from "./interfaces/IDiamond.sol";
 import {IDiamondCut} from "./interfaces/IDiamondCut.sol";
 import {IDiamondLoupe} from "./interfaces/IDiamondLoupe.sol";
@@ -15,6 +15,7 @@ import {LibStaking, LibValidatorSet} from "./lib/LibStaking.sol";
 import {BATCH_PERIOD, MAX_MSGS_PER_BATCH} from "./structs/CrossNet.sol";
 
 error FunctionNotFound(bytes4 _functionSelector);
+error MissingIpcBtcToken();
 
 bool constant FEATURE_MULTILEVEL_CROSSMSG = false;
 bool constant FEATURE_GENERAL_PUPRPOSE_CROSSMSG = true;
@@ -31,6 +32,14 @@ contract GatewayDiamond {
         Validator[] genesisValidators;
         bytes32 commitSha;
         address wrappedTokenFactory;
+        // IPC-BTC (reward token) cross-subnet pre-registration.
+        address ipcBtcToken;
+        SubnetID ipcBtcEmissionSubnet;
+        string ipcBtcName;
+        string ipcBtcSymbol;
+        uint8 ipcBtcDecimals;
+        // True only on the emission chain
+        bool ipcBtcRegisterNative;
     }
 
     constructor(IDiamond.FacetCut[] memory _diamondCut, ConstructorParams memory params) {
@@ -95,6 +104,24 @@ contract GatewayDiamond {
             unchecked {
                 ++i;
             }
+        }
+
+        // Pre-register IPC-BTC (the reward token) for cross-subnet bridging.
+        if (params.ipcBtcToken == address(0)) {
+            revert MissingIpcBtcToken();
+        }
+        bytes32 metaKey = keccak256(abi.encode(params.ipcBtcEmissionSubnet, params.ipcBtcToken));
+        s.tokenMetadata[metaKey] = TokenMetadata({
+            name: params.ipcBtcName,
+            symbol: params.ipcBtcSymbol,
+            decimals: params.ipcBtcDecimals
+        });
+        if (params.ipcBtcRegisterNative) {
+            s.registeredBridgeableTokens[params.ipcBtcToken] = true;
+            s.registeredTokenAddresses.push(params.ipcBtcToken);
+            s.lastCheckpointedSupply[params.ipcBtcToken] = 0;
+        } else {
+            s.wrappedTokens[metaKey] = params.ipcBtcToken;
         }
     }
 

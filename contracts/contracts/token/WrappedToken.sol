@@ -22,8 +22,9 @@ contract WrappedToken is ERC20, ERC20Burnable, Ownable, ERC165, IWrappedToken {
         address homeTokenAddress_,
         string memory name_,
         string memory symbol_,
-        uint8 decimals_
-    ) ERC20(name_, symbol_) Ownable(msg.sender) {
+        uint8 decimals_,
+        address owner_
+    ) ERC20(name_, symbol_) Ownable(owner_) {
         _homeSubnet = homeSubnet_;
         _homeTokenAddress = homeTokenAddress_;
         _decimals = decimals_;

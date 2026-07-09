@@ -153,6 +153,15 @@ lazy_static! {
                     facets: vec![],
                 },
             ),
+            // Shares the reward-token id: non-emission chains deploy this at actor 66 instead.
+            (
+                wrapped_token::CONTRACT_NAME,
+                EthContract {
+                    actor_id: REWARD_TOKEN_ACTOR_ID,
+                    abi: ia::wrapped_token::WRAPPEDTOKEN_ABI.to_owned(),
+                    facets: vec![],
+                },
+            ),
             (
                 reward_config::CONTRACT_NAME,
                 EthContract {
@@ -367,7 +376,13 @@ abi_hash!(Vec<ipc_actors_abis::subnet_actor_getter_facet::IpcEnvelope>);
 
 pub mod reward_token {
     pub const CONTRACT_NAME: &str = "RewardToken";
-    /// ERC20 decimals; must match RewardToken (OpenZeppelin ERC20 default).
+}
+
+/// IPC-BTC token identity — the single source. Genesis passes these to the actor-66 token deploy
+/// (RewardToken or WrappedToken) and to the gateway metadata seed. DECIMALS is the OZ ERC20 default.
+pub mod ipc_btc {
+    pub const NAME: &str = "IPC-BTC";
+    pub const SYMBOL: &str = "IPC-BTC";
     pub const DECIMALS: u8 = 18;
 }
 
@@ -377,6 +392,10 @@ pub mod reward_config {
 
 pub mod wrapped_token_factory {
     pub const CONTRACT_NAME: &str = "WrappedTokenFactory";
+}
+
+pub mod wrapped_token {
+    pub const CONTRACT_NAME: &str = "WrappedToken";
 }
 
 pub mod gateway {
@@ -411,6 +430,23 @@ pub mod gateway {
         pub validators: Vec<GatewayValidator>,
         pub commit_sha: [u8; 32],
         pub wrapped_token_factory: H160,
+        // IPC-BTC (reward token) cross-subnet pre-registration
+        pub ipc_btc_token: H160,
+        pub ipc_btc_emission_subnet: GatewaySubnetID,
+        pub ipc_btc_name: String,
+        pub ipc_btc_symbol: String,
+        pub ipc_btc_decimals: u8,
+        // Set on the emission chain
+        pub ipc_btc_register_native: bool,
+    }
+
+    pub struct IpcBtcSeed {
+        pub token: H160,
+        pub emission_subnet: ipc_api::subnet_id::SubnetID,
+        pub name: String,
+        pub symbol: String,
+        pub decimals: u8,
+        pub register_native: bool,
     }
 
     impl ConstructorParameters {
@@ -418,6 +454,7 @@ pub mod gateway {
             params: GatewayParams,
             validators: Vec<Validator<Collateral>>,
             wrapped_token_factory: H160,
+            ipc_btc: IpcBtcSeed,
         ) -> anyhow::Result<Self> {
             // Every validator has an Ethereum address.
             let validators = validators
@@ -435,6 +472,7 @@ pub mod gateway {
                 .collect::<Result<Vec<_>, AddressError>>()?;
 
             let (root, route) = subnet_id_to_eth(&params.subnet_id)?;
+            let (emission_root, emission_route) = subnet_id_to_eth(&ipc_btc.emission_subnet)?;
 
             Ok(Self {
                 bottom_up_check_period: U256::from(params.bottom_up_check_period),
@@ -444,6 +482,15 @@ pub mod gateway {
                 validators,
                 commit_sha: [0u8; 32],
                 wrapped_token_factory,
+                ipc_btc_token: ipc_btc.token,
+                ipc_btc_emission_subnet: GatewaySubnetID {
+                    root: emission_root,
+                    route: emission_route,
+                },
+                ipc_btc_name: ipc_btc.name,
+                ipc_btc_symbol: ipc_btc.symbol,
+                ipc_btc_decimals: ipc_btc.decimals,
+                ipc_btc_register_native: ipc_btc.register_native,
             })
         }
     }
@@ -486,6 +533,7 @@ pub mod gateway {
                 active_validators_limit: 100,
                 commit_sha: [0u8; 32],
                 wrapped_token_factory: H160::zero(),
+                ..Default::default()
             };
 
             // It looks like if we pass just the record then it will be passed as 5 tokens,

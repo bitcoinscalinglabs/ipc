@@ -83,13 +83,20 @@ where
             root: 0,
             route: vec![],
         };
-        let empty_addr = checkpoint::FvmAddress {
-            addr_type: 0,
-            payload: ethers::types::Bytes::default(),
+        // A supply delta has no real sender/recipient.
+        let zero_addr = checkpoint::FvmAddress {
+            addr_type: 4,
+            payload: ethers::types::Bytes::from(ethers::abi::encode(&[ethers::abi::Token::Tuple(
+                vec![
+                    ethers::abi::Token::Uint(ethers::types::U256::from(10u64)), // EAM_ACTOR namespace
+                    ethers::abi::Token::Uint(ethers::types::U256::from(20u64)), // length
+                    ethers::abi::Token::Bytes(vec![0u8; 20]),                   // address(0)
+                ],
+            )])),
         };
         let empty_ipc_addr = checkpoint::Ipcaddress {
             subnet_id: empty_subnet_id,
-            raw_address: empty_addr,
+            raw_address: zero_addr,
         };
 
         for (token, delta) in supply_deltas {

@@ -17,6 +17,9 @@ default_to_workspace = false
 [env]
 # General network-specific parameters
 SUBNET_ID = { value = "/r0", condition = { env_not_set = ["SUBNET_ID"] } }
+# IPC-BTC's home (the emission chain). Defaults to this subnet; a non-emission subnet overrides
+# it with the emission chain's id so IPC-BTC bridges correctly.
+IPC_BTC_EMISSION_SUBNET = { value = "${SUBNET_ID}", condition = { env_not_set = ["IPC_BTC_EMISSION_SUBNET"] } }
 # The network name is derived from the SUBNET_ID
 # Replacing slashes with dashes, colons with underscores and dropping the first dash if any.
 NETWORK_NAME = { script = ["echo $SUBNET_ID | sed -e 's|/|-|g' -e 's|:|_|g' -e 's|^-||1'"] }

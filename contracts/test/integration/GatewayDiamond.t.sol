@@ -204,7 +204,13 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             genesisValidators: new Validator[](0),
             activeValidatorsLimit: 100,
             commitSha: DEFAULT_COMMIT_SHA,
-            wrappedTokenFactory: address(0)
+            wrappedTokenFactory: address(0),
+            ipcBtcToken: address(0x66),
+            ipcBtcEmissionSubnet: SubnetID({root: 0, route: new address[](0)}),
+            ipcBtcName: "IPC-BTC",
+            ipcBtcSymbol: "IPC-BTC",
+            ipcBtcDecimals: 18,
+            ipcBtcRegisterNative: false
         });
 
         GatewayDiamond dep = createGatewayDiamond(constructorParams);
@@ -238,7 +244,13 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             genesisValidators: new Validator[](0),
             activeValidatorsLimit: 100,
             commitSha: DEFAULT_COMMIT_SHA,
-            wrappedTokenFactory: address(0)
+            wrappedTokenFactory: address(0),
+            ipcBtcToken: address(0x66),
+            ipcBtcEmissionSubnet: SubnetID({root: 0, route: new address[](0)}),
+            ipcBtcName: "IPC-BTC",
+            ipcBtcSymbol: "IPC-BTC",
+            ipcBtcDecimals: 18,
+            ipcBtcRegisterNative: false
         });
 
         IDiamond.FacetCut[] memory diamondCut = new IDiamond.FacetCut[](2);
@@ -743,7 +755,13 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             genesisValidators: new Validator[](0),
             activeValidatorsLimit: 100,
             commitSha: DEFAULT_COMMIT_SHA,
-            wrappedTokenFactory: address(0)
+            wrappedTokenFactory: address(0),
+            ipcBtcToken: address(0x66),
+            ipcBtcEmissionSubnet: SubnetID({root: 0, route: new address[](0)}),
+            ipcBtcName: "IPC-BTC",
+            ipcBtcSymbol: "IPC-BTC",
+            ipcBtcDecimals: 18,
+            ipcBtcRegisterNative: false
         });
         gatewayDiamond = createGatewayDiamond(constructorParams);
 
@@ -772,7 +790,13 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             genesisValidators: new Validator[](0),
             activeValidatorsLimit: 100,
             commitSha: DEFAULT_COMMIT_SHA,
-            wrappedTokenFactory: address(0)
+            wrappedTokenFactory: address(0),
+            ipcBtcToken: address(0x66),
+            ipcBtcEmissionSubnet: SubnetID({root: 0, route: new address[](0)}),
+            ipcBtcName: "IPC-BTC",
+            ipcBtcSymbol: "IPC-BTC",
+            ipcBtcDecimals: 18,
+            ipcBtcRegisterNative: false
         });
 
         gatewayDiamond = createGatewayDiamond(constructorParams);
@@ -800,7 +824,13 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             genesisValidators: new Validator[](0),
             activeValidatorsLimit: 100,
             commitSha: DEFAULT_COMMIT_SHA,
-            wrappedTokenFactory: address(0)
+            wrappedTokenFactory: address(0),
+            ipcBtcToken: address(0x66),
+            ipcBtcEmissionSubnet: SubnetID({root: 0, route: new address[](0)}),
+            ipcBtcName: "IPC-BTC",
+            ipcBtcSymbol: "IPC-BTC",
+            ipcBtcDecimals: 18,
+            ipcBtcRegisterNative: false
         });
 
         gatewayDiamond = createGatewayDiamond(constructorParams);
@@ -829,7 +859,13 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             genesisValidators: new Validator[](0),
             activeValidatorsLimit: 100,
             commitSha: DEFAULT_COMMIT_SHA,
-            wrappedTokenFactory: address(0)
+            wrappedTokenFactory: address(0),
+            ipcBtcToken: address(0x66),
+            ipcBtcEmissionSubnet: SubnetID({root: 0, route: new address[](0)}),
+            ipcBtcName: "IPC-BTC",
+            ipcBtcSymbol: "IPC-BTC",
+            ipcBtcDecimals: 18,
+            ipcBtcRegisterNative: false
         });
 
         gatewayDiamond = createGatewayDiamond(constructorParams);
@@ -993,7 +1029,13 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             genesisValidators: genesisValidators,
             activeValidatorsLimit: DEFAULT_ACTIVE_VALIDATORS_LIMIT,
             commitSha: DEFAULT_COMMIT_SHA,
-            wrappedTokenFactory: address(0)
+            wrappedTokenFactory: address(0),
+            ipcBtcToken: address(0x66),
+            ipcBtcEmissionSubnet: SubnetID({root: 0, route: new address[](0)}),
+            ipcBtcName: "IPC-BTC",
+            ipcBtcSymbol: "IPC-BTC",
+            ipcBtcDecimals: 18,
+            ipcBtcRegisterNative: false
         });
         gatewayDiamond = createGatewayDiamond(gwConstructorParams);
 
@@ -2215,7 +2257,13 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             genesisValidators: new Validator[](0),
             activeValidatorsLimit: 100,
             commitSha: DEFAULT_COMMIT_SHA,
-            wrappedTokenFactory: address(0)
+            wrappedTokenFactory: address(0),
+            ipcBtcToken: address(0x66),
+            ipcBtcEmissionSubnet: SubnetID({root: 0, route: new address[](0)}),
+            ipcBtcName: "IPC-BTC",
+            ipcBtcSymbol: "IPC-BTC",
+            ipcBtcDecimals: 18,
+            ipcBtcRegisterNative: false
         });
 
         gatewayDiamond = createGatewayDiamond(constructorParams);

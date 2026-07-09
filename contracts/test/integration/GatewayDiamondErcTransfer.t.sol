@@ -94,7 +94,13 @@ contract GatewayDiamondErcTransferTest is Test, IntegrationTestBase {
             genesisValidators: new Validator[](0),
             activeValidatorsLimit: DEFAULT_ACTIVE_VALIDATORS_LIMIT,
             commitSha: DEFAULT_COMMIT_SHA,
-            wrappedTokenFactory: address(wrappedTokenFactory)
+            wrappedTokenFactory: address(wrappedTokenFactory),
+            ipcBtcToken: address(0x66),
+            ipcBtcEmissionSubnet: SubnetID({root: 0, route: new address[](0)}),
+            ipcBtcName: "IPC-BTC",
+            ipcBtcSymbol: "IPC-BTC",
+            ipcBtcDecimals: 18,
+            ipcBtcRegisterNative: false
         });
         targetGateway = createGatewayDiamond(targetParams);
 
@@ -307,7 +313,7 @@ contract GatewayDiamondErcTransferTest is Test, IntegrationTestBase {
 
     function test_transferErc_burnPath_success() public {
         // Deploy a WrappedToken that represents the home token on S_home.
-        WrappedToken wrapped = new WrappedToken(homeSubnetId, address(token), "HomeToken", "HT", 18);
+        WrappedToken wrapped = new WrappedToken(homeSubnetId, address(token), "HomeToken", "HT", 18, address(this));
 
         // The gateway is the sole minter/burner of WrappedTokens.
         // For this test we transfer ownership to the gateway so it can call burnFrom.
@@ -333,7 +339,7 @@ contract GatewayDiamondErcTransferTest is Test, IntegrationTestBase {
 
     function test_transferErc_burnPath_envelopeUsesHomeIdentity() public {
         // The envelope's message must encode homeSubnet + homeToken (not the wrapped address).
-        WrappedToken wrapped = new WrappedToken(homeSubnetId, address(token), "HomeToken", "HT", 18);
+        WrappedToken wrapped = new WrappedToken(homeSubnetId, address(token), "HomeToken", "HT", 18, address(this));
         wrapped.transferOwnership(address(gatewayDiamond));
 
         address sender = vm.addr(1);

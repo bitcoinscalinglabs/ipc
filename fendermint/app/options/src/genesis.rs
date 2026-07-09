@@ -238,4 +238,8 @@ pub struct GenesisFromParentArgs {
     /// Number of decimals to use during converting FIL to Power.
     #[arg(long, default_value = "3")]
     pub power_scale: i8,
+
+    /// Subnet id of the emission chain (IPC-BTC's home). Defaults to this subnet itself.
+    #[arg(long)]
+    pub ipc_btc_emission_subnet: Option<SubnetID>,
 }
