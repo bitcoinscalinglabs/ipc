@@ -11,7 +11,9 @@ use fendermint_vm_actor_interface::eam::EthAddress;
 use fendermint_vm_actor_interface::gas_market::GAS_MARKET_ACTOR_ADDR;
 use fendermint_vm_actor_interface::system::SYSTEM_ACTOR_ADDR;
 use fendermint_vm_core::Timestamp;
+use fendermint_vm_genesis::ipc::{GatewayParams, IpcParams};
 use fendermint_vm_genesis::{Account, Actor, ActorMeta, Genesis, PermissionMode, SignerAddr};
+use ipc_api::subnet_id::SubnetID;
 use fendermint_vm_interpreter::fvm::store::memory::MemoryBlockstore;
 use fendermint_vm_interpreter::fvm::upgrades::{Upgrade, UpgradeScheduler};
 use fendermint_vm_interpreter::fvm::FvmMessageInterpreter;
@@ -61,6 +63,11 @@ async fn tester_with_upgrader(
         upgrade_scheduler,
     );
 
+    let subnet_id = SubnetID::new_root(
+        fendermint_vm_core::chainid::from_str_hashed(CHAIN_NAME)
+            .unwrap()
+            .into(),
+    );
     let genesis = Genesis {
         chain_name: CHAIN_NAME.to_string(),
         chain_id: None,
@@ -84,7 +91,16 @@ async fn tester_with_upgrader(
             },
         ],
         eam_permission_mode: PermissionMode::Unrestricted,
-        ipc: None,
+        ipc: Some(IpcParams {
+            gateway: GatewayParams {
+                subnet_id: subnet_id.clone(),
+                bottom_up_check_period: 1,
+                majority_percentage: 67,
+                active_validators_limit: 100,
+            },
+            reward: None,
+            ipc_btc_emission_subnet: subnet_id,
+        }),
     };
     (Tester::new(interpreter, genesis).await.unwrap(), validator)
 }

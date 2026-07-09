@@ -562,12 +562,13 @@ impl arbitrary::Arbitrary<'_> for StakingState {
         // IPC of the parent subnet itself - most are not going to be used.
         let parent_ipc = IpcParams {
             gateway: GatewayParams {
-                subnet_id,
+                subnet_id: subnet_id.clone(),
                 bottom_up_check_period: 1 + u.choose_index(100)? as u64,
                 majority_percentage: 51 + u8::arbitrary(u)? % 50,
                 active_validators_limit: 1 + u.choose_index(100)? as u16,
             },
             reward: None,
+            ipc_btc_emission_subnet: subnet_id,
         };
 
         // We cannot actually use this value because the real ID will only be
@@ -592,12 +593,13 @@ impl arbitrary::Arbitrary<'_> for StakingState {
 
         let child_ipc = IpcParams {
             gateway: GatewayParams {
-                subnet_id: child_subnet_id,
+                subnet_id: child_subnet_id.clone(),
                 bottom_up_check_period: 1 + u.choose_index(100)? as u64,
                 majority_percentage: 51 + u8::arbitrary(u)? % 50,
                 active_validators_limit: num_max_validators as u16,
             },
             reward: None,
+            ipc_btc_emission_subnet: child_subnet_id,
         };
 
         let child_genesis = Genesis {

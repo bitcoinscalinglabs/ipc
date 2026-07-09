@@ -242,12 +242,17 @@ pub mod ipc {
     use serde::{Deserialize, Serialize};
     use serde_with::serde_as;
 
+    #[serde_as]
     #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
     pub struct IpcParams {
         pub gateway: GatewayParams,
         /// Reward config for emission chain. When present, RewardToken and RewardConfig are deployed.
         #[serde(skip_serializing_if = "Option::is_none")]
         pub reward: Option<RewardParams>,
+        /// IPC-BTC's home for cross-subnet bridging: the emission chain's subnet id. The emission
+        /// chain sets this to itself; every other subnet sets it to the emission chain.
+        #[serde_as(as = "IsHumanReadable")]
+        pub ipc_btc_emission_subnet: SubnetID,
     }
 
     #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

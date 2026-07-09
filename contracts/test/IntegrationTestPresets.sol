@@ -33,7 +33,13 @@ contract L1GatewayActorDiamond is IntegrationTestBase {
             genesisValidators: new Validator[](0),
             activeValidatorsLimit: DEFAULT_ACTIVE_VALIDATORS_LIMIT,
             commitSha: DEFAULT_COMMIT_SHA,
-            wrappedTokenFactory: address(0)
+            wrappedTokenFactory: address(0),
+            ipcBtcToken: address(0x66),
+            ipcBtcEmissionSubnet: SubnetID({root: 0, route: new address[](0)}),
+            ipcBtcName: "IPC-BTC",
+            ipcBtcSymbol: "IPC-BTC",
+            ipcBtcDecimals: 18,
+            ipcBtcRegisterNative: false
         });
 
         return params;
@@ -61,7 +67,13 @@ contract L2GatewayActorDiamond is IntegrationTestBase {
             genesisValidators: new Validator[](0),
             activeValidatorsLimit: DEFAULT_ACTIVE_VALIDATORS_LIMIT,
             commitSha: DEFAULT_COMMIT_SHA,
-            wrappedTokenFactory: address(0)
+            wrappedTokenFactory: address(0),
+            ipcBtcToken: address(0x66),
+            ipcBtcEmissionSubnet: SubnetID({root: 0, route: new address[](0)}),
+            ipcBtcName: "IPC-BTC",
+            ipcBtcSymbol: "IPC-BTC",
+            ipcBtcDecimals: 18,
+            ipcBtcRegisterNative: false
         });
 
         return params;
@@ -92,7 +104,13 @@ contract L3GatewayActorDiamond is IntegrationTestBase {
             genesisValidators: new Validator[](0),
             activeValidatorsLimit: DEFAULT_ACTIVE_VALIDATORS_LIMIT,
             commitSha: DEFAULT_COMMIT_SHA,
-            wrappedTokenFactory: address(0)
+            wrappedTokenFactory: address(0),
+            ipcBtcToken: address(0x66),
+            ipcBtcEmissionSubnet: SubnetID({root: 0, route: new address[](0)}),
+            ipcBtcName: "IPC-BTC",
+            ipcBtcSymbol: "IPC-BTC",
+            ipcBtcDecimals: 18,
+            ipcBtcRegisterNative: false
         });
 
         return params;

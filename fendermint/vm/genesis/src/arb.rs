@@ -142,8 +142,10 @@ impl Arbitrary for ipc::RewardParams {
 
 impl Arbitrary for ipc::IpcParams {
     fn arbitrary(g: &mut quickcheck::Gen) -> Self {
+        let gateway = ipc::GatewayParams::arbitrary(g);
         Self {
-            gateway: ipc::GatewayParams::arbitrary(g),
+            ipc_btc_emission_subnet: gateway.subnet_id.clone(),
+            gateway,
             reward: if bool::arbitrary(g) {
                 Some(ipc::RewardParams::arbitrary(g))
             } else {

@@ -29,17 +29,10 @@ contract WrappedTokenFactory {
         // CREATE2 with salt = keccak(homeSubnet, homeToken): deterministic per token pair, not nonce-dependent.
         bytes32 salt = keccak256(abi.encode(homeSubnet, homeToken));
 
+        // Deploy owned by the caller (the gateway) so it is the sole minter/burner.
         WrappedToken token;
-        try new WrappedToken{salt: salt}(homeSubnet, homeToken, name, symbol, decimals_) returns (WrappedToken t) {
+        try new WrappedToken{salt: salt}(homeSubnet, homeToken, name, symbol, decimals_, msg.sender) returns (WrappedToken t) {
             token = t;
-        } catch (bytes memory err) {
-            assembly {
-                revert(add(err, 0x20), mload(err))
-            }
-        }
-
-        // Transfer ownership to the calling gateway so it becomes the sole minter/burner.
-        try token.transferOwnership(msg.sender) {
         } catch (bytes memory err) {
             assembly {
                 revert(add(err, 0x20), mload(err))

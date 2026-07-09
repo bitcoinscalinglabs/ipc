@@ -697,6 +697,7 @@ impl Materializer<DockerMaterials> for DockerMaterializer {
                         active_validators_limit: 100,
                     },
                     reward: None,
+                    ipc_btc_emission_subnet: SubnetID::new_root(chain_id.into()),
                 }),
             };
             Ok(genesis)
