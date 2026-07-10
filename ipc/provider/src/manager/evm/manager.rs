@@ -804,7 +804,13 @@ impl SubnetManager for EthSubnetManager {
         );
         let txn = gateway_contract.transfer_erc(to_addr, evm_dst_subnet, local_token_addr, value);
         let txn = extend_call_with_pending_block(txn).await?;
-        let pending_tx = txn.send().await?;
+        let pending_tx = txn.send().await.map_err(|e| {
+            // translate raw 4-byte selectors into readable messages
+            match decode_transfer_erc_revert(&format!("{e} {e:?}")) {
+                Some(msg) => anyhow!("transfer-erc failed: {msg}"),
+                None => anyhow!("transfer-erc gateway call failed: {e}"),
+            }
+        })?;
         let receipt = pending_tx.retries(TRANSACTION_RECEIPT_RETRIES).await?;
         block_number_from_receipt(receipt)
     }
@@ -1934,6 +1940,44 @@ where
     M: ethers::abi::Detokenize,
 {
     Ok(call.block(ethers::types::BlockNumber::Pending))
+}
+
+/// Translates a gateway/ERC20 revert selector surfaced during `transfer-erc` into a
+/// human-readable message.
+/// Returns None for unrecognized reverts so the caller keeps the original error.
+fn decode_transfer_erc_revert(text: &str) -> Option<&'static str> {
+    const KNOWN: &[(&str, &str)] = &[
+        // Gateway-side (source subnet) checks
+        ("0xa17124f8", "insufficient token balance for this transfer"),
+        (
+            "0xdc98d7bb",
+            "gateway is not approved to spend enough of this token",
+        ),
+        ("0x29c54429", "transfer amount must be greater than zero"),
+        (
+            "0x259ba1ad",
+            "token is not registered as bridgeable on this subnet",
+        ),
+        (
+            "0x8cbeca14",
+            "token metadata not found — token is not registered on this subnet",
+        ),
+        (
+            "0x78e83826",
+            "IPC-BTC token is not configured on this subnet",
+        ),
+        // OpenZeppelin ERC20 reverts (e.g. from a wrapped token on the destination)
+        ("0xe450d38c", "insufficient token balance for this transfer"),
+        (
+            "0xfb8f41b2",
+            "gateway is not approved to spend enough of this token",
+        ),
+        ("0xec442f05", "transfer recipient is invalid (zero address)"),
+    ];
+    KNOWN
+        .iter()
+        .find(|(selector, _)| text.contains(selector))
+        .map(|(_, msg)| *msg)
 }
 
 /// Get the block number from the transaction receipt
