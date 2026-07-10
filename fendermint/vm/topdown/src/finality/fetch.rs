@@ -12,6 +12,11 @@ use async_stm::{Stm, StmResult};
 use ipc_api::cross::IpcEnvelope;
 use ipc_api::staking::StakingChangeRequest;
 use std::sync::Arc;
+use std::time::Duration;
+
+/// How long block execution waits for the local monitor to confirm a finalized
+/// parent height before giving up.
+const CONFIRMED_HEIGHT_WAIT_SECS: u64 = 120;
 
 /// The finality provider that performs io to the parent if not found in cache
 #[derive(Clone)]
@@ -138,6 +143,35 @@ impl<T: ParentQueryProxy + Send + Sync + 'static> CachedFinalityProvider<T> {
         Ok(Self::new(config, genesis, None, parent_client))
     }
 
+    /// Block until the local monitor reports it has processed `height`, so a
+    /// subsequent top-down / validator-change query returns the complete set
+    /// rather than a premature empty one.
+    async fn wait_for_confirmed_height(&self, height: BlockHeight) -> anyhow::Result<()> {
+        for _ in 0..CONFIRMED_HEIGHT_WAIT_SECS {
+            match self.parent_client.get_chain_head_height().await {
+                // The monitor writes a block's effects before advancing its
+                // confirmed height, so `confirmed >= height` means the set for
+                // `height` is fully present.
+                Ok(confirmed) if height <= confirmed => return Ok(()),
+                Ok(confirmed) => tracing::warn!(
+                    height,
+                    confirmed,
+                    "local monitor has not processed finalized parent height yet; waiting"
+                ),
+                Err(e) => tracing::warn!(
+                    height,
+                    error = e.to_string(),
+                    "failed to query local monitor confirmed height; retrying"
+                ),
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+        Err(anyhow::anyhow!(
+            "local monitor did not confirm finalized parent height {height} within \
+             {CONFIRMED_HEIGHT_WAIT_SECS}s; halting to avoid applying an incomplete top-down set"
+        ))
+    }
+
     /// Should always return the top down messages, only when ipc parent_client is down after exponential
     /// retries
     async fn validator_changes(
@@ -149,6 +183,8 @@ impl<T: ParentQueryProxy + Send + Sync + 'static> CachedFinalityProvider<T> {
         if let Some(v) = r {
             return Ok(v);
         }
+
+        self.wait_for_confirmed_height(height).await?;
 
         let r = retry!(
             self.config.exponential_back_off,
@@ -170,6 +206,8 @@ impl<T: ParentQueryProxy + Send + Sync + 'static> CachedFinalityProvider<T> {
         if let Some(v) = r {
             return Ok(v);
         }
+
+        self.wait_for_confirmed_height(height).await?;
 
         let r = retry!(
             self.config.exponential_back_off,
