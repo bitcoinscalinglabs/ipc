@@ -34,6 +34,14 @@ impl CommandLineHandler for QueryTokenMetadata {
             .get_token_metadata(&subnet, gateway_addr, home_subnet.clone(), home_token)
             .await?;
 
+        if metadata.name.is_empty() && metadata.symbol.is_empty() {
+            println!(
+                "Token ({}, {}) is not registered on subnet {}",
+                arguments.home_subnet, arguments.home_token, arguments.subnet
+            );
+            return Ok(());
+        }
+
         let wrapped_token = if subnet == home_subnet {
             None
         } else {

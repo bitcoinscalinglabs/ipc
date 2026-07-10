@@ -1,4 +1,3 @@
-use std::str::FromStr;
 use std::time::Duration;
 
 // Copyright 2022-2024 Protocol Labs
@@ -74,8 +73,10 @@ impl Subnet {
         match &self.config {
             SubnetConfig::Fevm(s) => s.gateway_addr,
             SubnetConfig::Btc(_s) => {
-                // TODO(btc) placeholder
-                Address::from_str("0x0000000000000000000000000000000000000000").unwrap()
+                // TODO(btc) placeholder — Btc subnets have no FVM gateway address. Use the
+                // zero ID address; parsing a 0x-hex string here is not a valid FVM address
+                // and panics with UnknownNetwork.
+                Address::new_id(0)
             }
         }
     }
