@@ -92,10 +92,20 @@ where
         .call(state, |c| c.tokens_per_snapshot(et::U256::from(snapshot)))?
         .as_u128();
 
-    let mut response = parent_manager
-        .get_rewarded_collaterals(snapshot)
-        .await
-        .context("failed to get rewarded collaterals")?;
+    // Retry until the local monitor has the snapshot
+    let mut response = loop {
+        match parent_manager.get_rewarded_collaterals(snapshot).await {
+            Ok(r) => break r,
+            Err(e) => {
+                tracing::warn!(
+                    snapshot = snapshot,
+                    error = %e,
+                    "rewarded collaterals unavailable, retrying"
+                );
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
+        }
+    };
 
     // Provider returns HashMap order (per-process-random); sort so mints apply identically on every validator.
     response.collaterals.sort_by(|a, b| a.0.cmp(&b.0));
