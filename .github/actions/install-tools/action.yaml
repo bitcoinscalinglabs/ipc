@@ -24,7 +24,7 @@ runs:
 
     # Protobuf compiler required by libp2p-core
     - name: Install Protoc
-      uses: arduino/setup-protoc@v1
+      uses: arduino/setup-protoc@v3
       with:
         repo-token: ${{ inputs.repo-token }}
 
@@ -33,8 +33,8 @@ runs:
       uses: foundry-rs/foundry-toolchain@v1
 
     - name: 'Install jq'
-      uses: dcarbone/install-jq-action@v2.1.0
+      uses: dcarbone/install-jq-action@v4
 
     # See https://github.com/docker/setup-buildx-action
     - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
+      uses: docker/setup-buildx-action@v4
