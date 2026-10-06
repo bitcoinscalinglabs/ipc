@@ -29,6 +29,10 @@ CMT_P2P_HOST_PORT = { value = "26656", condition = { env_not_set = ["CMT_P2P_HOS
 CMT_RPC_HOST_PORT = { value = "26657", condition = { env_not_set = ["CMT_RPC_HOST_PORT"] } }
 ETHAPI_HOST_PORT = { value = "8545", condition = { env_not_set = ["ETHAPI_HOST_PORT"] } }
 RESOLVER_HOST_PORT = { value = "26655", condition = { env_not_set = ["RESOLVER_HOST_PORT"] } }
+# Host ports for the Prometheus exporters (CometBFT :26660, fendermint :9184); published only
+# when set, so several validators can share a host. cometbft-config always enables CometBFT's.
+CMT_METRICS_HOST_PORT = { value = "", condition = { env_not_set = ["CMT_METRICS_HOST_PORT"] } }
+FM_METRICS_HOST_PORT = { value = "", condition = { env_not_set = ["FM_METRICS_HOST_PORT"] } }
 
 BALANCE = { value = "1000", condition = { env_not_set = ["BALANCE"] } }
 BASE_FEE = { value = "1000", condition = { env_not_set = ["BASE_FEE"] } }

@@ -23,6 +23,7 @@ docker run \
   --network ${NETWORK_NAME} \
   --publish ${CMT_RPC_HOST_PORT}:26657 \
   --publish ${CMT_P2P_HOST_PORT}:26656 \
+  ${CMT_METRICS_HOST_PORT:+--publish ${CMT_METRICS_HOST_PORT}:26660} \
   --volume ${CMT_DIR}:/cometbft \
   --env-file ${ENV_FILE} \
   --env CMT_PROXY_APP=tcp://${FM_CONTAINER_NAME}:26658 \
@@ -210,6 +211,11 @@ script = """
 sed -i'' -e "s|allow_duplicate_ip = false|allow_duplicate_ip = true|" ${CMT_DIR}/config/config.toml
 """
 
+[tasks.prometheus-enable]
+script = """
+sed -i'' -e "s|^prometheus = false|prometheus = true|" ${CMT_DIR}/config/config.toml
+"""
+
 [tasks.cometbft-config]
 run_task = { name = [
     "cometbft-init",
@@ -217,4 +223,5 @@ run_task = { name = [
     "addr-book-enable",
     "set-external-addr",
     "duplicate-ip-enable",
+    "prometheus-enable",
 ] }
