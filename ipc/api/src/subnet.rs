@@ -127,6 +127,9 @@ pub struct BtcJoinParams {
     pub collateral: TokenAmount,
     pub ip: String,
     pub backup_address: String,
+    /// With it the join is a unilateral-exit join (`join-ue`): the collateral is locked under
+    /// the validator's own script until `lock_blocks` blocks after the current tip
+    pub lock_blocks: Option<u64>,
 }
 
 /// Consensus types supported by hierarchical consensus

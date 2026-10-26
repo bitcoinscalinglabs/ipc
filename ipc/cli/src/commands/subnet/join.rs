@@ -81,6 +81,7 @@ impl JoinSubnet {
                 f64_to_token_amount(fevm_args.collateral)?,
                 None,
                 None,
+                None,
             )
             .await?;
         println!("joined at epoch: {epoch}");
@@ -117,6 +118,7 @@ impl JoinSubnet {
                 token_amount_from_satoshi(btc_args.collateral),
                 Some(btc_args.ip.clone()),
                 Some(btc_args.backup_address.clone()),
+                None,
             )
             .await?;
         println!("join transaction submitted at height: {epoch}");

@@ -269,7 +269,7 @@ impl SubnetManager for BtcSubnetManager {
 
         tracing::info!("joining subnet on btc with params: {params:?}");
 
-        let body = json!({
+        let mut body = json!({
             "jsonrpc": "2.0",
             "method": "joinsubnet",
             "id": 1,
@@ -281,6 +281,9 @@ impl SubnetManager for BtcSubnetManager {
                 "backup_address":   params.backup_address,
             }
         });
+        if let Some(lock_blocks) = params.lock_blocks {
+            body["params"]["lock_blocks"] = json!(lock_blocks);
+        }
         tracing::trace!("Request body: {body:?}");
 
         let resp = self
@@ -518,6 +521,83 @@ impl SubnetManager for BtcSubnetManager {
         let current_height = self.chain_head_height().await?;
         tracing::info!("unstakecollateral submitted at height {current_height}");
 
+        Ok(())
+    }
+
+    async fn unstake_ue(&self, subnet: SubnetID) -> Result<()> {
+        tracing::info!("unstake-ue on btc for subnet {subnet}");
+
+        // The provider spends the collaterals of its own validator key
+        let body = json!({
+            "jsonrpc": "2.0",
+            "method": "unstakeue",
+            "id": 1,
+            "params": {
+                "subnet_id": subnet.to_string(),
+            }
+        });
+        tracing::trace!("Request body: {body:?}");
+
+        let resp = self
+            .client
+            .post(self.rpc_url.clone())
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            return Err(anyhow!(
+                "unstakeue request failed with status: {}",
+                resp.status()
+            ));
+        }
+
+        let data = resp.json::<Value>().await?;
+
+        if let Some(err_obj) = data.get("error") {
+            let code = err_obj
+                .get("code")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            let message = err_obj
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("Unknown error");
+            let error_data = err_obj
+                .get("data")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            return Err(anyhow!(
+                "JSON-RPC error: code={}, message={}, details={}",
+                code,
+                message,
+                error_data
+            ));
+        }
+
+        let result = data
+            .get("result")
+            .ok_or_else(|| anyhow!("Missing 'result' in JSON-RPC response"))?;
+        let txid = result
+            .get("txid")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("Missing 'result.txid' in JSON-RPC response"))?;
+        let amount = result
+            .get("amount")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| anyhow!("Missing 'result.amount' in JSON-RPC response (txid {txid})"))?;
+        let address = result
+            .get("address")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                anyhow!("Missing 'result.address' in JSON-RPC response (txid {txid})")
+            })?;
+        tracing::info!(
+            "unstake-ue submitted: txid {txid}, {amount} sats of collateral spent, paid minus the fee to {address}"
+        );
+        println!(
+            "unstake-ue transaction submitted: txid {txid}; {amount} sats of collateral spent, paid minus the fee to {address}"
+        );
         Ok(())
     }
 

@@ -271,11 +271,15 @@ impl IpcProvider {
         collateral: TokenAmount,
         validator_ip: Option<String>,
         backup_address: Option<String>,
+        lock_blocks: Option<u64>,
     ) -> anyhow::Result<ChainEpoch> {
         let parent_id = subnet.parent().ok_or_else(|| anyhow!("no parent found"))?;
         let parent_conn = self.get_connection(&parent_id)?;
 
         let parent = parent_conn.subnet();
+        if lock_blocks.is_some() && !matches!(parent.config, config::subnet::SubnetConfig::Btc(_)) {
+            return Err(anyhow!("join-ue is only supported on a Bitcoin parent"));
+        }
         let sender = self.check_sender(from)?;
 
         let key_info = self.get_key_from_sender(sender)?;
@@ -316,6 +320,7 @@ impl IpcProvider {
                     collateral,
                     ip,
                     backup_address,
+                    lock_blocks,
                 })
             }
         };
@@ -396,6 +401,7 @@ impl IpcProvider {
                     collateral,
                     ip: String::new(),
                     backup_address: String::new(),
+                    lock_blocks: None,
                 })
             }
         };
@@ -453,11 +459,20 @@ impl IpcProvider {
                     collateral,
                     ip: String::new(),
                     backup_address: String::new(),
+                    lock_blocks: None,
                 })
             }
         };
 
         parent_conn.manager().unstake(params).await
+    }
+
+    /// Spends the validator's matured unilateral-exit collaterals in `subnet` to its backup
+    /// address. Bitcoin parents only.
+    pub async fn unstake_ue(&mut self, subnet: SubnetID) -> anyhow::Result<()> {
+        let parent = subnet.parent().ok_or_else(|| anyhow!("no parent found"))?;
+        let parent_conn = self.get_connection(&parent)?;
+        parent_conn.manager().unstake_ue(subnet).await
     }
 
     pub async fn leave_subnet(
