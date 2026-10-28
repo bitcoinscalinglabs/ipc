@@ -10,7 +10,7 @@ use std::{fmt::Debug, str::FromStr};
 
 use crate::{get_ipc_provider, require_fil_addr_from_str, CommandLineHandler, GlobalArguments};
 
-/// Join a subnet with the collateral locked under the validator's own unilateral-exit script
+/// Joins a subnet with the collateral locked under the validator's own unilateral-exit script
 pub struct JoinUe;
 
 #[async_trait]
@@ -22,6 +22,8 @@ impl CommandLineHandler for JoinUe {
 
         let mut provider = get_ipc_provider(global)?;
         let subnet = SubnetID::from_str(&arguments.subnet)?;
+        // Before any key is selected or any pre-funding is sent
+        provider.require_bitcoin_parent(&subnet)?;
         let from = match &arguments.from {
             Some(address) => Some(require_fil_addr_from_str(address)?),
             None => None,
@@ -81,7 +83,7 @@ pub struct JoinUeArgs {
     pub lock_blocks: u64,
 }
 
-/// Spend the validator's matured unilateral-exit collaterals to its backup address
+/// Spends the validator's matured unilateral-exit collaterals to its backup address
 pub struct UnstakeUe;
 
 #[async_trait]

@@ -264,6 +264,17 @@ impl IpcProvider {
         }
     }
 
+    /// Fails unless the subnet's parent is a Bitcoin network; join-ue and unstake-ue exist only there,
+    /// and callers check this before selecting a key or spending anything
+    pub fn require_bitcoin_parent(&self, subnet: &SubnetID) -> anyhow::Result<()> {
+        let parent_id = subnet.parent().ok_or_else(|| anyhow!("no parent found"))?;
+        let parent_conn = self.get_connection(&parent_id)?;
+        match parent_conn.subnet().config {
+            config::subnet::SubnetConfig::Btc(_) => Ok(()),
+            _ => Err(anyhow!("join-ue is only supported on a Bitcoin parent")),
+        }
+    }
+
     pub async fn join_subnet(
         &mut self,
         subnet: SubnetID,
@@ -273,13 +284,13 @@ impl IpcProvider {
         backup_address: Option<String>,
         lock_blocks: Option<u64>,
     ) -> anyhow::Result<ChainEpoch> {
+        if lock_blocks.is_some() {
+            self.require_bitcoin_parent(&subnet)?;
+        }
         let parent_id = subnet.parent().ok_or_else(|| anyhow!("no parent found"))?;
         let parent_conn = self.get_connection(&parent_id)?;
 
         let parent = parent_conn.subnet();
-        if lock_blocks.is_some() && !matches!(parent.config, config::subnet::SubnetConfig::Btc(_)) {
-            return Err(anyhow!("join-ue is only supported on a Bitcoin parent"));
-        }
         let sender = self.check_sender(from)?;
 
         let key_info = self.get_key_from_sender(sender)?;
