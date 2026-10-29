@@ -35,7 +35,7 @@ impl CommandLineHandler for Transfer {
 
         let amount = token_amount_from_satoshi(arguments.amount);
         println!(
-            "fund performed in epoch: {:?}",
+            "transfer performed in epoch: {:?}",
             provider
                 .transfer(
                     source_gateway_addr,

@@ -71,7 +71,7 @@ pub trait SubnetManager:
     async fn unstake(&self, params: JoinParams) -> Result<()>;
 
     /// Spends the validator's matured unilateral-exit collaterals in the subnet to its backup
-    /// address, with no other validator taking part. Bitcoin parents only.
+    /// address. Bitcoin parents only.
     async fn unstake_ue(&self, subnet: SubnetID) -> Result<()> {
         Err(anyhow::anyhow!(
             "unstake-ue is not supported on this parent network (subnet {subnet})"

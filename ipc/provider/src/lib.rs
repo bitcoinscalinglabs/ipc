@@ -264,8 +264,7 @@ impl IpcProvider {
         }
     }
 
-    /// Fails unless the subnet's parent is a Bitcoin network; join-ue and unstake-ue exist only there,
-    /// and callers check this before selecting a key or spending anything
+    /// Fails unless the subnet's parent is a Bitcoin network, where join-ue and unstake-ue exist
     pub fn require_bitcoin_parent(&self, subnet: &SubnetID) -> anyhow::Result<()> {
         let parent_id = subnet.parent().ok_or_else(|| anyhow!("no parent found"))?;
         let parent_conn = self.get_connection(&parent_id)?;
