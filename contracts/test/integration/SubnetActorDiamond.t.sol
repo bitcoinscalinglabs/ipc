@@ -702,6 +702,7 @@ contract SubnetActorDiamondTest is Test, IntegrationTestBase {
             blockHeight: saDiamond.getter().bottomUpCheckPeriod(),
             blockHash: keccak256("block1"),
             nextConfigurationNumber: 0,
+            slashPreSignatureCount: 0,
             msgs: msgs,
             activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
         });
@@ -711,6 +712,7 @@ contract SubnetActorDiamondTest is Test, IntegrationTestBase {
             blockHeight: 1,
             blockHash: keccak256("block1"),
             nextConfigurationNumber: 0,
+            slashPreSignatureCount: 0,
             msgs: msgs,
             activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
         });
@@ -812,6 +814,7 @@ contract SubnetActorDiamondTest is Test, IntegrationTestBase {
             blockHeight: 1,
             blockHash: keccak256("block1"),
             nextConfigurationNumber: 0,
+            slashPreSignatureCount: 0,
             msgs: msgs,
             activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
         });
@@ -821,6 +824,7 @@ contract SubnetActorDiamondTest is Test, IntegrationTestBase {
             blockHeight: 1,
             blockHash: keccak256("block1"),
             nextConfigurationNumber: 0,
+            slashPreSignatureCount: 0,
             msgs: new IpcEnvelope[](0),
             activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
         });
@@ -907,6 +911,7 @@ contract SubnetActorDiamondTest is Test, IntegrationTestBase {
             blockHeight: 1,
             blockHash: keccak256("block1"),
             nextConfigurationNumber: 0,
+            slashPreSignatureCount: 0,
             msgs: msgs,
             activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
         });
@@ -920,6 +925,7 @@ contract SubnetActorDiamondTest is Test, IntegrationTestBase {
             blockHeight: 3,
             blockHash: keccak256("block2"),
             nextConfigurationNumber: 0,
+            slashPreSignatureCount: 0,
             msgs: msgs,
             activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
         });
@@ -932,6 +938,7 @@ contract SubnetActorDiamondTest is Test, IntegrationTestBase {
             blockHeight: 2,
             blockHash: keccak256("block1"),
             nextConfigurationNumber: 0,
+            slashPreSignatureCount: 0,
             msgs: msgs,
             activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
         });
@@ -944,6 +951,7 @@ contract SubnetActorDiamondTest is Test, IntegrationTestBase {
             blockHeight: saDiamond.getter().bottomUpCheckPeriod() + 1,
             blockHash: keccak256("block2"),
             nextConfigurationNumber: 0,
+            slashPreSignatureCount: 0,
             msgs: msgs,
             activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
         });
@@ -955,6 +963,7 @@ contract SubnetActorDiamondTest is Test, IntegrationTestBase {
             blockHeight: saDiamond.getter().bottomUpCheckPeriod(),
             blockHash: keccak256("block2"),
             nextConfigurationNumber: 0,
+            slashPreSignatureCount: 0,
             msgs: new IpcEnvelope[](0),
             activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
         });
@@ -969,6 +978,7 @@ contract SubnetActorDiamondTest is Test, IntegrationTestBase {
             blockHeight: saDiamond.getter().bottomUpCheckPeriod() + 1,
             blockHash: keccak256("block2"),
             nextConfigurationNumber: 0,
+            slashPreSignatureCount: 0,
             msgs: msgs,
             activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
         });
@@ -983,6 +993,7 @@ contract SubnetActorDiamondTest is Test, IntegrationTestBase {
             blockHeight: saDiamond.getter().bottomUpCheckPeriod() + 2,
             blockHash: keccak256("block2"),
             nextConfigurationNumber: 0,
+            slashPreSignatureCount: 0,
             msgs: msgs,
             activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
         });
@@ -997,6 +1008,7 @@ contract SubnetActorDiamondTest is Test, IntegrationTestBase {
             blockHeight: saDiamond.getter().bottomUpCheckPeriod() + 3,
             blockHash: keccak256("block2"),
             nextConfigurationNumber: 0,
+            slashPreSignatureCount: 0,
             msgs: new IpcEnvelope[](0),
             activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
         });
@@ -1008,6 +1020,7 @@ contract SubnetActorDiamondTest is Test, IntegrationTestBase {
             blockHeight: saDiamond.getter().bottomUpCheckPeriod() * 2,
             blockHash: keccak256("block2"),
             nextConfigurationNumber: 0,
+            slashPreSignatureCount: 0,
             msgs: new IpcEnvelope[](0),
             activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
         });
@@ -1022,6 +1035,7 @@ contract SubnetActorDiamondTest is Test, IntegrationTestBase {
             blockHeight: saDiamond.getter().bottomUpCheckPeriod() * 3,
             blockHash: keccak256("block2"),
             nextConfigurationNumber: 0,
+            slashPreSignatureCount: 0,
             msgs: new IpcEnvelope[](0),
             activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
         });
@@ -1064,6 +1078,7 @@ contract SubnetActorDiamondTest is Test, IntegrationTestBase {
             blockHeight: saDiamond.getter().bottomUpCheckPeriod(),
             blockHash: keccak256("block1"),
             nextConfigurationNumber: 0,
+            slashPreSignatureCount: 0,
             msgs: msgs,
             activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
         });
@@ -1108,6 +1123,7 @@ contract SubnetActorDiamondTest is Test, IntegrationTestBase {
             blockHeight: 2 * saDiamond.getter().bottomUpCheckPeriod(),
             blockHash: keccak256("block2"),
             nextConfigurationNumber: 0,
+            slashPreSignatureCount: 0,
             msgs: msgs,
             activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
         });

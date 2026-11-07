@@ -186,6 +186,7 @@ macro_rules! bottom_up_checkpoint_conversion {
                     block_height: ethers::core::types::U256::from(checkpoint.block_height),
                     block_hash: vec_to_bytes32(checkpoint.block_hash)?,
                     next_configuration_number: checkpoint.next_configuration_number,
+                    slash_pre_signature_count: checkpoint.slash_pre_signature_count,
                     msgs: checkpoint
                         .msgs
                         .into_iter()
@@ -205,6 +206,7 @@ macro_rules! bottom_up_checkpoint_conversion {
                     block_height: value.block_height.as_u128() as ChainEpoch,
                     block_hash: value.block_hash.to_vec(),
                     next_configuration_number: value.next_configuration_number,
+                    slash_pre_signature_count: value.slash_pre_signature_count,
                     msgs: value
                         .msgs
                         .into_iter()

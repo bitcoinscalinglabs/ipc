@@ -90,6 +90,7 @@ library LibGateway {
         b.blockHash = checkpoint.blockHash;
         b.subnetID = checkpoint.subnetID;
         b.nextConfigurationNumber = checkpoint.nextConfigurationNumber;
+        b.slashPreSignatureCount = checkpoint.slashPreSignatureCount;
         b.blockHeight = checkpoint.blockHeight;
         b.activity = checkpoint.activity;
 

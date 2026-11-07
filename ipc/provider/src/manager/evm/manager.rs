@@ -997,6 +997,7 @@ impl SubnetManager for EthSubnetManager {
             active_validators_limit: contract.active_validators_limit().call().await?,
             // Bottom-up checkpoint period set in the subnet actor.
             bottom_up_checkpoint_period,
+            power_unit_exponent: None,
             // Genesis epoch when the subnet was bootstrapped in the parent.
             genesis_epoch: self.genesis_epoch(subnet).await?,
             // Majority percentage of
@@ -1164,17 +1165,11 @@ impl SubnetManager for EthSubnetManager {
         &self,
         _subnet_id: &SubnetID,
         _checkpoint: BottomUpCheckpoint,
+        _slash_signatures: Vec<ipc_api::eots::SlashPreSignature>,
     ) -> Result<ipc_api::checkpoint::BitcoinCheckpointSignature> {
         unimplemented!(
             "Checkpointing on evm parent subnets does not need to contact the parent subnet"
         )
-    }
-
-    async fn get_bootstrap_handover_transaction(
-        &self,
-        _subnet_id: &SubnetID,
-    ) -> Result<ipc_api::checkpoint::BitcoinHandoverSignature> {
-        unimplemented!("Bootstrap handover is only required for bitcoin parent subnet")
     }
 
     async fn get_rewarded_collaterals(
@@ -1633,61 +1628,18 @@ impl BottomUpCheckpointRelayer for EthSubnetManager {
         Ok(epoch as ChainEpoch)
     }
 
-    async fn submit_bootstrap_handover(
-        &self,
-        _subnet_id: &SubnetID,
-        _handover_signatures: ipc_api::checkpoint::BitcoinHandoverSignatureQuorum,
-    ) -> anyhow::Result<ChainEpoch> {
-        anyhow::bail!("handover does not need to be submitted on evm")
-    }
-
-    async fn get_bootstrap_handover_signatures(
-        &self,
-        height: ChainEpoch,
-    ) -> anyhow::Result<ipc_api::checkpoint::BitcoinHandoverSignatureQuorum> {
-        tracing::debug!(
-            "getting bitcoin checkpoint signatures for checkpoint at height: {}",
-            height
-        );
-        let contract = checkpointing_facet::CheckpointingFacet::new(
-            self.ipc_contract_info.gateway_addr,
-            Arc::new(self.ipc_contract_info.provider.clone()),
-        );
-
-        let (psbt, signatories, signatures) = contract
-            .get_bitcoin_bootstrap_handover_signatures()
-            .call()
-            .await?;
-
-        if signatories.len() != signatures.len() {
-            return Err(anyhow!(
-                "signatories and signatures length mismatch for bitcoin handover at height: {}",
-                height
-            ));
-        }
-
-        tracing::debug!("found {} bitcoin signatures", signatures.len());
-
-        let signatures = signatures
-            .into_iter()
-            .map(|s| s.to_vec())
-            .collect::<Vec<_>>();
-
-        let (xonly_pubkeys, signatures) = resolve_signatories_to_xonly_pubkeys(
-            self.ipc_contract_info.gateway_addr,
-            Arc::new(self.ipc_contract_info.provider.clone()),
-            signatories,
-            signatures,
-            "handover",
-            height,
-        )
-        .await?;
-
-        Ok(ipc_api::checkpoint::BitcoinHandoverSignatureQuorum {
-            unsigned_psbt: ipc_api::checkpoint::UnsignedPsbt::encode(&psbt)?,
-            signatories: xonly_pubkeys,
-            signatures,
-        })
+    async fn finalized_epoch(&self) -> Result<ChainEpoch> {
+        let block = self
+            .ipc_contract_info
+            .provider
+            .get_block(ethers::types::BlockNumber::Finalized)
+            .await?
+            .ok_or_else(|| anyhow!("no finalized block"))?;
+        let number = block
+            .number
+            .ok_or_else(|| anyhow!("the finalized block has no number"))?
+            .as_u64();
+        Ok(number as ChainEpoch)
     }
 }
 

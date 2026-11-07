@@ -234,93 +234,132 @@ where
 
         let height = state.block_height();
 
-        // When the subnet starts, we need to broadcast the bootstrap-handover signature
-        // TODO(bitcoin):
-        // We are also not checking whether the validator has a positive voting power,
-        // probably not needed, but the code for checkpoint signatures does it.
-        if height == 10 {
-            if let Some(ref ctx) = self.validator_ctx {
-                if !self.syncing().await {
-                    let validator_ctx = ctx.clone();
+        let created = checkpoint::maybe_create_checkpoint(
+            &self.gateway,
+            &mut state,
+            &mut block_end_events,
+        )
+        .context("failed to create checkpoint")?;
+        let updates = created.map(|(_, updates)| updates).unwrap_or_default();
+
+        // The subnet final height: the gateway's with EOTS finality, else this subnet block's.
+        let block_height = u64::try_from(height).context("block height is not u64")?;
+        let final_height = match &self.eots_tally {
+            Some(_) => self
+                .gateway
+                .subnet_final_height(&mut state)
+                .context("failed to read the subnet final height")?,
+            None => block_height,
+        };
+        let prev_final = self
+            .last_final_height
+            .lock()
+            .expect("final height lock")
+            .replace(final_height);
+
+        // A validator signs the checkpoints that became final in this subnet block, and at every
+        // multiple of the checkpoint period it signs again what the gateway still lacks and
+        // pre-signs the slash transactions of new collaterals.
+        if let Some(ref ctx) = self.validator_ctx {
+            if !self.syncing().await && !self.gateway.is_anchored(&mut state)? {
+                let period = self.gateway.bottom_up_check_period(&mut state)?;
+                let at_period_multiple = block_height % period == 0;
+                let checkpointed = self
+                    .eots_tally
+                    .as_ref()
+                    .map(|tally| tally.agreed_checkpointed_height());
+
+                let mut to_sign = match prev_final {
+                    Some(prev_final) => checkpoint::newly_final_checkpoints(
+                        &self.gateway,
+                        &mut state,
+                        prev_final,
+                        final_height,
+                    )
+                    .context("failed to collect the checkpoints that became final")?,
+                    None => Vec::new(),
+                };
+                if prev_final.is_none() || at_period_multiple {
+                    let to_resign = checkpoint::checkpoints_to_resign(
+                        &self.gateway,
+                        &mut state,
+                        ctx.public_key,
+                        final_height,
+                        checkpointed,
+                    )
+                    .context("failed to collect the checkpoints to sign again")?;
+                    for cp in to_resign {
+                        let listed = to_sign
+                            .iter()
+                            .any(|c| c.checkpoint.block_height == cp.checkpoint.block_height);
+                        if !listed {
+                            to_sign.push(cp);
+                        }
+                    }
+                }
+
+                let posted = if self.parent_manager.is_some() {
+                    self.gateway
+                        .slash_pre_signatures(&mut state)
+                        .context("failed to read the posted slash pre-signatures")?
+                } else {
+                    Vec::new()
+                };
+
+                if !to_sign.is_empty() {
+                    let client = self.client.clone();
                     let gateway = self.gateway.clone();
+                    let chain_id = state.chain_id();
+                    let validator_ctx = ctx.clone();
                     let subnet_id = self.subnet_id.clone();
                     let parent_manager = self.parent_manager.clone();
-                    let chain_id = state.chain_id();
-
+                    let posted = posted.clone();
                     tokio::spawn(async move {
-                        let res = checkpoint::broadcast_bitcoin_signature_for_bootstrap_handover(
-                            &validator_ctx.broadcaster,
+                        let res = checkpoint::broadcast_signatures(
+                            &client,
+                            &validator_ctx,
                             &gateway,
+                            chain_id,
+                            to_sign,
+                            block_height,
                             subnet_id,
                             parent_manager,
+                            posted,
+                        )
+                        .await;
+                        if let Err(e) = res {
+                            tracing::error!(error = %format!("{e:#}"), height, "error broadcasting checkpoint signatures");
+                        }
+                    });
+                }
+
+                if let (Some(parent_manager), Some(subnet_id), true) = (
+                    self.parent_manager.clone(),
+                    self.subnet_id.clone(),
+                    at_period_multiple,
+                ) {
+                    let broadcaster = ctx.broadcaster.clone();
+                    let gateway = self.gateway.clone();
+                    let chain_id = state.chain_id();
+                    let public_key = ctx.public_key;
+                    tokio::spawn(async move {
+                        let res = checkpoint::post_slash_pre_signatures(
+                            &broadcaster,
+                            &gateway,
+                            &subnet_id,
+                            &parent_manager,
+                            public_key,
+                            posted,
                             chain_id,
                         )
                         .await;
-
                         if let Err(e) = res {
-                            tracing::error!(error =? e, "error broadcasting bootstrap-handover signature");
-                        } else {
-                            tracing::info!(
-                                "broadcasted bootstrap-handover signature at height {height:?}"
-                            );
+                            tracing::error!(error = %format!("{e:#}"), height, "error posting slash pre-signatures");
                         }
                     });
                 }
             }
         }
-
-        let updates = if let Some((checkpoint, updates)) =
-            checkpoint::maybe_create_checkpoint(&self.gateway, &mut state, &mut block_end_events)
-                .context("failed to create checkpoint")?
-        {
-            // Asynchronously broadcast signature, if validating.
-            if let Some(ref ctx) = self.validator_ctx {
-                // Do not resend past signatures.
-                if !self.syncing().await {
-                    // Fetch any incomplete checkpoints synchronously because the state can't be shared across threads.
-                    let incomplete_checkpoints =
-                        checkpoint::unsigned_checkpoints(&self.gateway, &mut state, ctx.public_key)
-                            .context("failed to fetch incomplete checkpoints")?;
-
-                    debug_assert!(
-                        incomplete_checkpoints
-                            .iter()
-                            .any(|cp| cp.block_height == checkpoint.block_height
-                                && cp.block_hash == checkpoint.block_hash),
-                        "the current checkpoint is incomplete"
-                    );
-
-                    let client = self.client.clone();
-                    let gateway = self.gateway.clone();
-                    let chain_id = state.chain_id();
-                    let height = checkpoint.block_height;
-                    let validator_ctx = ctx.clone();
-                    let subnet_id = self.subnet_id.clone();
-                    let parent_manager = self.parent_manager.clone();
-
-                    tokio::spawn(async move {
-                        let res = checkpoint::broadcast_incomplete_signatures(
-                            &client,
-                            &validator_ctx,
-                            &gateway,
-                            chain_id,
-                            incomplete_checkpoints,
-                            subnet_id,
-                            parent_manager,
-                        )
-                        .await;
-
-                        if let Err(e) = res {
-                            tracing::error!(error = %format!("{e:#}"), height = height.as_u64(), "error broadcasting checkpoint signature");
-                        }
-                    });
-                }
-            }
-
-            updates
-        } else {
-            PowerUpdates::default()
-        };
 
         let ret = EndBlockOutput {
             power_updates: updates,

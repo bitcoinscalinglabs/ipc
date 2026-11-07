@@ -135,12 +135,19 @@ impl CreateSubnet {
             parent: parent.clone(),
             min_validators: arguments.min_validators,
             min_validator_stake: token_amount_from_satoshi(btc_args.min_validator_stake),
+            power_unit_exponent: btc_args.power_unit_exponent,
             bottomup_check_period: arguments.bottomup_check_period,
             active_validators_limit: arguments
                 .active_validators_limit
                 .unwrap_or(DEFAULT_ACTIVE_VALIDATORS),
             min_cross_msg_fee: token_amount_from_satoshi(btc_args.min_cross_msg_fee),
             validator_whitelist: whitelist,
+            epoch_length: btc_args.epoch_length,
+            min_timeout: btc_args.min_timeout,
+            max_timeout: btc_args.max_timeout,
+            min_deposit: token_amount_from_satoshi(btc_args.min_deposit),
+            kill_vote_period: btc_args.kill_vote_period,
+            kill_delay_period: btc_args.kill_delay_period,
         });
 
         let addr = provider
@@ -292,6 +299,12 @@ pub struct BtcArgs {
 
     #[arg(
         long,
+        help = "The power unit exponent p: one unit of power is 10^p satoshis of collateral"
+    )]
+    pub power_unit_exponent: u8,
+
+    #[arg(
+        long,
         default_value = "1",
         help = "Minimum fee for cross-net messages in subnet (in satoshis, the default is 1 satoshi)"
     )]
@@ -302,4 +315,37 @@ pub struct BtcArgs {
         help = "A comma-separated list of bitcoin x-only public keys that can join the subnet before it is bootstrapped"
     )]
     pub validator_whitelist: String,
+
+    #[arg(long, help = "The length of an epoch in Bitcoin blocks (K)")]
+    pub epoch_length: u64,
+
+    #[arg(
+        long,
+        help = "The fewest epochs for which a collateral seats its validator"
+    )]
+    pub min_timeout: u32,
+
+    #[arg(
+        long,
+        help = "The most epochs for which a collateral seats its validator"
+    )]
+    pub max_timeout: u32,
+
+    #[arg(long, help = "The smallest deposit the subnet credits (in satoshis)")]
+    pub min_deposit: u64,
+
+    #[arg(
+        long,
+        help = "The number of subnet blocks for which a kill proposal stays open"
+    )]
+    pub kill_vote_period: u64,
+
+    #[arg(
+        long,
+        help = "The number of epochs a subnet marked to be killed stays operational"
+    )]
+    pub kill_delay_period: u64,
 }
+#[cfg(test)]
+#[path = "create_spec_tests.rs"]
+mod spec_tests;

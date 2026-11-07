@@ -99,11 +99,24 @@ pub struct EthConstructParams {
 pub struct BtcConstructParams {
     pub parent: SubnetID,
     pub min_validator_stake: TokenAmount,
+    /// `p`: one unit of power is `10^p` satoshis
+    pub power_unit_exponent: u8,
     pub min_validators: u64,
     pub bottomup_check_period: ChainEpoch,
     pub active_validators_limit: u16,
     pub min_cross_msg_fee: TokenAmount,
     pub validator_whitelist: Vec<String>,
+    /// `K`: the length of an epoch in Bitcoin blocks
+    pub epoch_length: u64,
+    /// The fewest and the most epochs for which a collateral seats its owner
+    pub min_timeout: u32,
+    pub max_timeout: u32,
+    /// The smallest deposit the monitor credits
+    pub min_deposit: TokenAmount,
+    /// Subnet blocks for which a kill proposal stays open
+    pub kill_vote_period: u64,
+    /// Epochs a subnet marked to be killed stays operational
+    pub kill_delay_period: u64,
 }
 
 // Used by functions join_subnet(), stake(), unstake().
@@ -127,8 +140,11 @@ pub struct BtcJoinParams {
     pub collateral: TokenAmount,
     pub ip: String,
     pub backup_address: String,
-    /// With it the join is a unilateral-exit join (`join-ue`), maturing `lock_blocks` blocks after the tip
-    pub lock_blocks: Option<u64>,
+    /// With it the join is a unilateral-exit join (`join-ue`): the collateral seats the validator
+    /// for `epochs` epochs
+    pub epochs: Option<u32>,
+    /// The subnet heights the EOTS nonce commitment of a `join-ue` covers: `(start, count)`
+    pub eots_nonces: Option<(u64, u32)>,
 }
 
 /// Consensus types supported by hierarchical consensus

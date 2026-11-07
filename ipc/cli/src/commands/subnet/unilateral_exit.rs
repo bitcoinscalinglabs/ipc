@@ -47,7 +47,8 @@ impl CommandLineHandler for JoinUe {
                 token_amount_from_satoshi(arguments.collateral),
                 Some(arguments.ip.clone()),
                 Some(arguments.backup_address.clone()),
-                Some(arguments.lock_blocks),
+                Some(arguments.epochs),
+                Some((arguments.eots_nonce_start, arguments.eots_nonce_count)),
             )
             .await?;
         println!("join-ue transaction submitted at height: {epoch}");
@@ -78,9 +79,21 @@ pub struct JoinUeArgs {
     pub backup_address: String,
     #[arg(
         long,
-        help = "The collateral matures this many blocks after the current Bitcoin tip (at least 3)"
+        help = "The number of epochs for which the collateral seats the validator (between the subnet's min and max timeout)"
     )]
-    pub lock_blocks: u64,
+    pub epochs: u32,
+    #[arg(
+        long,
+        default_value_t = 1,
+        help = "The first subnet height the EOTS nonce commitment covers"
+    )]
+    pub eots_nonce_start: u64,
+    #[arg(
+        long,
+        default_value_t = 100_000,
+        help = "The number of subnet heights the EOTS nonce commitment covers"
+    )]
+    pub eots_nonce_count: u32,
 }
 
 /// Spends the validator's matured unilateral-exit collaterals to its backup address
@@ -108,3 +121,6 @@ pub struct UnstakeUeArgs {
     #[arg(long, help = "The subnet the validator joined with join-ue")]
     pub subnet: String,
 }
+#[cfg(test)]
+#[path = "unilateral_exit_spec_tests.rs"]
+mod spec_tests;

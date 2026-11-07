@@ -1178,6 +1178,7 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             blockHeight: 0,
             blockHash: keccak256("block1"),
             nextConfigurationNumber: 1,
+            slashPreSignatureCount: 0,
             msgs: new IpcEnvelope[](0),
             activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
         });
@@ -1187,6 +1188,7 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             blockHeight: gatewayDiamond.getter().bottomUpCheckPeriod(),
             blockHash: keccak256("block1"),
             nextConfigurationNumber: 1,
+            slashPreSignatureCount: 0,
             msgs: new IpcEnvelope[](0),
             activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
         });
@@ -1236,6 +1238,7 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             blockHeight: d,
             blockHash: keccak256("block"),
             nextConfigurationNumber: 2,
+            slashPreSignatureCount: 0,
             msgs: new IpcEnvelope[](0),
             activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
         });
@@ -1261,6 +1264,7 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             blockHeight: gatewayDiamond.getter().bottomUpCheckPeriod(),
             blockHash: keccak256("block1"),
             nextConfigurationNumber: 1,
+            slashPreSignatureCount: 0,
             msgs: new IpcEnvelope[](0),
             activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
         });
@@ -1283,6 +1287,7 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             blockHeight: gatewayDiamond.getter().bottomUpCheckPeriod(),
             blockHash: keccak256("block1"),
             nextConfigurationNumber: 1,
+            slashPreSignatureCount: 0,
             msgs: new IpcEnvelope[](0),
             activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
         });
@@ -1330,6 +1335,7 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             blockHeight: gatewayDiamond.getter().bottomUpCheckPeriod(),
             blockHash: keccak256("block1"),
             nextConfigurationNumber: 1,
+            slashPreSignatureCount: 0,
             msgs: msgs,
             activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
         });
@@ -1351,6 +1357,7 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             blockHeight: gatewayDiamond.getter().bottomUpCheckPeriod(),
             blockHash: keccak256("block1"),
             nextConfigurationNumber: 1,
+            slashPreSignatureCount: 0,
             msgs: new IpcEnvelope[](0),
             activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
         });
@@ -1360,6 +1367,7 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             blockHeight: 2 * gatewayDiamond.getter().bottomUpCheckPeriod(),
             blockHash: keccak256("block2"),
             nextConfigurationNumber: 1,
+            slashPreSignatureCount: 0,
             msgs: new IpcEnvelope[](0),
             activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
         });
@@ -1427,6 +1435,7 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             blockHeight: gatewayDiamond.getter().bottomUpCheckPeriod(),
             blockHash: keccak256("block"),
             nextConfigurationNumber: 1,
+            slashPreSignatureCount: 0,
             msgs: new IpcEnvelope[](0),
             activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
         });
@@ -1490,6 +1499,7 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             blockHeight: gatewayDiamond.getter().bottomUpCheckPeriod(),
             blockHash: keccak256("block"),
             nextConfigurationNumber: 1,
+            slashPreSignatureCount: 0,
             msgs: new IpcEnvelope[](0),
             activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
         });
@@ -1575,6 +1585,7 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             blockHeight: gatewayDiamond.getter().bottomUpCheckPeriod(),
             blockHash: keccak256("block"),
             nextConfigurationNumber: 1,
+            slashPreSignatureCount: 0,
             msgs: new IpcEnvelope[](0),
             activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
         });
@@ -1615,6 +1626,7 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             blockHeight: gatewayDiamond.getter().bottomUpCheckPeriod(),
             blockHash: keccak256("block"),
             nextConfigurationNumber: 1,
+            slashPreSignatureCount: 0,
             msgs: new IpcEnvelope[](0),
             activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
         });
@@ -1665,6 +1677,7 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             blockHeight: gatewayDiamond.getter().bottomUpCheckPeriod(),
             blockHash: keccak256("block"),
             nextConfigurationNumber: 1,
+            slashPreSignatureCount: 0,
             msgs: new IpcEnvelope[](0),
             activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
         });
@@ -1711,6 +1724,7 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             blockHeight: gatewayDiamond.getter().bottomUpCheckPeriod(),
             blockHash: keccak256("block"),
             nextConfigurationNumber: 1,
+            slashPreSignatureCount: 0,
             msgs: new IpcEnvelope[](0),
             activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
         });
@@ -1793,6 +1807,7 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             blockHeight: gatewayDiamond.getter().bottomUpCheckPeriod(),
             blockHash: keccak256("block"),
             nextConfigurationNumber: 1,
+            slashPreSignatureCount: 0,
             msgs: new IpcEnvelope[](0),
             activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
         });
@@ -1887,6 +1902,7 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             blockHeight: gatewayDiamond.getter().bottomUpCheckPeriod(),
             blockHash: keccak256("block"),
             nextConfigurationNumber: 1,
+            slashPreSignatureCount: 0,
             msgs: new IpcEnvelope[](0),
             activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
         });
@@ -1971,6 +1987,7 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             blockHeight: gatewayDiamond.getter().bottomUpCheckPeriod(),
             blockHash: keccak256("block"),
             nextConfigurationNumber: 1,
+            slashPreSignatureCount: 0,
             msgs: new IpcEnvelope[](0),
             activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
         });
@@ -2037,6 +2054,7 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
                 blockHeight: i * gatewayDiamond.getter().bottomUpCheckPeriod(),
                 blockHash: keccak256(abi.encodePacked("block", i)),
                 nextConfigurationNumber: 1,
+                slashPreSignatureCount: 0,
                 msgs: new IpcEnvelope[](0),
                 activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
             });
@@ -2164,6 +2182,7 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
                 blockHeight: i * gatewayDiamond.getter().bottomUpCheckPeriod(),
                 blockHash: keccak256("block"),
                 nextConfigurationNumber: 1,
+                slashPreSignatureCount: 0,
                 msgs: new IpcEnvelope[](0),
                 activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
             });
@@ -2233,6 +2252,7 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             blockHeight: gatewayDiamond.getter().bottomUpCheckPeriod(),
             blockHash: keccak256("block1"),
             nextConfigurationNumber: 1,
+            slashPreSignatureCount: 0,
             msgs: msgs,
             activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
         });
@@ -2299,6 +2319,157 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             gatewayDiamond.getter().bottomUpMsgBatch(2 * d).msgs.length == 10,
             "wrong number of messages after full batch"
         );
+    }
+
+    function testGatewayDiamond_setSubnetFinalHeight_keepsMaximum() public {
+        vm.startPrank(FilAddress.SYSTEM_ACTOR);
+        gatewayDiamond.checkpointer().setSubnetFinalHeight(10);
+        require(gatewayDiamond.getter().subnetFinalHeight() == 10, "height not set to 10");
+        gatewayDiamond.checkpointer().setSubnetFinalHeight(5);
+        require(gatewayDiamond.getter().subnetFinalHeight() == 10, "lower height replaced the maximum");
+        gatewayDiamond.checkpointer().setSubnetFinalHeight(20);
+        require(gatewayDiamond.getter().subnetFinalHeight() == 20, "higher height not set");
+        vm.stopPrank();
+    }
+
+    function testGatewayDiamond_setSubnetFinalHeight_fails_notSystemActor() public {
+        vm.prank(vm.addr(100));
+        vm.expectRevert(NotSystemActor.selector);
+        gatewayDiamond.checkpointer().setSubnetFinalHeight(10);
+    }
+
+    function testGatewayDiamond_createBottomUpCheckpoint_keepsSlashPreSignatureCount() public {
+        (, address[] memory addrs, uint256[] memory weights) = TestUtils.getFourValidators(vm);
+        (bytes32 membershipRoot, ) = MerkleTreeHelper.createMerkleProofsForValidators(addrs, weights);
+        uint256 d = gatewayDiamond.getter().bottomUpCheckPeriod();
+
+        BottomUpCheckpoint memory checkpoint = BottomUpCheckpoint({
+            subnetID: gatewayDiamond.getter().getNetworkName(),
+            blockHeight: d,
+            blockHash: keccak256("block1"),
+            nextConfigurationNumber: 1,
+            slashPreSignatureCount: 7,
+            msgs: new IpcEnvelope[](0),
+            activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
+        });
+
+        vm.startPrank(FilAddress.SYSTEM_ACTOR);
+        gatewayDiamond.checkpointer().createBottomUpCheckpoint(
+            checkpoint,
+            membershipRoot,
+            weights[0] + weights[1] + weights[2],
+            ActivityHelper.dummyActivityRollup()
+        );
+        vm.stopPrank();
+
+        BottomUpCheckpoint memory recv = gatewayDiamond.getter().bottomUpCheckpoint(d);
+        require(recv.slashPreSignatureCount == 7, "slash pre-signature count not kept");
+    }
+
+    /// @dev Creates a checkpoint at the first period height, adds the checkpoint signature of every validator,
+    /// then the Bitcoin signature of validator i over psbts[i].
+    function _signBitcoinCheckpoint(
+        uint256[] memory weights,
+        bytes[] memory psbts
+    ) internal returns (uint256 height) {
+        (uint256[] memory privKeys, address[] memory addrs, ) = TestUtils.getFourValidators(vm);
+
+        (bytes32 membershipRoot, bytes32[][] memory membershipProofs) = MerkleTreeHelper
+            .createMerkleProofsForValidators(addrs, weights);
+
+        BottomUpCheckpoint memory checkpoint = BottomUpCheckpoint({
+            subnetID: gatewayDiamond.getter().getNetworkName(),
+            blockHeight: gatewayDiamond.getter().bottomUpCheckPeriod(),
+            blockHash: keccak256("block"),
+            nextConfigurationNumber: 1,
+            slashPreSignatureCount: 0,
+            msgs: new IpcEnvelope[](0),
+            activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
+        });
+        height = checkpoint.blockHeight;
+
+        uint256 total = weights[0] + weights[1] + weights[2] + weights[3];
+        vm.prank(FilAddress.SYSTEM_ACTOR);
+        gatewayDiamond.checkpointer().createBottomUpCheckpoint(
+            checkpoint,
+            membershipRoot,
+            total,
+            ActivityHelper.dummyActivityRollup()
+        );
+
+        for (uint64 i = 0; i < 4; i++) {
+            _addSignatures(i, privKeys[i], checkpoint, membershipProofs[i], weights[i], psbts[i]);
+        }
+    }
+
+    function _addSignatures(
+        uint64 i,
+        uint256 privKey,
+        BottomUpCheckpoint memory checkpoint,
+        bytes32[] memory proof,
+        uint256 weight,
+        bytes memory psbt
+    ) internal {
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privKey, keccak256(abi.encode(checkpoint)));
+
+        vm.startPrank(vm.addr(privKey));
+        gatewayDiamond.checkpointer().addCheckpointSignature(
+            checkpoint.blockHeight,
+            proof,
+            weight,
+            abi.encodePacked(r, s, v)
+        );
+        gatewayDiamond.checkpointer().addBitcoinCheckpointSignature(
+            checkpoint.blockHeight,
+            psbt,
+            abi.encodePacked("sig", Strings.toString(i)),
+            abi.encodePacked("batchtransfer")
+        );
+        vm.stopPrank();
+    }
+
+    function testGatewayDiamond_getBitcoinCheckpointSignatures_mostWeight() public {
+        // the PSBT signed by one validator of weight 70 wins over the PSBT signed by three validators of weight 10
+        uint256[] memory weights = new uint256[](4);
+        weights[0] = 70;
+        weights[1] = 10;
+        weights[2] = 10;
+        weights[3] = 10;
+
+        bytes[] memory psbts = new bytes[](4);
+        psbts[0] = "psbtB";
+        psbts[1] = "psbtA";
+        psbts[2] = "psbtA";
+        psbts[3] = "psbtA";
+
+        uint256 height = _signBitcoinCheckpoint(weights, psbts);
+        (bytes memory psbt, , address[] memory signatories, ) = _heaviestBitcoinCheckpoint(height);
+
+        require(keccak256(psbt) == keccak256("psbtB"), "heaviest PSBT not returned");
+        require(signatories.length == 1, "incorrect number of signatories");
+    }
+
+    function testGatewayDiamond_getBitcoinCheckpointSignatures_mostSignersWhenEqualWeight() public {
+        // with equal weights, the PSBT signed by three validators wins over the PSBT signed by one validator
+        (, , uint256[] memory weights) = TestUtils.getFourValidators(vm);
+
+        bytes[] memory psbts = new bytes[](4);
+        psbts[0] = "psbtB";
+        psbts[1] = "psbtA";
+        psbts[2] = "psbtA";
+        psbts[3] = "psbtA";
+
+        uint256 height = _signBitcoinCheckpoint(weights, psbts);
+        (bytes memory psbt, , address[] memory signatories, ) = _heaviestBitcoinCheckpoint(height);
+
+        require(keccak256(psbt) == keccak256("psbtA"), "PSBT with most signers not returned");
+        require(signatories.length == 3, "incorrect number of signatories");
+    }
+
+    function _heaviestBitcoinCheckpoint(
+        uint256 height
+    ) internal view returns (bytes memory, bytes memory, address[] memory, bytes[] memory) {
+        return gatewayDiamond.checkpointer().getBitcoinCheckpointSignatures(height);
     }
 
     function newListOfMessages(uint64 size) internal view returns (IpcEnvelope[] memory msgs) {

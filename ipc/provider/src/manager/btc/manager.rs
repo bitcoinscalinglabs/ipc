@@ -13,8 +13,8 @@ use ethers::types::{Address as EthAddress, H256};
 use http::HeaderValue;
 use ipc_api::address::IPCAddress;
 use ipc_api::checkpoint::{
-    BitcoinCheckpointSignature, BitcoinCheckpointSignatureQuorum, BitcoinHandoverSignature,
-    BitcoinSignature, BitcoinTx, UnsignedPsbt,
+    BitcoinCheckpointSignature, BitcoinCheckpointSignatureQuorum, BitcoinSignature, BitcoinTx,
+    UnsignedPsbt,
 };
 use ipc_api::evm::payload_to_evm_address;
 use ipc_api::subnet::{
@@ -93,6 +93,234 @@ impl BtcSubnetManager {
             client,
             rpc_url: url.to_string(),
         })
+    }
+
+    /// Calls a provider method and returns its `result`, or the JSON-RPC error.
+    async fn rpc_call(&self, method: &str, params: Value) -> Result<Value> {
+        let body = json!({
+            "jsonrpc": "2.0",
+            "method": method,
+            "id": 1,
+            "params": params,
+        });
+        let resp = self
+            .client
+            .post(self.rpc_url.clone())
+            .json(&body)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(anyhow!(
+                "{method} request failed with status: {}",
+                resp.status()
+            ));
+        }
+        let data = resp.json::<Value>().await?;
+        if let Some(err_obj) = data.get("error") {
+            let message = err_obj
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("Unknown error");
+            let details = err_obj
+                .get("data")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            return Err(anyhow!("{method}: {message} {details}"));
+        }
+        data.get("result")
+            .cloned()
+            .ok_or_else(|| anyhow!("{method}: no result"))
+    }
+
+    fn hex_array<const N: usize>(value: &Value, what: &str) -> Result<[u8; N]> {
+        let s = value
+            .as_str()
+            .ok_or_else(|| anyhow!("{what} is not a string"))?;
+        hex::decode(s)
+            .ok()
+            .and_then(|b| <[u8; N]>::try_from(b).ok())
+            .ok_or_else(|| anyhow!("{what} is not {N} bytes in hex"))
+    }
+
+    /// `geteotskeys`: the EOTS key of every validator that joined with a collateral output.
+    pub async fn get_eots_keys(&self, subnet_id: &SubnetID) -> Result<Vec<ipc_api::eots::EotsKey>> {
+        let result = self
+            .rpc_call("geteotskeys", json!({ "subnet_id": subnet_id.to_string() }))
+            .await?;
+        result
+            .as_array()
+            .ok_or_else(|| anyhow!("geteotskeys: not a list"))?
+            .iter()
+            .map(|e| {
+                Ok(ipc_api::eots::EotsKey {
+                    validator: Self::hex_array(&e["pubkey"], "pubkey")?,
+                    pk_eots: Self::hex_array(&e["pk_eots"], "pk_eots")?,
+                })
+            })
+            .collect()
+    }
+
+    /// `geteotscommitments`: every EOTS nonce commitment the monitor recorded for `pk_eots`.
+    pub async fn get_eots_commitments(
+        &self,
+        subnet_id: &SubnetID,
+        pk_eots: &[u8; 32],
+    ) -> Result<Vec<ipc_api::eots::RecordedCommitment>> {
+        let result = self
+            .rpc_call(
+                "geteotscommitments",
+                json!({ "subnet_id": subnet_id.to_string(), "pk_eots": hex::encode(pk_eots) }),
+            )
+            .await?;
+        result
+            .as_array()
+            .ok_or_else(|| anyhow!("geteotscommitments: not a list"))?
+            .iter()
+            .map(|c| {
+                Ok(ipc_api::eots::RecordedCommitment {
+                    commitment: ipc_eots::EotsNonceCommitment {
+                        start: c["start"].as_u64().ok_or_else(|| anyhow!("start"))?,
+                        count: c["count"]
+                            .as_u64()
+                            .and_then(|n| u32::try_from(n).ok())
+                            .ok_or_else(|| anyhow!("count"))?,
+                        root: Self::hex_array(&c["root"], "root")?,
+                    },
+                    block_height: c["block_height"]
+                        .as_u64()
+                        .ok_or_else(|| anyhow!("block_height"))?,
+                })
+            })
+            .collect()
+    }
+
+    /// `getsubnetcheckpoint`: the latest checkpoint the monitor recorded, in a Bitcoin block at
+    /// or below `max_bitcoin_height` when given, or `None` while there is none.
+    pub async fn latest_checkpoint(
+        &self,
+        subnet_id: &SubnetID,
+        max_bitcoin_height: Option<u64>,
+    ) -> Result<Option<ipc_api::eots::LatestCheckpoint>> {
+        let result = self
+            .rpc_call(
+                "getsubnetcheckpoint",
+                json!({ "subnet_id": subnet_id.to_string(), "max_block_height": max_bitcoin_height }),
+            )
+            .await?;
+        if result.is_null() {
+            return Ok(None);
+        }
+        Ok(Some(ipc_api::eots::LatestCheckpoint {
+            height: result["checkpoint_height"]
+                .as_u64()
+                .ok_or_else(|| anyhow!("checkpoint_height"))?,
+            block_hash: Self::hex_array(&result["checkpoint_hash"], "checkpoint_hash")?,
+            bitcoin_height: result["block_height"]
+                .as_u64()
+                .ok_or_else(|| anyhow!("block_height"))?,
+            killed: result["is_kill_checkpoint"].as_bool().unwrap_or(false),
+        }))
+    }
+
+    /// `signeotsvote`: this validator's EOTS vote for a subnet block, signed by its provider.
+    pub async fn sign_eots_vote(
+        &self,
+        subnet_id: &SubnetID,
+        height: u64,
+        block_hash: &[u8; 32],
+    ) -> Result<ipc_eots::EotsVote> {
+        let v = self
+            .rpc_call(
+                "signeotsvote",
+                json!({
+                    "subnet_id": subnet_id.to_string(),
+                    "height": height,
+                    "block_hash": hex::encode(block_hash),
+                }),
+            )
+            .await?;
+        let signature: [u8; 64] = Self::hex_array(&v["signature"], "signature")?;
+        Ok(ipc_eots::EotsVote {
+            pk_eots: Self::hex_array(&v["pk_eots"], "pk_eots")?,
+            height: v["height"].as_u64().ok_or_else(|| anyhow!("height"))?,
+            block_hash: Self::hex_array(&v["block_hash"], "block_hash")?,
+            signature: ipc_eots::EotsVote::signature_from_bytes(&signature),
+            start: v["start"].as_u64().ok_or_else(|| anyhow!("start"))?,
+            proof: v["proof"]
+                .as_array()
+                .ok_or_else(|| anyhow!("proof"))?
+                .iter()
+                .map(|p| Self::hex_array(p, "proof element"))
+                .collect::<Result<Vec<_>>>()?,
+        })
+    }
+
+    /// `signslash`: this validator's pre-signature of the slash transaction of an output.
+    pub async fn sign_slash(
+        &self,
+        subnet_id: &SubnetID,
+        txid: &str,
+        vout: u32,
+    ) -> Result<ipc_api::eots::SlashPreSignature> {
+        let v = self
+            .rpc_call(
+                "signslash",
+                json!({ "subnet_id": subnet_id.to_string(), "txid": txid, "vout": vout }),
+            )
+            .await?;
+        let signature: [u8; 64] = Self::hex_array(&v["signature"], "signature")?;
+        Ok(ipc_api::eots::SlashPreSignature {
+            txid: txid.to_string(),
+            vout,
+            index: v["index"]
+                .as_u64()
+                .and_then(|i| u16::try_from(i).ok())
+                .ok_or_else(|| anyhow!("index"))?,
+            signature: signature.to_vec(),
+        })
+    }
+
+    /// `getunslashableoutputs`: the collateral outputs the monitor has not recorded as slashable.
+    pub async fn get_unslashable_outputs(
+        &self,
+        subnet_id: &SubnetID,
+    ) -> Result<Vec<ipc_api::eots::UnslashableOutput>> {
+        let result = self
+            .rpc_call("getunslashableoutputs", json!({ "subnet_id": subnet_id.to_string() }))
+            .await?;
+        result
+            .as_array()
+            .ok_or_else(|| anyhow!("getunslashableoutputs: not a list"))?
+            .iter()
+            .map(|o| {
+                Ok(ipc_api::eots::UnslashableOutput {
+                    txid: o["txid"].as_str().ok_or_else(|| anyhow!("txid"))?.to_string(),
+                    vout: o["vout"]
+                        .as_u64()
+                        .and_then(|v| u32::try_from(v).ok())
+                        .ok_or_else(|| anyhow!("vout"))?,
+                    owner: Self::hex_array(&o["pubkey"], "pubkey")?,
+                    join_txid: o["join_txid"]
+                        .as_str()
+                        .ok_or_else(|| anyhow!("join_txid"))?
+                        .to_string(),
+                    block_height: o["block_height"].as_u64().unwrap_or(0),
+                    threshold: o["threshold"].as_u64().ok_or_else(|| anyhow!("threshold"))?,
+                    keys: o["keys"]
+                        .as_array()
+                        .ok_or_else(|| anyhow!("keys"))?
+                        .iter()
+                        .map(|k| {
+                            Ok((
+                                Self::hex_array(&k[0], "key")?,
+                                k[1].as_u64().ok_or_else(|| anyhow!("power"))?,
+                            ))
+                        })
+                        .collect::<Result<Vec<_>>>()?,
+                    signer: o["signer"].as_bool().unwrap_or(false),
+                })
+            })
+            .collect()
     }
 
     async fn get_block_hash_inner(&self, height: ChainEpoch) -> Result<H256> {
@@ -198,11 +426,18 @@ impl SubnetManager for BtcSubnetManager {
             "id": 1,
             "params": {
                 "min_validator_stake":     token_amount_to_satoshi(params.min_validator_stake)?,
+                "power_unit_exponent":     params.power_unit_exponent,
                 "min_validators":          params.min_validators,
                 "bottomup_check_period":   params.bottomup_check_period,
                 "active_validators_limit": params.active_validators_limit,
                 "min_cross_msg_fee":       token_amount_to_satoshi(params.min_cross_msg_fee)?,
                 "whitelist":               params.validator_whitelist,
+                "epoch_length":            params.epoch_length,
+                "min_timeout":             params.min_timeout,
+                "max_timeout":             params.max_timeout,
+                "min_deposit":             token_amount_to_satoshi(params.min_deposit)?,
+                "kill_vote_period":        params.kill_vote_period,
+                "kill_delay_period":       params.kill_delay_period,
             }
         });
         tracing::trace!("Request body: {body:?}");
@@ -281,8 +516,12 @@ impl SubnetManager for BtcSubnetManager {
                 "backup_address":   params.backup_address,
             }
         });
-        if let Some(lock_blocks) = params.lock_blocks {
-            body["params"]["lock_blocks"] = json!(lock_blocks);
+        if let Some(epochs) = params.epochs {
+            body["params"]["epochs"] = json!(epochs);
+        }
+        if let Some((start, count)) = params.eots_nonces {
+            body["params"]["eots_nonce_start"] = json!(start);
+            body["params"]["eots_nonce_count"] = json!(count);
         }
         tracing::trace!("Request body: {body:?}");
 
@@ -951,6 +1190,31 @@ impl SubnetManager for BtcSubnetManager {
             .and_then(Value::as_u64)
             .ok_or_else(|| anyhow!("Invalid bottomup_check_period"))?;
 
+        let power_unit_exponent = create_subnet_msg
+            .get("power_unit_exponent")
+            .and_then(Value::as_u64)
+            .and_then(|p| u8::try_from(p).ok())
+            .ok_or_else(|| anyhow!("Invalid power_unit_exponent"))?;
+        // The genesis validators have one unit of power each
+        let power_unit = token_amount_from_satoshi(10u64.pow(u32::from(power_unit_exponent)));
+
+        // Every whitelist member has a subnet account from genesis
+        let whitelist = create_subnet_msg
+            .get("whitelist")
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow!("No whitelist found"))?;
+        let mut genesis_balances = BTreeMap::new();
+        for key in whitelist {
+            let key = key
+                .as_str()
+                .and_then(|k| hex::decode(k).ok())
+                .ok_or_else(|| anyhow!("Invalid whitelist key"))?;
+            let addr = ethers_address_to_fil_address(&eth_address_of_x_only_key(&key)?)?;
+            genesis_balances
+                .entry(addr)
+                .or_insert_with(TokenAmount::zero);
+        }
+
         // Extract genesis validators
         let genesis_validators = result
             .get("genesis_validators")
@@ -961,7 +1225,6 @@ impl SubnetManager for BtcSubnetManager {
             .iter()
             .filter_map(|v| {
                 let subnet_address = v.get("subnet_address")?.as_str()?;
-                let collateral = v.get("collateral")?.as_u64()?;
                 let pubkey = v.get("pubkey")?.as_str()?;
                 let pubkey = hex::decode(pubkey).ok()?;
 
@@ -973,7 +1236,7 @@ impl SubnetManager for BtcSubnetManager {
                 metadata.push(0x02);
                 metadata.extend(pubkey);
 
-                let weight = token_amount_from_satoshi(collateral);
+                let weight = power_unit.clone();
 
                 let v = Validator {
                     addr,
@@ -1018,6 +1281,7 @@ impl SubnetManager for BtcSubnetManager {
         Ok(SubnetGenesisInfo {
             active_validators_limit: active_validators_limit as u16,
             bottom_up_checkpoint_period: bottomup_check_period,
+            power_unit_exponent: Some(power_unit_exponent),
             genesis_epoch: result
                 .get("genesis_block_height")
                 // TODO recheck parsing + casting
@@ -1027,8 +1291,7 @@ impl SubnetManager for BtcSubnetManager {
             majority_percentage: 66, // Default value as per the original implementation
             min_collateral,
             validators,
-            // TODO impl genesis_balances
-            genesis_balances: BTreeMap::new(),
+            genesis_balances,
             permission_mode: PermissionMode::Collateral,
             supply_source: Asset {
                 kind: AssetKind::Native,
@@ -1165,8 +1428,34 @@ impl SubnetManager for BtcSubnetManager {
         &self,
         subnet_id: &SubnetID,
         checkpoint: BottomUpCheckpoint,
+        slash_signatures: Vec<ipc_api::eots::SlashPreSignature>,
     ) -> Result<BitcoinCheckpointSignature> {
         tracing::debug!("Creating bitcoin signatures for checkpoint: {checkpoint:?}");
+
+        // One entry per output, its signatures in ascending index order
+        let mut entries: std::collections::BTreeMap<(String, u32), Vec<(u16, String)>> =
+            std::collections::BTreeMap::new();
+        for s in slash_signatures {
+            entries
+                .entry((s.txid, s.vout))
+                .or_default()
+                .push((s.index, hex::encode(s.signature)));
+        }
+        let slash_entries = entries
+            .into_iter()
+            .map(|((txid, vout), mut signatures)| {
+                signatures.sort_by_key(|(index, _)| *index);
+                signatures.dedup_by_key(|(index, _)| *index);
+                json!({
+                    "txid": txid,
+                    "vout": vout,
+                    "signatures": signatures
+                        .into_iter()
+                        .map(|(index, signature)| json!({ "index": index, "signature": signature }))
+                        .collect::<Vec<_>>(),
+                })
+            })
+            .collect::<Vec<_>>();
 
         // collect all withdrawals, transfers, and ERC token data from the checkpoint msgs
         let mut releases = Vec::new();
@@ -1250,11 +1539,13 @@ impl SubnetManager for BtcSubnetManager {
                 "checkpoint_hash":      hex::encode(checkpoint.block_hash),
                 "checkpoint_height":    checkpoint.block_height,
                 "next_committee_configuration_number": checkpoint.next_configuration_number,
+                "slash_pre_signature_count": checkpoint.slash_pre_signature_count,
                 "withdrawals":          releases,
                 "transfers":            transfers,
                 "token_registrations":  token_registrations,
                 "token_supply_adjustments": token_supply_adjustments,
                 "token_transfers":      token_transfers,
+                "slash_signatures":     slash_entries,
             }
         });
 
@@ -1350,106 +1641,6 @@ impl SubnetManager for BtcSubnetManager {
             unsigned_psbt: UnsignedPsbt(unsigned_psbt),
             signature,
             transfer_tx: BitcoinTx(transfer_tx),
-        })
-    }
-
-    /// This function asks the parent subnet (bitcoin) to generate the required transaction to perform the initial bootstrap handover.
-    /// The reason why this bootstrap handover is related to the way a subnet is created when the parent is bitcoin.
-    /// The RPC endpoint we use (`genbootstraphandover`) returns a PSBT and a number of signatures, same as the `gencheckpointpsbt` endpoint.
-    async fn get_bootstrap_handover_transaction(
-        &self,
-        subnet_id: &SubnetID,
-    ) -> Result<BitcoinHandoverSignature> {
-        tracing::info!("Creating bitcoin signatures for bootstrap handover: {subnet_id:?}");
-
-        let body = json!({
-            "jsonrpc": "2.0",
-            "method": "genbootstraphandover",
-            "id": 1,
-            "params": {
-                "subnet_id": subnet_id.to_string(),
-            }
-        });
-
-        tracing::debug!("Request body: {body:?}");
-
-        let resp = self
-            .client
-            .post(self.rpc_url.clone())
-            .json(&body)
-            .send()
-            .await?;
-
-        if !resp.status().is_success() {
-            return Err(anyhow!(
-                "genbootstraphandover request failed with status: {}",
-                resp.status()
-            ));
-        }
-
-        let data = resp.json::<Value>().await?;
-
-        if let Some(err_obj) = data.get("error") {
-            let code = err_obj
-                .get("code")
-                .and_then(Value::as_i64)
-                .unwrap_or_default();
-            let message = err_obj
-                .get("message")
-                .and_then(Value::as_str)
-                .unwrap_or("Unknown error");
-            let error_data = err_obj
-                .get("data")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            return Err(anyhow!(
-                "JSON-RPC error: code={}, message={}, details={}",
-                code,
-                message,
-                error_data
-            ));
-        }
-
-        let unsigned_psbt = data
-            .get("result")
-            .and_then(|r| r.get("unsigned_psbt_base64"))
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow!("Missing 'result.unsigned_psbt_base64' in JSON-RPC response"))?
-            .to_string();
-
-        // The RPC call returns one signature for each input in the PSBT, hex encoded.
-        // We decode each signature and flatten the result into a single vector of bytes,
-        // which we then store in the `HandoverPsbtSignature` struct.
-        // When these signatures are submitted to the `finalizebootstraphandover` RPC call,
-        // they must be split again (see `split_signatures_and_zip_with_signatories`).
-        let signature = data
-        .get("result")
-        .and_then(|r| r.get("psbt_inputs_signatures"))
-        .and_then(Value::as_array)
-        .ok_or_else(|| anyhow!("Missing 'result.psbt_inputs_signatures' in JSON-RPC response for bootstrap handover"))?
-        .iter()
-        .map(|v| {
-            v.as_str()
-                .ok_or_else(|| {
-                    anyhow!(
-                        "Invalid entry in 'result.psbt_inputs_signatures' in JSON-RPC response for bootstrap handover"
-                    )
-                })
-                .and_then(|s| {
-                    hex::decode(s)
-                        .map_err(|e| anyhow!("decoding bitcoin signature failed: {}", e))
-                })
-        })
-        .collect::<Result<Vec<Vec<u8>>>>()?
-        .into_iter()
-        .flatten()
-        .collect::<Vec<u8>>();
-
-        tracing::info!("BtcSubnetManager obtained bootstrap-handover PSBT and signatures.");
-
-        Ok(BitcoinHandoverSignature {
-            unsigned_psbt: UnsignedPsbt(unsigned_psbt),
-            signature,
         })
     }
 
@@ -1722,85 +1913,10 @@ impl BottomUpCheckpointRelayer for BtcSubnetManager {
         tracing::info!("getting current epoch on bitcoin");
         anyhow::bail!("not supported on btc, it is not meant to be a child subnet")
     }
-
-    async fn submit_bootstrap_handover(
-        &self,
-        subnet_id: &SubnetID,
-        handover_signatures: ipc_api::checkpoint::BitcoinHandoverSignatureQuorum,
-    ) -> Result<ChainEpoch> {
-        tracing::info!("submitting bootstrap handover transaction on btc");
-
-        let signatures_json = zip_pubkeys_with_chunked_signatures(
-            handover_signatures.signatures,
-            handover_signatures.signatories,
-        )?;
-
-        let body = json!({
-            "jsonrpc": "2.0",
-            "method": "finalizebootstraphandover",
-            "id": 1,
-            "params": {
-                "subnet_id":            subnet_id.to_string(),
-                "unsigned_psbt_base64": handover_signatures.unsigned_psbt.0,
-                "signatures":           signatures_json,
-            }
-        });
-
-        tracing::debug!("Request body: {body:#?}");
-
-        let resp = self
-            .client
-            .post(self.rpc_url.clone())
-            .json(&body)
-            .send()
-            .await?;
-
-        if !resp.status().is_success() {
-            return Err(anyhow!(
-                "finalizebootstraphandover request failed with status: {}",
-                resp.status()
-            ));
-        }
-
-        let data = resp.json::<Value>().await?;
-
-        if let Some(err_obj) = data.get("error") {
-            let code = err_obj
-                .get("code")
-                .and_then(Value::as_i64)
-                .unwrap_or_default();
-            let message = err_obj
-                .get("message")
-                .and_then(Value::as_str)
-                .unwrap_or("Unknown error");
-            let error_data = err_obj
-                .get("data")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            return Err(anyhow!(
-                "JSON-RPC error: code={}, message={}, details={}",
-                code,
-                message,
-                error_data
-            ));
-        }
-
-        let current_height = self.chain_head_height().await?;
-
-        tracing::info!("bootstrap handover submitted on btc at height: {current_height:}");
-        Ok(current_height)
-    }
-
-    async fn get_bootstrap_handover_signatures(
-        &self,
-        _height: ChainEpoch,
-    ) -> Result<ipc_api::checkpoint::BitcoinHandoverSignatureQuorum> {
-        anyhow::bail!("not supported on btc, it is not meant to be a child subnet")
-    }
 }
 
-// Produce the JSON shape that bitcoin-ipc's `finalizebootstraphandover` and
-// `finalizecheckpointpsbt` RPCs expect: for each signatory, an array
+// Produce the JSON shape that bitcoin-ipc's `finalizecheckpointpsbt` RPC
+// expects: for each signatory, an array
 // `[xpub_hex, [sig_chunk_hex, ...]]`. The input `signatures[i]` is the
 // concatenation of fixed-size (64-byte) Schnorr signatures produced by
 // signatories[i]; this function splits each concatenated blob into its constituent
@@ -1823,6 +1939,20 @@ impl BottomUpCheckpointRelayer for BtcSubnetManager {
 //         ]
 //     ]
 // ]
+/// The subnet address of an x-only key: the Ethereum address of its even-parity key.
+fn eth_address_of_x_only_key(key: &[u8]) -> Result<EthAddress> {
+    let mut compressed = Vec::with_capacity(33);
+    compressed.push(0x02);
+    compressed.extend_from_slice(key);
+    let pubkey = libsecp256k1::PublicKey::parse_slice(
+        &compressed,
+        Some(libsecp256k1::PublicKeyFormat::Compressed),
+    )
+    .map_err(|_| anyhow!("Invalid x-only public key"))?;
+    let hash = ethers::utils::keccak256(&pubkey.serialize()[1..]);
+    Ok(EthAddress::from_slice(&hash[12..]))
+}
+
 fn zip_pubkeys_with_chunked_signatures(
     signatures: Vec<BitcoinSignature>,
     signatories: Vec<[u8; 32]>,

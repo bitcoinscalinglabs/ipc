@@ -6,7 +6,7 @@ import {QuorumMap} from "../structs/Quorum.sol";
 import {BottomUpCheckpoint, BottomUpMsgBatch, IpcEnvelope, ParentFinality} from "../structs/CrossNet.sol";
 import {SubnetID, Subnet, ParentValidatorsTracker} from "../structs/Subnet.sol";
 import {Membership} from "../structs/Subnet.sol";
-import {BitcoinCheckpoint, BitcoinBootstrapHandover} from "../structs/Bitcoin.sol";
+import {BitcoinCheckpoint, SlashPreSignature} from "../structs/Bitcoin.sol";
 import {AccountHelper} from "../lib/AccountHelper.sol";
 import {FilAddress} from "fevmate/contracts/utils/FilAddress.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
@@ -77,8 +77,13 @@ struct GatewayActorStorage {
     // =========== Bitcoin ===========
     mapping(uint256 => mapping(bytes32 => BitcoinCheckpoint)) bitcoinCheckpoints;
     mapping(uint256 => bytes32[]) bitcoinCheckpointPsbtHashes;
-    mapping(bytes32 => BitcoinBootstrapHandover) bitcoinBootstrapHandovers;
-    bytes32[] bitcoinBootstrapHandoverPsbtHashes;
+    /// @notice The subnet final height: the highest subnet height carried by an executed
+    /// `EotsFinality`. Never decreases.
+    uint256 subnetFinalHeight;
+    /// @notice Slash pre-signatures posted by validators, in posting order.
+    SlashPreSignature[] slashPreSignatures;
+    /// @notice keccak256(txid, vout, index) of every posted pre-signature, against replays.
+    mapping(bytes32 => bool) slashPreSignaturePosted;
     // =========== ERC Token Bridging ===========
     /// @notice Tokens registered for bridging on this subnet (home-subnet registration).
     /// Keyed by the local token address. True means registered.

@@ -74,11 +74,14 @@ fvm_ipld_car = { workspace = true }
 fvm_ipld_encoding = { workspace = true }
 fvm_shared = { workspace = true }
 ipc-api = { workspace = true }
+ipc-eots = { workspace = true }
 ipc-provider = { workspace = true }
 ipc_ipld_resolver = { workspace = true }
 ipc-observability = { workspace = true }
 
 [dev-dependencies]
+libp2p = { workspace = true, features = ["ed25519"] }
+rand = { workspace = true }
 tempfile = { workspace = true }
 quickcheck = { workspace = true }
 quickcheck_macros = { workspace = true }

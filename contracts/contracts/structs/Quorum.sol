@@ -40,4 +40,6 @@ struct QuorumMap {
     mapping(uint256 => EnumerableSet.AddressSet) quorumSignatureSenders;
     /// @notice The list of the collected signatures at height `h`
     mapping(uint256 => mapping(address => bytes)) quorumSignatures;
+    /// @notice The weight verified for each signer at height `h`
+    mapping(uint256 => mapping(address => uint256)) quorumSignerWeights;
 }

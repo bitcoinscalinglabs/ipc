@@ -14,9 +14,12 @@ use ipc_api::staking::StakingChangeRequest;
 use std::sync::Arc;
 use std::time::Duration;
 
-/// How long block execution waits for the local monitor to confirm a finalized
-/// parent height before giving up.
-const CONFIRMED_HEIGHT_WAIT_SECS: u64 = 120;
+/// How long block execution waits between two questions to the local monitor about the
+/// parent height it has processed.
+const CONFIRMED_HEIGHT_POLL: Duration = Duration::from_secs(1);
+
+/// The longest wait between two retries of a query to the parent client.
+const MAX_BACK_OFF: Duration = Duration::from_secs(120);
 
 /// The finality provider that performs io to the parent if not found in cache
 #[derive(Clone)]
@@ -27,10 +30,10 @@ pub struct CachedFinalityProvider<T> {
     parent_client: Arc<T>,
 }
 
-/// Exponential backoff for futures
+/// Exponential backoff for futures: the wait doubles up to [`MAX_BACK_OFF`] and the future is
+/// retried until it succeeds or the current block is a null round.
 macro_rules! retry {
-    ($wait:expr, $retires:expr, $f:expr) => {{
-        let mut retries = $retires;
+    ($wait:expr, $f:expr) => {{
         let mut wait = $wait;
 
         loop {
@@ -46,19 +49,14 @@ macro_rules! retry {
 
                 tracing::warn!(
                     error = e.to_string(),
-                    retries,
                     wait = ?wait,
                     "cannot query ipc parent_client"
                 );
 
-                if retries > 0 {
-                    retries -= 1;
+                tokio::time::sleep(wait).await;
 
-                    tokio::time::sleep(wait).await;
-
-                    wait *= 2;
-                    continue;
-                }
+                wait = (wait * 2).min(crate::finality::fetch::MAX_BACK_OFF);
+                continue;
             }
 
             break res;
@@ -145,14 +143,15 @@ impl<T: ParentQueryProxy + Send + Sync + 'static> CachedFinalityProvider<T> {
 
     /// Block until the local monitor reports it has processed `height`, so a
     /// subsequent top-down / validator-change query returns the complete set
-    /// rather than a premature empty one.
-    async fn wait_for_confirmed_height(&self, height: BlockHeight) -> anyhow::Result<()> {
-        for _ in 0..CONFIRMED_HEIGHT_WAIT_SECS {
+    /// rather than a premature empty one. It waits for as long as the monitor is
+    /// unreachable or behind.
+    async fn wait_for_confirmed_height(&self, height: BlockHeight) {
+        loop {
             match self.parent_client.get_chain_head_height().await {
                 // The monitor writes a block's effects before advancing its
                 // confirmed height, so `confirmed >= height` means the set for
                 // `height` is fully present.
-                Ok(confirmed) if height <= confirmed => return Ok(()),
+                Ok(confirmed) if height <= confirmed => return,
                 Ok(confirmed) => tracing::warn!(
                     height,
                     confirmed,
@@ -164,16 +163,12 @@ impl<T: ParentQueryProxy + Send + Sync + 'static> CachedFinalityProvider<T> {
                     "failed to query local monitor confirmed height; retrying"
                 ),
             }
-            tokio::time::sleep(Duration::from_secs(1)).await;
+            tokio::time::sleep(CONFIRMED_HEIGHT_POLL).await;
         }
-        Err(anyhow::anyhow!(
-            "local monitor did not confirm finalized parent height {height} within \
-             {CONFIRMED_HEIGHT_WAIT_SECS}s; halting to avoid applying an incomplete top-down set"
-        ))
     }
 
-    /// Should always return the top down messages, only when ipc parent_client is down after exponential
-    /// retries
+    /// The validator changes at `height`, from the cache or else from the parent client,
+    /// retried until it answers.
     async fn validator_changes(
         &self,
         height: BlockHeight,
@@ -184,11 +179,10 @@ impl<T: ParentQueryProxy + Send + Sync + 'static> CachedFinalityProvider<T> {
             return Ok(v);
         }
 
-        self.wait_for_confirmed_height(height).await?;
+        self.wait_for_confirmed_height(height).await;
 
         let r = retry!(
             self.config.exponential_back_off,
-            self.config.exponential_retry_limit,
             self.parent_client
                 .get_validator_changes(height)
                 .await
@@ -198,8 +192,8 @@ impl<T: ParentQueryProxy + Send + Sync + 'static> CachedFinalityProvider<T> {
         handle_null_round(r, Vec::new)
     }
 
-    /// Should always return the top down messages, only when ipc parent_client is down after exponential
-    /// retries
+    /// The top-down messages at `height`, from the cache or else from the parent client,
+    /// retried until it answers.
     async fn top_down_msgs(&self, height: BlockHeight) -> anyhow::Result<Vec<IpcEnvelope>> {
         let r = self.inner.top_down_msgs(height).await?;
 
@@ -207,11 +201,10 @@ impl<T: ParentQueryProxy + Send + Sync + 'static> CachedFinalityProvider<T> {
             return Ok(v);
         }
 
-        self.wait_for_confirmed_height(height).await?;
+        self.wait_for_confirmed_height(height).await;
 
         let r = retry!(
             self.config.exponential_back_off,
-            self.config.exponential_retry_limit,
             self.parent_client
                 .get_top_down_msgs(height)
                 .await
@@ -420,7 +413,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    /// A query is retried with a doubling wait, capped, until it succeeds.
+    #[tokio::test(start_paused = true)]
     async fn test_retry() {
         struct Test {
             nums_run: AtomicUsize,
@@ -428,8 +422,11 @@ mod tests {
 
         impl Test {
             async fn run(&self) -> Result<(), &'static str> {
-                self.nums_run.fetch_add(1, Ordering::SeqCst);
-                Err("mocked error")
+                if self.nums_run.fetch_add(1, Ordering::SeqCst) < 8 {
+                    Err("mocked error")
+                } else {
+                    Ok(())
+                }
             }
         }
 
@@ -437,10 +434,13 @@ mod tests {
             nums_run: AtomicUsize::new(0),
         };
 
-        let res = retry!(Duration::from_secs(1), 2, t.run().await);
-        assert!(res.is_err());
-        // execute the first time, retries twice
-        assert_eq!(t.nums_run.load(Ordering::SeqCst), 3);
+        let start = tokio::time::Instant::now();
+        let res = retry!(Duration::from_secs(5), t.run().await);
+        assert!(res.is_ok());
+        // execute the first time, retries eight times
+        assert_eq!(t.nums_run.load(Ordering::SeqCst), 9);
+        // waits of 5, 10, 20, 40, 80, 120, 120, 120 seconds
+        assert_eq!(start.elapsed(), Duration::from_secs(515));
     }
 
     #[tokio::test]

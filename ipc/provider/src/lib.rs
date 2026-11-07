@@ -281,9 +281,10 @@ impl IpcProvider {
         collateral: TokenAmount,
         validator_ip: Option<String>,
         backup_address: Option<String>,
-        lock_blocks: Option<u64>,
+        epochs: Option<u32>,
+        eots_nonces: Option<(u64, u32)>,
     ) -> anyhow::Result<ChainEpoch> {
-        if lock_blocks.is_some() {
+        if epochs.is_some() {
             self.require_bitcoin_parent(&subnet)?;
         }
         let parent_id = subnet.parent().ok_or_else(|| anyhow!("no parent found"))?;
@@ -330,7 +331,8 @@ impl IpcProvider {
                     collateral,
                     ip,
                     backup_address,
-                    lock_blocks,
+                    epochs,
+                    eots_nonces,
                 })
             }
         };
@@ -411,7 +413,8 @@ impl IpcProvider {
                     collateral,
                     ip: String::new(),
                     backup_address: String::new(),
-                    lock_blocks: None,
+                    epochs: None,
+                    eots_nonces: None,
                 })
             }
         };
@@ -469,7 +472,8 @@ impl IpcProvider {
                     collateral,
                     ip: String::new(),
                     backup_address: String::new(),
-                    lock_blocks: None,
+                    epochs: None,
+                    eots_nonces: None,
                 })
             }
         };

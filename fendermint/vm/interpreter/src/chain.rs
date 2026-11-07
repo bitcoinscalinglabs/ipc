@@ -23,6 +23,7 @@ use fendermint_vm_message::{
 };
 use fendermint_vm_resolver::pool::{ResolveKey, ResolvePool};
 use fendermint_vm_topdown::proxy::IPCProviderProxyWithLatency;
+use fendermint_vm_topdown::eots::EotsTally;
 use fendermint_vm_topdown::voting::{ValidatorKey, VoteTally};
 use fendermint_vm_topdown::{
     CachedFinalityProvider, IPCParentFinality, ParentFinalityProvider, ParentViewProvider, Toggle,
@@ -47,6 +48,19 @@ pub struct ChainEnv {
     /// The parent finality provider for top down checkpoint
     pub parent_finality_provider: TopDownFinalityProvider,
     pub parent_finality_votes: VoteTally,
+    /// The EOTS vote tally, when the parent is Bitcoin
+    pub eots_votes: Option<EotsTally>,
+}
+
+/// The Bitcoin height of the parent finality in the state's latest executed block.
+fn agreed_bitcoin_height<DB>(state: &mut FvmExecState<DB>) -> anyhow::Result<u64>
+where
+    DB: Blockstore + Clone + 'static,
+{
+    let finality = GatewayCaller::<DB>::default()
+        .get_latest_parent_finality(state)
+        .context("failed to read the latest parent finality")?;
+    Ok(finality.height)
 }
 
 #[derive(Clone, Hash, PartialEq, Eq)]
@@ -76,6 +90,8 @@ pub enum ChainMessageApplyRet {
     Signed(SignedMessageApplyRes),
     /// The IPC chain message execution result
     Ipc(FvmApplyRet),
+    /// Carried EOTS votes: nothing executed in the FVM
+    Eots,
 }
 
 /// We only allow signed messages into the mempool.
@@ -113,7 +129,7 @@ where
     /// account the transactions which are part of top-down or bottom-up checkpoints, to stay within gas limits.
     async fn prepare(
         &self,
-        (chain_env, state): Self::State,
+        (chain_env, mut state): Self::State,
         mut msgs: Vec<Self::Message>,
     ) -> anyhow::Result<Vec<Self::Message>> {
         msgs = messages_selection(msgs, &state)?;
@@ -178,6 +194,22 @@ where
             })))
         }
 
+        // The EOTS votes of the heights that became final, checked against the agreed L1 state.
+        if let Some(tally) = &chain_env.eots_votes {
+            let bitcoin_height = agreed_bitcoin_height(&mut state)?;
+            match tally.agreed_state(bitcoin_height).await {
+                Ok(agreed) => {
+                    if let Some(data) = tally.proposal(&agreed) {
+                        msgs.push(ChainMessage::Ipc(IpcMessage::EotsFinality(data)));
+                    }
+                }
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    "no EOTS finality proposal: monitor unreachable or behind"
+                ),
+            }
+        }
+
         // Append at the end - if we run out of block space, these are going to be reproposed in the next block.
         msgs.extend(ckpts);
         Ok(msgs)
@@ -186,13 +218,38 @@ where
     /// Perform finality checks on top-down transactions and availability checks on bottom-up transactions.
     async fn process(
         &self,
-        (chain_env, state): Self::State,
+        (chain_env, mut state): Self::State,
         msgs: Vec<Self::Message>,
     ) -> anyhow::Result<bool> {
         let mut block_gas_usage = 0;
+        if !at_most_one_eots_finality(&msgs) {
+            tracing::error!("rejecting a proposal: a second EOTS finality message");
+            return Ok(false);
+        }
 
         for msg in msgs {
             match msg {
+                ChainMessage::Ipc(IpcMessage::EotsFinality(data)) => {
+                    let Some(tally) = &chain_env.eots_votes else {
+                        tracing::warn!("rejecting a proposal with EOTS votes: no EOTS tally");
+                        return Ok(false);
+                    };
+                    let bitcoin_height = agreed_bitcoin_height(&mut state)?;
+                    if data.bitcoin_height != bitcoin_height {
+                        tracing::error!(
+                            proposed = data.bitcoin_height,
+                            agreed = bitcoin_height,
+                            "rejecting a proposal: its EOTS votes name another Bitcoin height"
+                        );
+                        return Ok(false);
+                    }
+                    // Waits for the monitor: the decision depends on the Bitcoin height alone
+                    let agreed = tally.agreed_state_wait(bitcoin_height).await;
+                    if let Err(e) = tally.check_proposal(&data, &agreed) {
+                        tracing::error!(error = %e, "rejecting a proposal: carried EOTS votes");
+                        return Ok(false);
+                    }
+                }
                 ChainMessage::Ipc(IpcMessage::BottomUpExec(msg)) => {
                     let item = CheckpointPoolItem::BottomUp(msg);
 
@@ -307,6 +364,36 @@ where
                 IpcMessage::BottomUpExec(_) => {
                     todo!("#197: implement BottomUp checkpoint execution")
                 }
+                IpcMessage::EotsFinality(data) => {
+                    let tally = env
+                        .eots_votes
+                        .as_ref()
+                        .ok_or_else(|| anyhow!("cannot execute EOTS finality: no EOTS tally"))?;
+                    tally
+                        .execute_proposal(&data)
+                        .await
+                        .context("failed to apply carried EOTS votes")?;
+                    // The gateway keeps the subnet final height; the tally mirrors it.
+                    if let Some(carried) = data.votes.iter().map(|v| v.vote.height).max() {
+                        self.gateway_caller
+                            .set_subnet_final_height(&mut state, carried)
+                            .context("failed to record the subnet final height")?;
+                    }
+                    let final_height = self
+                        .gateway_caller
+                        .subnet_final_height(&mut state)
+                        .context("failed to read the subnet final height")?;
+                    tally
+                        .set_recorded_final(final_height)
+                        .context("failed to record the subnet final height in the tally")?;
+                    tracing::debug!(
+                        recorded_final = tally.recorded_final_height(),
+                        votes = data.votes.len(),
+                        evidence = data.evidence.len(),
+                        "chain interpreter applied EOTS finality"
+                    );
+                    Ok(((env, state), ChainMessageApplyRet::Eots))
+                }
                 IpcMessage::TopDownExec(p) => {
                     if !env.parent_finality_provider.is_enabled() {
                         bail!("cannot execute IPC top-down message: parent provider disabled");
@@ -349,7 +436,7 @@ where
                     // be _at least_ 1 height behind.
                     let (execution_fr, execution_to) = (prev_height + 1, finality.height);
 
-                    // error happens if we cannot get the validator set from ipc agent after retries
+                    // waits for as long as the monitor is unreachable or behind
                     let validator_changes = env
                         .parent_finality_provider
                         .validator_changes_from(execution_fr, execution_to)
@@ -367,7 +454,7 @@ where
                         .store_validator_changes(&mut state, validator_changes)
                         .context("failed to store validator changes")?;
 
-                    // error happens if we cannot get the cross messages from ipc agent after retries
+                    // waits for as long as the monitor is unreachable or behind
                     let msgs = env
                         .parent_finality_provider
                         .top_down_msgs_from(execution_fr, execution_to)
@@ -451,6 +538,13 @@ where
                     .update_power_table(power_updates.clone())
             })
             .await;
+            // A validator update returned at the end of subnet block `h` applies from `h + 2`,
+            // as in CometBFT.
+            if let Some(tally) = &env.eots_votes {
+                tally
+                    .update_power_table(state.block_height() as u64 + 2, power_updates)
+                    .context("failed to record the power table for EOTS votes")?;
+            }
         }
 
         Ok(((env, state), out))
@@ -496,7 +590,9 @@ where
 
                         Ok((state, Ok(ret)))
                     }
-                    IpcMessage::TopDownExec(_) | IpcMessage::BottomUpExec(_) => {
+                    IpcMessage::TopDownExec(_)
+                    | IpcMessage::BottomUpExec(_)
+                    | IpcMessage::EotsFinality(_) => {
                         // Users cannot send these messages, only validators can propose them in blocks.
                         Ok((state, Err(IllegalMessage)))
                     }
@@ -581,4 +677,30 @@ fn messages_selection<DB: Blockstore + Clone + 'static>(
     }
 
     Ok(user_msgs.into_iter().map(ChainMessage::Signed).collect())
+}
+
+/// A well-formed proposal carries at most one `EotsFinality`.
+fn at_most_one_eots_finality(msgs: &[ChainMessage]) -> bool {
+    msgs.iter()
+        .filter(|m| matches!(m, ChainMessage::Ipc(IpcMessage::EotsFinality(_))))
+        .count()
+        <= 1
+}
+
+#[cfg(test)]
+mod tests {
+    use super::at_most_one_eots_finality;
+    use fendermint_vm_message::chain::ChainMessage;
+    use fendermint_vm_message::ipc::IpcMessage;
+
+    fn eots_finality() -> ChainMessage {
+        ChainMessage::Ipc(IpcMessage::EotsFinality(Default::default()))
+    }
+
+    #[test]
+    fn a_proposal_with_two_eots_finality_messages_is_rejected() {
+        assert!(at_most_one_eots_finality(&[]));
+        assert!(at_most_one_eots_finality(&[eots_finality()]));
+        assert!(!at_most_one_eots_finality(&[eots_finality(), eots_finality()]));
+    }
 }

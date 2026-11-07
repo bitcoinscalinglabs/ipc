@@ -27,6 +27,7 @@ use fendermint_vm_interpreter::bytes::{
     BytesMessageApplyRes, BytesMessageCheckRes, BytesMessageQuery, BytesMessageQueryRes,
 };
 use fendermint_vm_interpreter::chain::{ChainEnv, ChainMessageApplyRet, IllegalMessage};
+use fendermint_vm_interpreter::fvm::state::ipc::GatewayCaller;
 use fendermint_vm_interpreter::fvm::state::{
     empty_state_tree, CheckStateRef, FvmExecState, FvmQueryState, FvmStateParams,
     FvmUpdatableParams,
@@ -434,6 +435,15 @@ where
         Ok(())
     }
 
+    /// The subnet final height the gateway holds in the committed state, `None` when the
+    /// state cannot be read.
+    fn gateway_final_height(&self) -> Option<u64> {
+        let mut state = self.read_only_view(None).ok().flatten()?;
+        GatewayCaller::default()
+            .subnet_final_height(&mut state)
+            .ok()
+    }
+
     /// Retrieves a validator from the cache, initializing it if necessary.
     async fn get_validator_from_cache(&self, id: &tendermint::account::Id) -> Result<PublicKey> {
         let mut cache = self.validators_cache.lock().await;
@@ -563,12 +573,28 @@ where
 
         self.set_committed_state(app_state)?;
 
+        // The genesis validators count toward EOTS finality from the first block on.
+        if let Some(tally) = &self.chain_env.eots_votes {
+            let mut state = self
+                .read_only_view(None)?
+                .context("genesis state not queryable")?;
+            let (_, validators) = GatewayCaller::default().current_power_table(&mut state)?;
+            crate::eots::set_genesis_power_table(tally, validators)?;
+        }
+
         Ok(response)
     }
 
     /// Query the application for data at the current or past height.
     #[instrument(level = "trace", skip(self))]
     async fn query(&self, request: request::Query) -> AbciResult<response::Query> {
+        if request.path == crate::eots::QUERY_PATH {
+            return Ok(crate::eots::answer_query(
+                self.chain_env.eots_votes.as_ref(),
+                self.gateway_final_height(),
+                &request.data,
+            ));
+        }
         let db = self.state_store_clone();
         let height = FvmQueryHeight::from(request.height.value());
         let (state_params, block_height) = self.state_params_at_height(height)?;
@@ -794,6 +820,12 @@ where
             .get_validator_from_cache(&request.header.proposer_address)
             .await?;
 
+        if let Some(tally) = &self.chain_env.eots_votes {
+            tally
+                .add_block(block_height as u64, block_hash)
+                .context("failed to record the block hash for EOTS votes")?;
+        }
+
         let state = FvmExecState::new(db, self.multi_engine.as_ref(), block_height, state_params)
             .context("error creating new state")?
             .with_block_hash(block_hash)
@@ -833,6 +865,7 @@ where
                     to_deliver_tx(ret.fvm, ret.domain_hash, block_hash)
                 }
                 ChainMessageApplyRet::Ipc(ret) => to_deliver_tx(ret, None, block_hash),
+                ChainMessageApplyRet::Eots => response::DeliverTx::default(),
             },
         };
 
@@ -977,6 +1010,10 @@ where
             height: block_height,
             app_hash: HexEncodableBlockHash(app_hash.clone().into()),
         });
+
+        if let Some(tally) = &self.chain_env.eots_votes {
+            tally.notify_committed(block_height);
+        }
 
         Ok(response::Commit {
             data: app_hash.into(),

@@ -82,6 +82,7 @@ impl JoinSubnet {
                 None,
                 None,
                 None,
+                None,
             )
             .await?;
         println!("joined at epoch: {epoch}");
@@ -118,6 +119,7 @@ impl JoinSubnet {
                 token_amount_from_satoshi(btc_args.collateral),
                 Some(btc_args.ip.clone()),
                 Some(btc_args.backup_address.clone()),
+                None,
                 None,
             )
             .await?;

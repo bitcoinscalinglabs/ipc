@@ -183,6 +183,61 @@ impl<DB: Blockstore + Clone> GatewayCaller<DB> {
         self.topdown.call(state, |c| c.apply_finality_changes())
     }
 
+    /// The bottom-up checkpoint created at `height`, `None` where there is none.
+    pub fn bottom_up_checkpoint(
+        &self,
+        state: &mut FvmExecState<DB>,
+        height: u64,
+    ) -> anyhow::Result<Option<getter::BottomUpCheckpoint>> {
+        let checkpoint = self.getter.call(state, |c| {
+            c.bottom_up_checkpoint(ethers::types::U256::from(height))
+        })?;
+        Ok((checkpoint.block_height.as_u64() != 0).then_some(checkpoint))
+    }
+
+    /// The subnet final height the gateway holds, 0 before the first `EotsFinality`.
+    pub fn subnet_final_height(&self, state: &mut FvmExecState<DB>) -> anyhow::Result<u64> {
+        Ok(self
+            .getter
+            .call(state, |c| c.subnet_final_height())?
+            .as_u64())
+    }
+
+    /// Raises the subnet final height the gateway holds to `height`; a lower value changes nothing.
+    pub fn set_subnet_final_height(
+        &self,
+        state: &mut FvmExecState<DB>,
+        height: u64,
+    ) -> anyhow::Result<()> {
+        self.checkpointing.call(state, |c| {
+            c.set_subnet_final_height(ethers::types::U256::from(height))
+        })
+    }
+
+    /// Whether `signatory` has added a Bitcoin signature for the checkpoint at `height`.
+    pub fn has_bitcoin_checkpoint_signature(
+        &self,
+        state: &mut FvmExecState<DB>,
+        height: u64,
+        signatory: EthAddress,
+    ) -> anyhow::Result<bool> {
+        self.checkpointing.call(state, |c| {
+            c.has_bitcoin_checkpoint_signature(ethers::types::U256::from(height), signatory.into())
+        })
+    }
+
+    /// The power table of the configuration before the current one.
+    pub fn last_power_table(
+        &self,
+        state: &mut FvmExecState<DB>,
+    ) -> anyhow::Result<Vec<Validator<Power>>> {
+        let membership = self
+            .getter
+            .call(state, |c| c.get_last_membership())
+            .context("failed to get last membership")?;
+        Ok(membership_to_power_table(&membership, state.power_scale()))
+    }
+
     /// Get the currently active validator set.
     pub fn current_membership(
         &self,
@@ -289,31 +344,54 @@ impl<DB: Blockstore + Clone> GatewayCaller<DB> {
         Ok(calldata)
     }
 
-    pub fn add_bitcoin_bootstrap_handover_signature_calldata(
-        &self,
-        handover_psbt: ipc_api::checkpoint::BitcoinHandoverSignature,
-    ) -> anyhow::Result<et::Bytes> {
-        let unsigned_psbt = handover_psbt.unsigned_psbt.clone().decode()?;
-
-        tracing::debug!(
-            "Encoded arguments to add_bitcoin_bootstrap_handover_signature(): {:?}, {:?}",
-            handover_psbt.unsigned_psbt.0,
-            hex::encode(handover_psbt.signature.clone()),
-        );
-
-        let call = self
+    /// The length of the gateway's slash pre-signature list.
+    pub fn slash_pre_signature_count(&self, state: &mut FvmExecState<DB>) -> anyhow::Result<u64> {
+        let posted = self
             .checkpointing
-            .contract()
-            .add_bitcoin_bootstrap_handover_signature(
-                et::Bytes::from(unsigned_psbt),
-                et::Bytes::from(handover_psbt.signature.clone()),
-            );
+            .call(state, |c| c.get_slash_pre_signatures())?;
+        Ok(posted.len() as u64)
+    }
 
-        let calldata = call.calldata().ok_or_else(|| {
-            anyhow!("no calldata for adding bitcoin bootstrap-handover signature")
-        })?;
+    /// Every slash pre-signature posted on the subnet.
+    pub fn slash_pre_signatures(
+        &self,
+        state: &mut FvmExecState<DB>,
+    ) -> anyhow::Result<Vec<ipc_api::eots::SlashPreSignature>> {
+        let posted = self
+            .checkpointing
+            .call(state, |c| c.get_slash_pre_signatures())?;
+        Ok(posted
+            .into_iter()
+            .map(|p| {
+                let mut txid = p.txid;
+                txid.reverse();
+                ipc_api::eots::SlashPreSignature {
+                    txid: hex::encode(txid),
+                    vout: p.vout,
+                    index: p.index,
+                    signature: p.signature.to_vec(),
+                }
+            })
+            .collect())
+    }
 
-        Ok(calldata)
+    pub fn add_slash_pre_signature_calldata(
+        &self,
+        presig: &ipc_api::eots::SlashPreSignature,
+    ) -> anyhow::Result<et::Bytes> {
+        let mut txid: [u8; 32] = hex::decode(&presig.txid)
+            .ok()
+            .and_then(|b| b.try_into().ok())
+            .ok_or_else(|| anyhow!("the txid is not 32 bytes in hex"))?;
+        txid.reverse();
+        let call = self.checkpointing.contract().add_slash_pre_signature(
+            txid,
+            presig.vout,
+            presig.index,
+            et::Bytes::from(presig.signature.clone()),
+        );
+        call.calldata()
+            .ok_or_else(|| anyhow!("no calldata for adding a slash pre-signature"))
     }
 
     /// Commit the parent finality to the gateway and returns the previously committed finality.

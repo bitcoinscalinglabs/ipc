@@ -23,11 +23,12 @@ use fendermint_vm_snapshot::{SnapshotManager, SnapshotParams};
 use fendermint_vm_topdown::observe::register_metrics as register_topdown_metrics;
 use fendermint_vm_topdown::proxy::{IPCProviderProxy, IPCProviderProxyWithLatency};
 use fendermint_vm_topdown::sync::launch_polling_syncer;
+use fendermint_vm_topdown::eots::{EotsTally, VoteOutcome as EotsVoteOutcome};
 use fendermint_vm_topdown::voting::{publish_vote_loop, Error as VoteError, VoteTally};
 use fendermint_vm_topdown::{CachedFinalityProvider, IPCParentFinality, Toggle};
 use fvm_shared::address::{current_network, Address, Network};
-use ipc_api::subnet_id::NetworkType;
-use ipc_ipld_resolver::{Event as ResolverEvent, VoteRecord};
+use ipc_api::subnet_id::{NetworkType, SubnetID};
+use ipc_ipld_resolver::{Client, Event as ResolverEvent, SignedVoteRecord};
 use ipc_observability::observe::register_metrics as register_default_metrics;
 use ipc_provider::config::subnet::{BTCSubnet, SubnetConfig};
 use ipc_provider::IpcProvider;
@@ -54,7 +55,8 @@ namespaces! {
         app,
         state_hist,
         state_store,
-        bit_store
+        bit_store,
+        eots
     }
 }
 
@@ -146,9 +148,22 @@ async fn run(settings: Settings) -> anyhow::Result<()> {
     let ipc_provider_proxy_with_latency =
         Arc::new(IPCProviderProxyWithLatency::new(ipc_provider_proxy));
 
-    let interpreter = match own_subnet_id.parent_network_type() {
-        // If the parent subnet is a bitcoin, we need to give the interpreter
-        // the manager to use for the bitcoin parent.
+    let ns = Namespaces::default();
+    let db = open_db(&settings, &ns).context("error opening DB")?;
+
+    // Blockstore for actors.
+    let state_store =
+        NamespaceBlockstore::new(db.clone(), ns.state_store).context("error creating state DB")?;
+
+    let checkpoint_pool = CheckpointPool::new();
+    let parent_finality_votes = VoteTally::empty();
+
+    tracing::info!("settings = {settings:#?}");
+
+    let topdown_enabled = settings.topdown_enabled();
+    tracing::info!("topdown_enabled = {topdown_enabled}");
+
+    let btc_manager = match own_subnet_id.parent_network_type() {
         Some(ipc_api::subnet_id::NetworkType::Btc) => {
             let connection = ipc_provider
                 .get_connection(
@@ -157,12 +172,40 @@ async fn run(settings: Settings) -> anyhow::Result<()> {
                         .ok_or_else(|| anyhow!("parent subnet not found"))?,
                 )
                 .context("failed to get connection to bitcoin parent")?;
-            let manager = connection
-                .manager()
-                .as_any()
-                .downcast_ref::<ipc_provider::manager::BtcSubnetManager>()
-                .context("a manager other than BtcSubnetManager was used for bitcoin parent")?
-                .clone();
+            Some(
+                connection
+                    .manager()
+                    .as_any()
+                    .downcast_ref::<ipc_provider::manager::BtcSubnetManager>()
+                    .context("a manager other than BtcSubnetManager was used for bitcoin parent")?
+                    .clone(),
+            )
+        }
+        _ => None,
+    };
+
+    // The EOTS round runs on subnets with a Bitcoin parent whose monitor the node reaches.
+    let eots_votes = match (&btc_manager, topdown_enabled) {
+        (Some(manager), true) => {
+            let store = fendermint_app::eots::new_store::<_, AppStore>(db.clone(), ns.eots.clone());
+            Some(
+                EotsTally::new(
+                    store,
+                    manager.clone(),
+                    own_subnet_id.clone(),
+                    Vec::new(),
+                    fendermint_app::eots::envelope_check(own_subnet_id.clone()),
+                )
+                .context("failed to create the EOTS tally")?,
+            )
+        }
+        _ => None,
+    };
+
+    let interpreter = match btc_manager.clone() {
+        // If the parent subnet is a bitcoin, we need to give the interpreter
+        // the manager to use for the bitcoin parent.
+        Some(manager) => {
             let interpreter =
                 FvmMessageInterpreter::<NamespaceBlockstore, _>::new_for_bitcoin_parent(
                     tendermint_client.clone(),
@@ -174,12 +217,13 @@ async fn run(settings: Settings) -> anyhow::Result<()> {
                     own_subnet_id.clone(),
                     manager,
                 )
+                .with_eots_tally(eots_votes.clone())
                 .with_push_chain_meta(testing_settings.map_or(true, |t| t.push_chain_meta));
             tracing::info!("created interpreter with subnet_id: {:?}", own_subnet_id);
             interpreter
         }
         // If the parent subnet is not bitcoin, we can use the standard interpreter.
-        _ => {
+        None => {
             let interpreter = FvmMessageInterpreter::<NamespaceBlockstore, _>::new(
                 tendermint_client.clone(),
                 validator_ctx,
@@ -203,20 +247,7 @@ async fn run(settings: Settings) -> anyhow::Result<()> {
         settings.abci.block_max_msgs,
     );
 
-    let ns = Namespaces::default();
-    let db = open_db(&settings, &ns).context("error opening DB")?;
 
-    // Blockstore for actors.
-    let state_store =
-        NamespaceBlockstore::new(db.clone(), ns.state_store).context("error creating state DB")?;
-
-    let checkpoint_pool = CheckpointPool::new();
-    let parent_finality_votes = VoteTally::empty();
-
-    tracing::info!("settings = {settings:#?}");
-
-    let topdown_enabled = settings.topdown_enabled();
-    tracing::info!("topdown_enabled = {topdown_enabled}");
     // tracing::info!("temporarily disabling topdown finality");
     // let topdown_enabled = false;
 
@@ -237,6 +268,20 @@ async fn run(settings: Settings) -> anyhow::Result<()> {
         client
             .add_provided_subnet(own_subnet_id.clone())
             .context("error adding own provided subnet.")?;
+
+        let evidence_publisher = validator_keypair
+            .clone()
+            .map(|key| (key, own_subnet_id.clone(), client.clone()));
+
+        if let (Some(tally), Some(key)) = (&eots_votes, &validator_keypair) {
+            tracing::info!("starting the EOTS vote loop...");
+            tokio::spawn(fendermint_app::eots::vote_loop(
+                tally.clone(),
+                key.clone(),
+                own_subnet_id.clone(),
+                client.clone(),
+            ));
+        }
 
         let resolver = IpldResolver::new(
             client.clone(),
@@ -273,8 +318,16 @@ async fn run(settings: Settings) -> anyhow::Result<()> {
         tracing::info!("subscribing to gossip...");
         let rx = service.subscribe();
         let parent_finality_votes = parent_finality_votes.clone();
+        let eots_votes = eots_votes.clone();
         tokio::spawn(async move {
-            dispatch_resolver_events(rx, parent_finality_votes, topdown_enabled).await;
+            dispatch_resolver_events(
+                rx,
+                parent_finality_votes,
+                eots_votes,
+                evidence_publisher,
+                topdown_enabled,
+            )
+            .await;
         });
 
         tracing::info!("starting the IPLD Resolver Service...");
@@ -362,9 +415,21 @@ async fn run(settings: Settings) -> anyhow::Result<()> {
             checkpoint_pool,
             parent_finality_provider: parent_finality_provider.clone(),
             parent_finality_votes: parent_finality_votes.clone(),
+            eots_votes: eots_votes.clone(),
         },
         snapshots,
     )?;
+
+    if let Some(tally) = &eots_votes {
+        let seeded = fendermint_app::eots::seed_power_table(
+            tally,
+            &AppParentFinalityQuery::new(app.clone()),
+        )
+        .context("failed to seed the EOTS power table")?;
+        if !seeded {
+            info!("EOTS power table: no ledger state yet, seeded at genesis");
+        }
+    }
 
     if let Some((agent_proxy, config)) = ipc_tuple {
         let app_parent_finality_query = AppParentFinalityQuery::new(app.clone());
@@ -571,6 +636,8 @@ fn to_address(sk: &SecretKey, kind: &AccountKind) -> anyhow::Result<Address> {
 async fn dispatch_resolver_events(
     mut rx: tokio::sync::broadcast::Receiver<ResolverEvent<AppVote>>,
     parent_finality_votes: VoteTally,
+    eots_votes: Option<EotsTally>,
+    evidence_publisher: Option<EvidencePublisher>,
     topdown_enabled: bool,
 ) {
     loop {
@@ -578,7 +645,14 @@ async fn dispatch_resolver_events(
             Ok(event) => match event {
                 ResolverEvent::ReceivedPreemptive(_, _) => {}
                 ResolverEvent::ReceivedVote(vote) => {
-                    dispatch_vote(*vote, &parent_finality_votes, topdown_enabled).await;
+                    dispatch_vote(
+                        *vote,
+                        &parent_finality_votes,
+                        eots_votes.as_ref(),
+                        evidence_publisher.as_ref(),
+                        topdown_enabled,
+                    )
+                    .await;
                 }
             },
             Err(RecvError::Lagged(n)) => {
@@ -592,12 +666,76 @@ async fn dispatch_resolver_events(
     }
 }
 
+/// The key, subnet and gossip client with which a node publishes evidence it first holds.
+type EvidencePublisher = (libp2p::identity::Keypair, SubnetID, Client<AppVote>);
+
+async fn publish_evidence(
+    tally: &EotsTally,
+    publisher: Option<&EvidencePublisher>,
+    pk_eots: &[u8; 32],
+) {
+    let (Some((key, subnet_id, client)), Some((a, b))) = (publisher, tally.evidence_for(pk_eots))
+    else {
+        return;
+    };
+    fendermint_app::eots::publish_vote(client, key, subnet_id, AppVote::EotsEvidence(a, b)).await;
+}
+
+/// A vote that cannot be valid is an attack or a monitor discrepancy: an operator must see it.
+fn log_dropped_vote(e: &fendermint_vm_topdown::eots::VoteError, what: &'static str) {
+    if e.never_valid() {
+        tracing::error!(error = %e, what);
+    } else {
+        tracing::debug!(error = %e, what);
+    }
+}
+
 async fn dispatch_vote(
-    vote: VoteRecord<AppVote>,
+    signed: SignedVoteRecord<AppVote>,
     parent_finality_votes: &VoteTally,
+    eots_votes: Option<&EotsTally>,
+    evidence_publisher: Option<&EvidencePublisher>,
     topdown_enabled: bool,
 ) {
+    let signature = signed.signature();
+    let vote = signed.into_record();
     match vote.content {
+        AppVote::Eots(eots_vote) => {
+            let Some(tally) = eots_votes else { return };
+            let Some(validator) = fendermint_vm_topdown::eots::try_key_bytes(&vote.public_key)
+            else {
+                tracing::debug!("EOTS vote dropped: the sender key is not secp256k1");
+                return;
+            };
+            let validator = validator.to_vec();
+            let pk_eots = eots_vote.pk_eots;
+            let vote = ipc_eots::ValidatorVote {
+                validator,
+                vote: eots_vote,
+                timestamp: vote.timestamp.into(),
+                signature,
+            };
+            match tally.add_vote(vote, None) {
+                Ok(EotsVoteOutcome::Evidence) => {
+                    publish_evidence(tally, evidence_publisher, &pk_eots).await
+                }
+                Ok(outcome) => tracing::debug!(?outcome, "EOTS vote handled"),
+                Err(e) => log_dropped_vote(&e, "EOTS vote dropped"),
+            }
+        }
+        AppVote::EotsEvidence(a, b) => {
+            let Some(tally) = eots_votes else { return };
+            let pk_eots = a.vote.pk_eots;
+            for v in [a, b] {
+                match tally.add_vote(v, None) {
+                    Ok(EotsVoteOutcome::Evidence) => {
+                        publish_evidence(tally, evidence_publisher, &pk_eots).await
+                    }
+                    Ok(_) => {}
+                    Err(e) => log_dropped_vote(&e, "EOTS evidence vote dropped"),
+                }
+            }
+        }
         AppVote::ParentFinality(f) => {
             if !topdown_enabled {
                 tracing::debug!("ignoring vote; topdown disabled");
@@ -630,3 +768,6 @@ async fn dispatch_vote(
         }
     }
 }
+#[cfg(test)]
+#[path = "run_spec_tests.rs"]
+mod spec_tests;

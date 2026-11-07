@@ -239,7 +239,7 @@ async fn single_bootstrap_publish_receive_vote() {
         .expect("error receiving vote");
 
     if let Event::ReceivedVote(v) = event {
-        assert_eq!(&*v, vote.record());
+        assert_eq!(v.record(), vote.record());
     } else {
         panic!("unexpected {event:?}")
     }

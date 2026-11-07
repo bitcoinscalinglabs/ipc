@@ -28,6 +28,10 @@ pub enum IpcMessage {
     /// A top-down checkpoint parent finality proposal. This proposal should contain the latest parent
     /// state that to be checked and voted by validators.
     TopDownExec(ParentFinality),
+
+    /// The EOTS votes of the heights that become recorded final with this block, and double-vote
+    /// evidence.
+    EotsFinality(ipc_eots::EotsFinalityData),
 }
 
 /// A message relayed by a user on the current subnet.

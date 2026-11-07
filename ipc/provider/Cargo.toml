@@ -27,6 +27,7 @@ num-traits = { workspace = true }
 num-derive = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
+ipc-eots = { workspace = true }
 serde_bytes = { workspace = true }
 serde_json = { workspace = true }
 serde_tuple = { workspace = true }
