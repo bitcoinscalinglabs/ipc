@@ -260,57 +260,32 @@ library LibGateway {
 
     /// @notice Commits a new cross-net message to a message batch for execution
     /// @param crossMessage - the cross message to be committed
-    function commitBottomUpMsg(IpcEnvelope memory crossMessage) internal {
+    /// @return epoch - the height of the checkpoint that carries the message
+    function commitBottomUpMsg(IpcEnvelope memory crossMessage) internal returns (uint256 epoch) {
         GatewayActorStorage storage s = LibGatewayActorStorage.appStorage();
-        uint256 epoch = getNextEpoch(block.number, s.bottomUpCheckPeriod);
+        epoch = getNextEpoch(block.number, s.bottomUpCheckPeriod);
 
         // assign nonce to the message.
         crossMessage.nonce = s.bottomUpNonce;
         s.bottomUpNonce += 1;
 
-        // populate the batch for that epoch
+        // populate the batch for that epoch; while it is full, the message waits for the next checkpoint
         (bool exists, BottomUpMsgBatch storage batch) = LibGateway.getBottomUpMsgBatch(epoch);
+        while (exists && batch.msgs.length == s.maxMsgsPerBottomUpBatch) {
+            epoch += s.bottomUpCheckPeriod;
+            (exists, batch) = LibGateway.getBottomUpMsgBatch(epoch);
+        }
         if (!exists) {
             batch.subnetID = s.networkName;
             batch.blockHeight = epoch;
             // we need to use push here to initialize the array.
             batch.msgs.push(crossMessage);
-            return;
+            return epoch;
         }
 
-        // if the maximum size was already achieved emit already the event
-        // and re-assign the batch to the current epoch.
-        if (batch.msgs.length == s.maxMsgsPerBottomUpBatch) {
-            // copy the batch with max messages into the new cut.
-            uint256 epochCut = block.number;
-            BottomUpMsgBatch memory newBatch = BottomUpMsgBatch({
-                subnetID: s.networkName,
-                blockHeight: epochCut,
-                msgs: new IpcEnvelope[](batch.msgs.length)
-            });
-
-            uint256 msgLength = batch.msgs.length;
-            for (uint256 i; i < msgLength; ) {
-                newBatch.msgs[i] = batch.msgs[i];
-                unchecked {
-                    ++i;
-                }
-            }
-
-            // emit event with the next batch ready to sign quorum over.
-            emit NewBottomUpMsgBatch(epochCut);
-
-            // Empty the messages of existing batch with epoch and start populating with the new message.
-            delete batch.msgs;
-            // need to push here to avoid a copy from memory to storage
-            batch.msgs.push(crossMessage);
-
-            LibGateway.storeBottomUpMsgBatch(newBatch);
-        } else {
-            // we append the new message normally, and wait for the batch period
-            // to trigger the cutting of the batch.
-            batch.msgs.push(crossMessage);
-        }
+        // we append the new message normally, and wait for the batch period
+        // to trigger the cutting of the batch.
+        batch.msgs.push(crossMessage);
     }
 
     /// @notice returns the subnet created by a validator

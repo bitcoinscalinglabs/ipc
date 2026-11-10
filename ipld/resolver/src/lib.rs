@@ -23,5 +23,4 @@ pub use behaviour::{ContentConfig, DiscoveryConfig, MembershipConfig, NetworkCon
 pub use client::{Client, Resolver};
 pub use service::{Config, ConnectionConfig, Event, NoKnownPeers, Service};
 pub use timestamp::Timestamp;
-pub use signed_record::SignedRecord;
 pub use vote_record::{SignedVoteRecord, ValidatorKey, VoteRecord};

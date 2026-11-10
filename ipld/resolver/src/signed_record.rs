@@ -82,7 +82,6 @@ where
         &self.record
     }
 
-    /// The signature of the envelope.
     pub fn signature(&self) -> Vec<u8> {
         envelope_signature(&self.envelope.clone().into_protobuf_encoding())
     }
@@ -143,7 +142,6 @@ fn encode_envelope(key: &[u8], payload_type: &[u8], payload: &[u8], signature: &
     buf
 }
 
-/// The signature field of an encoded envelope.
 fn envelope_signature(bytes: &[u8]) -> Vec<u8> {
     let mut pos = 0;
     while let Some(tag) = get_varint(bytes, &mut pos) {

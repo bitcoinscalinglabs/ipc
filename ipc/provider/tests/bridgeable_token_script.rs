@@ -9,7 +9,7 @@ use tempfile::{tempdir, TempDir};
 
 const MOCK_FOUNDRY: &str = r#"#!/usr/bin/env bash
 set -euo pipefail
-state="$SPEC_STATE"
+state="$MOCK_STATE"
 tool="${0##*/}"
 printf '%s %s\n' "$tool" "${1:-}" >> "$state/trace"
 actual=$(cat "$state/actual")
@@ -23,8 +23,8 @@ for ((i = 0; i < ${#args[@]}; i++)); do
 done
 
 advance_nonce() {
-    if [[ "$SPEC_RACE_PHASE" == "$1" ]] \
-        && { [[ "$SPEC_RACE_MODE" == always ]] || [[ ! -e "$state/raced" ]]; }; then
+    if [[ "$MOCK_RACE_PHASE" == "$1" ]] \
+        && { [[ "$MOCK_RACE_MODE" == always ]] || [[ ! -e "$state/raced" ]]; }; then
         actual=$((actual + 2))
         echo "$actual" > "$state/actual"
         echo "$actual" > "$state/visible"
@@ -34,7 +34,7 @@ advance_nonce() {
         echo "expected sequence $actual, got $requested_nonce" >&2
         exit 2
     fi
-    if [[ "$SPEC_SEND_FAILURE" == "reject_$1" ]]; then
+    if [[ "$MOCK_SEND_FAILURE" == "reject_$1" ]]; then
         echo "execution reverted: transaction rejected" >&2
         exit 2
     fi
@@ -42,10 +42,10 @@ advance_nonce() {
     echo "$((actual + 1))" > "$state/actual"
     echo "$1" > "$state/phase"
     echo 0 > "$state/polls"
-    if [[ "$SPEC_LAG_PHASE" != "$1" ]]; then
+    if [[ "$MOCK_LAG_PHASE" != "$1" ]]; then
         echo "$((actual + 1))" > "$state/visible"
     fi
-    if [[ "$SPEC_SEND_FAILURE" == "transport_$1" ]]; then
+    if [[ "$MOCK_SEND_FAILURE" == "transport_$1" ]]; then
         echo "connection reset by peer after submission" >&2
         exit 3
     fi
@@ -77,22 +77,22 @@ case "$1" in
         ;;
     receipt)
         phase=$(cat "$state/phase")
-        [[ "$SPEC_RECEIPT_MODE" != rpc_failure && "$SPEC_RECEIPT_MODE" != "rpc_failure_$phase" ]] || exit 3
-        if [[ "$SPEC_RECEIPT_MODE" == "revert_$phase" ]]; then
-            printf '%s\n' "$SPEC_FAILURE_STATUS"
+        [[ "$MOCK_RECEIPT_MODE" != rpc_failure && "$MOCK_RECEIPT_MODE" != "rpc_failure_$phase" ]] || exit 3
+        if [[ "$MOCK_RECEIPT_MODE" == "revert_$phase" ]]; then
+            printf '%s\n' "$MOCK_FAILURE_STATUS"
         else
-            printf '%s\n' "$SPEC_SUCCESS_STATUS"
+            printf '%s\n' "$MOCK_SUCCESS_STATUS"
         fi
         ;;
-    tx) print_nonce "$(cat "$state/tx_nonce")" "$SPEC_TX_NONCE_FORMAT" ;;
+    tx) print_nonce "$(cat "$state/tx_nonce")" "$MOCK_TX_NONCE_FORMAT" ;;
     nonce)
         polls=$(cat "$state/polls")
-        if [[ "$(cat "$state/phase")" == "$SPEC_LAG_PHASE" ]] && (( polls < 2 )); then
+        if [[ "$(cat "$state/phase")" == "$MOCK_LAG_PHASE" ]] && (( polls < 2 )); then
             echo "$((polls + 1))" > "$state/polls"
         else
             echo "$actual" > "$state/visible"
         fi
-        print_nonce "$(cat "$state/visible")" "$SPEC_ACCOUNT_NONCE_FORMAT"
+        print_nonce "$(cat "$state/visible")" "$MOCK_ACCOUNT_NONCE_FORMAT"
         ;;
     *) exit 64 ;;
 esac
@@ -170,16 +170,16 @@ impl Deployment {
                 "--broadcast",
             ])
             .env("PATH", env::join_paths(paths).unwrap())
-            .env("SPEC_STATE", root.join("state"))
-            .env("SPEC_LAG_PHASE", lag_phase)
-            .env("SPEC_RECEIPT_MODE", receipt_mode)
-            .env("SPEC_SUCCESS_STATUS", "true")
-            .env("SPEC_FAILURE_STATUS", "false")
-            .env("SPEC_TX_NONCE_FORMAT", "decimal")
-            .env("SPEC_ACCOUNT_NONCE_FORMAT", "decimal")
-            .env("SPEC_RACE_PHASE", "none")
-            .env("SPEC_RACE_MODE", "once")
-            .env("SPEC_SEND_FAILURE", "none")
+            .env("MOCK_STATE", root.join("state"))
+            .env("MOCK_LAG_PHASE", lag_phase)
+            .env("MOCK_RECEIPT_MODE", receipt_mode)
+            .env("MOCK_SUCCESS_STATUS", "true")
+            .env("MOCK_FAILURE_STATUS", "false")
+            .env("MOCK_TX_NONCE_FORMAT", "decimal")
+            .env("MOCK_ACCOUNT_NONCE_FORMAT", "decimal")
+            .env("MOCK_RACE_PHASE", "none")
+            .env("MOCK_RACE_MODE", "once")
+            .env("MOCK_SEND_FAILURE", "none")
             .envs(overrides.iter().copied())
             .output()
             .unwrap()
@@ -199,7 +199,6 @@ fn assert_success(output: &Output) {
     );
 }
 
-// ipc-cli.md, Transfer an ERC20 token to another subnet: registration must complete before use.
 #[test]
 fn registration_waits_for_the_deployment_nonce_to_be_visible() {
     let deployment = Deployment::new();
@@ -209,7 +208,6 @@ fn registration_waits_for_the_deployment_nonce_to_be_visible() {
     assert!(before_send.matches("cast nonce").count() >= 3);
 }
 
-// ipc-cli.md, Transfer an ERC20 token to another subnet: consecutive registrations must be usable.
 #[test]
 fn consecutive_deployments_wait_for_the_registration_nonce_to_be_visible() {
     let deployment = Deployment::new();
@@ -222,12 +220,11 @@ fn consecutive_deployments_wait_for_the_registration_nonce_to_be_visible() {
     );
 }
 
-// ipc-cli.md, Transfer an ERC20 token to another subnet: checkpoint signing must not prevent registration.
 #[test]
 fn checkpoint_nonce_races_retry_only_the_rejected_transaction() {
     for phase in ["deploy", "register"] {
         let deployment = Deployment::new();
-        let output = deployment.run_with_env("none", "success", &[("SPEC_RACE_PHASE", phase)]);
+        let output = deployment.run_with_env("none", "success", &[("MOCK_RACE_PHASE", phase)]);
         assert_success(&output);
         let trace = deployment.trace();
         assert_eq!(
@@ -245,7 +242,6 @@ fn checkpoint_nonce_races_retry_only_the_rejected_transaction() {
     }
 }
 
-// ipc-cli.md, Common behaviour / Errors: repeated sequence rejection must stop without claiming success.
 #[test]
 fn persistent_nonce_contention_has_a_bounded_retry_count() {
     for phase in ["deploy", "register"] {
@@ -253,7 +249,7 @@ fn persistent_nonce_contention_has_a_bounded_retry_count() {
         let output = deployment.run_with_env(
             "none",
             "success",
-            &[("SPEC_RACE_PHASE", phase), ("SPEC_RACE_MODE", "always")],
+            &[("MOCK_RACE_PHASE", phase), ("MOCK_RACE_MODE", "always")],
         );
         assert!(!output.status.success());
         let trace = deployment.trace();
@@ -270,14 +266,14 @@ fn persistent_nonce_contention_has_a_bounded_retry_count() {
     }
 }
 
-// ipc-cli.md, Common behaviour / Errors: reverts and ambiguous submission errors must not resend transactions.
 #[test]
 fn non_sequence_errors_do_not_retry_or_redeploy() {
     for phase in ["deploy", "register"] {
         for failure in ["reject", "transport"] {
             let deployment = Deployment::new();
             let mode = format!("{failure}_{phase}");
-            let output = deployment.run_with_env("none", "success", &[("SPEC_SEND_FAILURE", &mode)]);
+            let output =
+                deployment.run_with_env("none", "success", &[("MOCK_SEND_FAILURE", &mode)]);
             assert!(!output.status.success());
             let trace = deployment.trace();
             assert_eq!(trace.matches("forge create").count(), 1);
@@ -291,7 +287,6 @@ fn non_sequence_errors_do_not_retry_or_redeploy() {
     }
 }
 
-// ipc-cli.md, Transfer an ERC20 token to another subnet: successful receipts permit registration.
 #[test]
 fn successful_cast_receipt_formats_are_accepted() {
     for status in [
@@ -306,7 +301,7 @@ fn successful_cast_receipt_formats_are_accepted() {
         "\t1 (success) \r\n",
     ] {
         let deployment = Deployment::new();
-        let output = deployment.run_with_env("none", "success", &[("SPEC_SUCCESS_STATUS", status)]);
+        let output = deployment.run_with_env("none", "success", &[("MOCK_SUCCESS_STATUS", status)]);
         assert_success(&output);
         assert_eq!(deployment.trace().matches("cast receipt").count(), 2);
         assert!(String::from_utf8_lossy(&output.stdout)
@@ -314,7 +309,6 @@ fn successful_cast_receipt_formats_are_accepted() {
     }
 }
 
-// ipc-cli.md, Common behaviour / Errors: failed or unrecognized receipts must stop either phase.
 #[test]
 fn failed_and_malformed_receipt_formats_are_rejected() {
     for status in [
@@ -344,7 +338,7 @@ fn failed_and_malformed_receipt_formats_are_rejected() {
             let output = deployment.run_with_env(
                 "none",
                 &format!("revert_{phase}"),
-                &[("SPEC_FAILURE_STATUS", status)],
+                &[("MOCK_FAILURE_STATUS", status)],
             );
             assert!(
                 !output.status.success(),
@@ -361,7 +355,6 @@ fn failed_and_malformed_receipt_formats_are_rejected() {
     }
 }
 
-// ipc-cli.md, Common behaviour / Errors: receipt RPC failures must stop either phase.
 #[test]
 fn receipt_rpc_failures_are_rejected_for_both_transactions() {
     for phase in ["deploy", "register"] {
@@ -377,7 +370,6 @@ fn receipt_rpc_failures_are_rejected_for_both_transactions() {
     }
 }
 
-// ipc-cli.md, Transfer an ERC20 token to another subnet: nonce waits must accept cast numeric output.
 #[test]
 fn nonce_waits_accept_decimal_and_hex_output() {
     for tx_format in ["decimal", "hex"] {
@@ -385,8 +377,8 @@ fn nonce_waits_accept_decimal_and_hex_output() {
             for phase in ["deploy", "register"] {
                 let deployment = Deployment::new();
                 let overrides = [
-                    ("SPEC_TX_NONCE_FORMAT", tx_format),
-                    ("SPEC_ACCOUNT_NONCE_FORMAT", account_format),
+                    ("MOCK_TX_NONCE_FORMAT", tx_format),
+                    ("MOCK_ACCOUNT_NONCE_FORMAT", account_format),
                 ];
                 assert_success(&deployment.run_with_env(phase, "success", &overrides));
                 assert_success(&deployment.run_with_env(phase, "success", &overrides));
@@ -396,12 +388,11 @@ fn nonce_waits_accept_decimal_and_hex_output() {
     }
 }
 
-// ipc-cli.md, Common behaviour / Errors: an unavailable or invalid transaction nonce must stop use.
 #[test]
 fn invalid_transaction_nonce_output_stops_registration() {
     for nonce in ["rpc_failure", "", "true", "-1", "0x", "18 unexpected"] {
         let deployment = Deployment::new();
-        let output = deployment.run_with_env("none", "success", &[("SPEC_TX_NONCE_FORMAT", nonce)]);
+        let output = deployment.run_with_env("none", "success", &[("MOCK_TX_NONCE_FORMAT", nonce)]);
         assert!(!output.status.success(), "nonce {nonce:?} was accepted");
         assert!(!deployment.trace().contains("cast send"));
         assert!(!String::from_utf8_lossy(&output.stdout)

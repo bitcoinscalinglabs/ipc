@@ -22,9 +22,18 @@ pub struct RecordedCommitment {
 pub struct LatestCheckpoint {
     pub height: u64,
     pub block_hash: [u8; 32],
-    pub bitcoin_height: u64,
-    /// Whether it is the kill checkpoint
     pub killed: bool,
+    /// The Bitcoin height of the block that recorded it
+    pub bitcoin_height: u64,
+}
+
+/// The monitor's EOTS records at one Bitcoin height: the EOTS keys and EOTS nonce commitments
+/// recorded above the height the caller named, and the latest checkpoint.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EotsRecords {
+    pub bitcoin_height: u64,
+    pub keys: Vec<(EotsKey, Vec<RecordedCommitment>)>,
+    pub checkpoint: Option<LatestCheckpoint>,
 }
 
 /// A slash pre-signature of one member for one collateral output.
@@ -44,14 +53,10 @@ pub struct SlashPreSignature {
 pub struct UnslashableOutput {
     pub txid: String,
     pub vout: u32,
-    /// The owner's validator key, x-only
-    pub owner: [u8; 32],
-    /// The join (reveal) transaction of the collateral
-    pub join_txid: String,
-    pub block_height: u64,
-    pub threshold: u64,
     /// The keys of the named configuration in ascending order, with their powers
     pub keys: Vec<([u8; 32], u64)>,
+    /// The threshold of the named configuration
+    pub threshold: u64,
     /// Whether this provider's validator key is one of them
     pub signer: bool,
 }

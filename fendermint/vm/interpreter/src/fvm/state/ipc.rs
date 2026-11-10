@@ -111,13 +111,17 @@ impl<DB: Blockstore + Clone> GatewayCaller<DB> {
         Ok(batch)
     }
 
-    /// Read supply deltas for all registered ERC20 tokens since the last checkpoint.
+    /// Read supply deltas, since the last checkpoint, of the registered ERC20 tokens whose
+    /// registration the checkpoint at `height` or an earlier one carries.
     /// Returns (tokens, deltas) where deltas are signed (positive=mint, negative=burn).
     pub fn get_token_supply_deltas(
         &self,
         state: &mut FvmExecState<DB>,
+        height: u64,
     ) -> anyhow::Result<Vec<(ethers::types::Address, ethers::types::I256)>> {
-        let (tokens, deltas, count) = self.erc.call(state, |c| c.get_token_supply_deltas())?;
+        let (tokens, deltas, count) = self
+            .erc
+            .call(state, |c| c.get_token_supply_deltas(et::U256::from(height)))?;
         Ok(tokens
             .into_iter()
             .zip(deltas)
@@ -127,10 +131,15 @@ impl<DB: Blockstore + Clone> GatewayCaller<DB> {
     }
 
     /// Update stored supply snapshots to current totalSupply values.
-    /// Must be called after get_token_supply_deltas so the next checkpoint starts fresh.
-    pub fn update_supply_snapshots(&self, state: &mut FvmExecState<DB>) -> anyhow::Result<()> {
+    /// Must be called after get_token_supply_deltas, with the same `height`, so the next
+    /// checkpoint starts fresh.
+    pub fn update_supply_snapshots(
+        &self,
+        state: &mut FvmExecState<DB>,
+        height: u64,
+    ) -> anyhow::Result<()> {
         self.erc
-            .call(state, |c| c.update_supply_snapshots())
+            .call(state, |c| c.update_supply_snapshots(et::U256::from(height)))
             .context("failed to update supply snapshots")
     }
 
@@ -311,10 +320,12 @@ impl<DB: Blockstore + Clone> GatewayCaller<DB> {
         Ok(calldata)
     }
 
+    /// `key` is the signer's x-only Bitcoin key, posted with its signatures.
     pub fn add_bitcoin_checkpoint_signature_calldata(
         &self,
         checkpoint: &checkpointing_facet::BottomUpCheckpoint,
         checkpoint_psbt: ipc_api::checkpoint::BitcoinCheckpointSignature,
+        key: [u8; 32],
     ) -> anyhow::Result<et::Bytes> {
         let unsigned_psbt = checkpoint_psbt.unsigned_psbt.clone().decode()?;
         let transfer_tx = checkpoint_psbt.transfer_tx.clone().decode()?;
@@ -335,6 +346,7 @@ impl<DB: Blockstore + Clone> GatewayCaller<DB> {
                 et::Bytes::from(unsigned_psbt),
                 et::Bytes::from(checkpoint_psbt.signature.clone()),
                 et::Bytes::from(transfer_tx),
+                key,
             );
 
         let calldata = call
@@ -344,54 +356,71 @@ impl<DB: Blockstore + Clone> GatewayCaller<DB> {
         Ok(calldata)
     }
 
-    /// The length of the gateway's slash pre-signature list.
-    pub fn slash_pre_signature_count(&self, state: &mut FvmExecState<DB>) -> anyhow::Result<u64> {
-        let posted = self
-            .checkpointing
-            .call(state, |c| c.get_slash_pre_signatures())?;
-        Ok(posted.len() as u64)
-    }
-
-    /// Every slash pre-signature posted on the subnet.
-    pub fn slash_pre_signatures(
+    /// Carries the slash pre-signatures of the outputs that reached their threshold with the
+    /// checkpoint at `height`, returning their number. `supply_adjustment_bytes` is the payload
+    /// size of the supply adjustments that the checkpoint carries.
+    pub fn carry_slash_pre_signatures(
         &self,
         state: &mut FvmExecState<DB>,
-    ) -> anyhow::Result<Vec<ipc_api::eots::SlashPreSignature>> {
-        let posted = self
-            .checkpointing
-            .call(state, |c| c.get_slash_pre_signatures())?;
-        Ok(posted
-            .into_iter()
-            .map(|p| {
-                let mut txid = p.txid;
-                txid.reverse();
-                ipc_api::eots::SlashPreSignature {
-                    txid: hex::encode(txid),
-                    vout: p.vout,
-                    index: p.index,
-                    signature: p.signature.to_vec(),
-                }
-            })
-            .collect())
+        height: u64,
+        supply_adjustment_bytes: usize,
+    ) -> anyhow::Result<u64> {
+        self.checkpointing.call(state, |c| {
+            c.carry_slash_pre_signatures(
+                et::U256::from(height),
+                et::U256::from(supply_adjustment_bytes),
+            )
+        })
     }
 
+    /// Calldata of the read of the slash pre-signatures that the checkpoint at `height` carries,
+    /// decoded by `decode_slash_pre_signatures`.
+    pub fn slash_pre_signatures_calldata(&self, height: u64) -> anyhow::Result<et::Bytes> {
+        let call = self
+            .checkpointing
+            .contract()
+            .get_slash_pre_signatures(et::U256::from(height));
+        call.calldata()
+            .ok_or_else(|| anyhow!("no calldata for reading slash pre-signatures"))
+    }
+
+    /// `power` is the signer's power and `threshold` the threshold of the configuration that the
+    /// output's slash leaf names.
     pub fn add_slash_pre_signature_calldata(
         &self,
         presig: &ipc_api::eots::SlashPreSignature,
+        power: u64,
+        threshold: u64,
     ) -> anyhow::Result<et::Bytes> {
-        let mut txid: [u8; 32] = hex::decode(&presig.txid)
-            .ok()
-            .and_then(|b| b.try_into().ok())
-            .ok_or_else(|| anyhow!("the txid is not 32 bytes in hex"))?;
-        txid.reverse();
         let call = self.checkpointing.contract().add_slash_pre_signature(
-            txid,
+            gateway_txid(&presig.txid)?,
             presig.vout,
             presig.index,
+            power,
+            threshold,
             et::Bytes::from(presig.signature.clone()),
         );
         call.calldata()
             .ok_or_else(|| anyhow!("no calldata for adding a slash pre-signature"))
+    }
+
+    /// Calldata of the read of an output's posted powers with `threshold`, the height of the last
+    /// checkpoint that carried them and whether `index` has posted, decoded by `decode_slash_output`.
+    pub fn slash_output_calldata(
+        &self,
+        txid: &str,
+        vout: u32,
+        threshold: u64,
+        index: u16,
+    ) -> anyhow::Result<et::Bytes> {
+        let call = self.checkpointing.contract().get_slash_output(
+            gateway_txid(txid)?,
+            vout,
+            threshold,
+            index,
+        );
+        call.calldata()
+            .ok_or_else(|| anyhow!("no calldata for reading a slash output"))
     }
 
     /// Commit the parent finality to the gateway and returns the previously committed finality.
@@ -509,6 +538,48 @@ impl<DB: Blockstore + Clone> GatewayCaller<DB> {
 }
 
 /// Total amount of tokens to mint as a result of top-down messages arriving at the subnet.
+/// Decodes the result of the call built by `GatewayCaller::slash_output_calldata`.
+pub fn decode_slash_output(
+    data: &[u8],
+) -> anyhow::Result<checkpointing_facet::GetSlashOutputReturn> {
+    use ethers::abi::AbiDecode;
+    checkpointing_facet::GetSlashOutputReturn::decode(data)
+        .context("failed to decode a slash output")
+}
+
+/// Decodes the result of the call built by `GatewayCaller::slash_pre_signatures_calldata`.
+pub fn decode_slash_pre_signatures(
+    data: &[u8],
+) -> anyhow::Result<Vec<ipc_api::eots::SlashPreSignature>> {
+    use ethers::abi::AbiDecode;
+    let posted = checkpointing_facet::GetSlashPreSignaturesReturn::decode(data)
+        .context("failed to decode slash pre-signatures")?;
+    Ok(posted
+        .signatures
+        .into_iter()
+        .map(|p| {
+            let mut txid = p.txid;
+            txid.reverse();
+            ipc_api::eots::SlashPreSignature {
+                txid: hex::encode(txid),
+                vout: p.vout,
+                index: p.index,
+                signature: p.signature.to_vec(),
+            }
+        })
+        .collect())
+}
+
+/// A txid in hex, as Bitcoin shows it, in the internal byte order that the gateway keeps.
+fn gateway_txid(txid: &str) -> anyhow::Result<[u8; 32]> {
+    let mut txid: [u8; 32] = hex::decode(txid)
+        .ok()
+        .and_then(|b| b.try_into().ok())
+        .ok_or_else(|| anyhow!("the txid is not 32 bytes in hex"))?;
+    txid.reverse();
+    Ok(txid)
+}
+
 pub fn tokens_to_mint(msgs: &[ipc_api::cross::IpcEnvelope]) -> TokenAmount {
     msgs.iter()
         .fold(TokenAmount::from_atto(0), |mut total, msg| {

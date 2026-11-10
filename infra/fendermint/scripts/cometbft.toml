@@ -198,9 +198,7 @@ sed -i'' -e 's|^seeds = ""$|seeds = "{{PLACEHOLDER}}"|g' ${CMT_DIR}/config/confi
 sed -i'' -e "s/{{PLACEHOLDER}}/$BOOTSTRAPS/g" ${CMT_DIR}/config/config.toml
 """
 
-# Connect to a fixed list of peers, without peer exchange: CometBFT dials them at start and redials
-# them when a connection drops, so it needs no seed. Runs only when PERSISTENT_PEERS is set. An
-# empty list is valid: the first validator of a subnet has no one to dial yet.
+# Connect to PERSISTENT_PEERS only, without peer exchange.
 [tasks.set-persistent-peers]
 condition = { env_set = ["PERSISTENT_PEERS"] }
 script = """

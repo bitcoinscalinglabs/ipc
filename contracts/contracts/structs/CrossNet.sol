@@ -28,8 +28,7 @@ struct BottomUpCheckpoint {
     /// This one expected to be signed by the validators from the membership reported in the previous checkpoint.
     /// 0 could mean "no change".
     uint64 nextConfigurationNumber;
-    /// @dev The length of the gateway's slash pre-signature list at the end of `blockHeight`.
-    /// The reveal of this checkpoint carries entries from the first `slashPreSignatureCount` only.
+    /// @dev The number of slash pre-signatures that the checkpoint carries (`getSlashPreSignatures(blockHeight)`).
     uint64 slashPreSignatureCount;
     /// @dev Batch of messages to execute.
     IpcEnvelope[] msgs;

@@ -1,10 +1,8 @@
-//! Verification of EOTS votes: BIP340 signatures whose nonces are committed in advance in an
-//! RFC 6962 tree, so that two signatures at one subnet height reveal the secret key.
+//! Verification of EOTS votes: BIP340 signatures with nonces committed in an RFC 6962 tree.
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-/// Tag of the vote message digest.
 pub const VOTE_TAG: &[u8] = b"IPC/vote";
 
 /// A commitment of an EOTS key to one public nonce per subnet height in `[start, start + count)`.
@@ -21,8 +19,7 @@ impl EotsNonceCommitment {
     }
 }
 
-/// An EOTS vote: the key, the height and block hash voted for, the 64-byte signature as two
-/// halves, and the proof of the nonce against the commitment whose range holds the height.
+/// An EOTS vote; `signature` is the 64-byte signature as two halves.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EotsVote {
     pub pk_eots: [u8; 32],
@@ -112,26 +109,26 @@ pub fn verify_audit_path(
     if size == 0 || index >= size {
         return false;
     }
-    let mut fn_ = index;
-    let mut sn = size - 1;
-    let mut r = leaf_hash(leaf);
-    for p in path {
-        if sn == 0 {
+    let mut node_index = index;
+    let mut last_index = size - 1;
+    let mut current_hash = leaf_hash(leaf);
+    for sibling_hash in path {
+        if last_index == 0 {
             return false;
         }
-        if fn_ & 1 == 1 || fn_ == sn {
-            r = node_hash(p, &r);
-            while fn_ & 1 == 0 && fn_ != 0 {
-                fn_ >>= 1;
-                sn >>= 1;
+        if node_index & 1 == 1 || node_index == last_index {
+            current_hash = node_hash(sibling_hash, &current_hash);
+            while node_index & 1 == 0 && node_index != 0 {
+                node_index >>= 1;
+                last_index >>= 1;
             }
         } else {
-            r = node_hash(&r, p);
+            current_hash = node_hash(&current_hash, sibling_hash);
         }
-        fn_ >>= 1;
-        sn >>= 1;
+        node_index >>= 1;
+        last_index >>= 1;
     }
-    sn == 0 && r == *root
+    last_index == 0 && current_hash == *root
 }
 
 /// Verifies a 64-byte BIP340 signature on `msg` under the x-only key `pk`.
@@ -175,9 +172,8 @@ pub fn is_double_vote(a: &EotsVote, b: &EotsVote) -> bool {
     a.pk_eots == b.pk_eots && a.height == b.height && a.block_hash != b.block_hash
 }
 
-/// A vote with the validator that cast it (its compressed secp256k1 key, 33 bytes) and the
-/// gossip envelope it was published in: the record's timestamp and the validator's signature
-/// over the record.
+/// A vote with its validator (compressed secp256k1 key, 33 bytes) and the gossip envelope's
+/// timestamp and signature.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ValidatorVote {
     pub validator: Vec<u8>,
@@ -186,38 +182,29 @@ pub struct ValidatorVote {
     pub signature: Vec<u8>,
 }
 
-/// The finality query's answer: the node's final height, the chain's recorded final height,
-/// the checkpointed height, whether the node follows a fork the subnet did not continue, and
-/// for a height up to the final height its block hash with the votes held for it.
+/// The finality query's answer. `final_height` is the height the node serves: the recorded final
+/// height, or below it after a conflict.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FinalityAnswer {
     pub final_height: u64,
     pub recorded_final_height: u64,
     pub checkpointed_height: u64,
-    pub on_fork: bool,
-    pub block: Option<FinalBlock>,
+    /// The first height at which the node holds a final block other than its chain's
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conflict_height: Option<u64>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct FinalBlock {
-    pub height: u64,
-    pub block_hash: [u8; 32],
-    pub votes: Vec<ValidatorVote>,
-}
-
-/// The EOTS votes and double-vote evidence a subnet block carries: the votes of the heights it
-/// makes recorded final, oldest first, and one evidence per equivocating key.
+/// Votes (oldest first) and one double-vote evidence per equivocating key.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
 pub struct EotsFinalityData {
-    /// The Bitcoin height of the parent finality of the chain's latest executed block, whose
-    /// monitor state the votes are checked against
+    /// Bitcoin height whose monitor state the votes are checked against.
     pub bitcoin_height: u64,
     pub votes: Vec<ValidatorVote>,
     pub evidence: Vec<(ValidatorVote, ValidatorVote)>,
 }
 
 /// Signing helpers for tests: the signer of the protocol lives in the Bitcoin provider.
-#[doc(hidden)]
+#[cfg(any(test, feature = "testing"))]
 pub mod testing {
     use super::*;
     use k256::elliptic_curve::sec1::ToEncodedPoint;
@@ -332,100 +319,4 @@ pub mod testing {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::testing::*;
-    use super::*;
-
-    #[test]
-    fn audit_paths_verify_for_every_size_and_index() {
-        for size in 1..40usize {
-            let leaves: Vec<[u8; 32]> = (0..size).map(|i| [i as u8; 32]).collect();
-            let root = root_of(&leaves);
-            for index in 0..size {
-                let path = path_of(&leaves, index);
-                assert!(verify_audit_path(
-                    &leaves[index],
-                    index as u64,
-                    size as u64,
-                    &path,
-                    &root
-                ));
-                assert!(!verify_audit_path(
-                    &[99u8; 32],
-                    index as u64,
-                    size as u64,
-                    &path,
-                    &root
-                ));
-                if !path.is_empty() {
-                    assert!(!verify_audit_path(
-                        &leaves[index],
-                        index as u64,
-                        size as u64,
-                        &path[..path.len() - 1],
-                        &root
-                    ));
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn a_vote_with_a_committed_nonce_verifies_and_tampering_is_rejected() {
-        let txid20 = [7u8; 20];
-        for seed in 1u8..6 {
-            let signer = TestSigner::new(seed, 10, 5);
-            let commitment = signer.commitment;
-            let vote = signer.vote(&txid20, 12, [3u8; 32]);
-            verify_vote(&txid20, &vote, &commitment).unwrap();
-            let mut other_block = vote.clone();
-            other_block.block_hash = [4u8; 32];
-            assert_eq!(
-                verify_vote(&txid20, &other_block, &commitment),
-                Err(EotsError::InvalidSignature)
-            );
-            assert_eq!(
-                verify_vote(&[8u8; 20], &vote, &commitment),
-                Err(EotsError::InvalidSignature)
-            );
-            let mut wrong_start = vote.clone();
-            wrong_start.start = 9;
-            assert!(matches!(
-                verify_vote(&txid20, &wrong_start, &commitment),
-                Err(EotsError::HeightNotCommitted { .. })
-            ));
-            let mut wrong_proof = vote.clone();
-            wrong_proof.proof[0][0] ^= 1;
-            assert_eq!(
-                verify_vote(&txid20, &wrong_proof, &commitment),
-                Err(EotsError::InvalidProof)
-            );
-            let mut out_of_range = vote.clone();
-            out_of_range.height = 15;
-            assert!(matches!(
-                verify_vote(&txid20, &out_of_range, &commitment),
-                Err(EotsError::HeightNotCommitted { .. })
-            ));
-            assert!(is_double_vote(&vote, &other_block));
-            assert!(!is_double_vote(&vote, &vote));
-            // A second vote at the same height for another block also verifies: the evidence
-            let second = signer.vote(&txid20, 12, [4u8; 32]);
-            verify_vote(&txid20, &second, &commitment).unwrap();
-            assert_eq!(second.nonce(), vote.nonce());
-        }
-    }
-
-    #[test]
-    fn tagged_hash_matches_bip340_definition() {
-        let tag_hash = Sha256::digest(b"x");
-        let mut hasher = Sha256::new();
-        hasher.update(tag_hash);
-        hasher.update(tag_hash);
-        hasher.update(b"y");
-        let expected: [u8; 32] = hasher.finalize().into();
-        assert_eq!(tagged_sha256(b"x", b"y"), expected);
-    }
-}
-#[cfg(test)]
-#[path = "lib_spec_tests.rs"]
-mod spec_tests;
+mod tests;

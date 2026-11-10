@@ -242,13 +242,16 @@ where
         .context("failed to create checkpoint")?;
         let updates = created.map(|(_, updates)| updates).unwrap_or_default();
 
-        // The subnet final height: the gateway's with EOTS finality, else this subnet block's.
+        // The subnet final height: the gateway's below the first conflict with EOTS finality,
+        // else this subnet block's.
         let block_height = u64::try_from(height).context("block height is not u64")?;
         let final_height = match &self.eots_tally {
-            Some(_) => self
-                .gateway
-                .subnet_final_height(&mut state)
-                .context("failed to read the subnet final height")?,
+            Some(tally) => fendermint_vm_topdown::eots::below_conflict(
+                self.gateway
+                    .subnet_final_height(&mut state)
+                    .context("failed to read the subnet final height")?,
+                tally.first_conflict(),
+            ),
             None => block_height,
         };
         let prev_final = self
@@ -257,9 +260,7 @@ where
             .expect("final height lock")
             .replace(final_height);
 
-        // A validator signs the checkpoints that became final in this subnet block, and at every
-        // multiple of the checkpoint period it signs again what the gateway still lacks and
-        // pre-signs the slash transactions of new collaterals.
+        // A checkpoint is signed once the subnet block after its height is final.
         if let Some(ref ctx) = self.validator_ctx {
             if !self.syncing().await && !self.gateway.is_anchored(&mut state)? {
                 let period = self.gateway.bottom_up_check_period(&mut state)?;
@@ -298,14 +299,6 @@ where
                     }
                 }
 
-                let posted = if self.parent_manager.is_some() {
-                    self.gateway
-                        .slash_pre_signatures(&mut state)
-                        .context("failed to read the posted slash pre-signatures")?
-                } else {
-                    Vec::new()
-                };
-
                 if !to_sign.is_empty() {
                     let client = self.client.clone();
                     let gateway = self.gateway.clone();
@@ -313,7 +306,6 @@ where
                     let validator_ctx = ctx.clone();
                     let subnet_id = self.subnet_id.clone();
                     let parent_manager = self.parent_manager.clone();
-                    let posted = posted.clone();
                     tokio::spawn(async move {
                         let res = checkpoint::broadcast_signatures(
                             &client,
@@ -324,7 +316,6 @@ where
                             block_height,
                             subnet_id,
                             parent_manager,
-                            posted,
                         )
                         .await;
                         if let Err(e) = res {
@@ -349,7 +340,7 @@ where
                             &subnet_id,
                             &parent_manager,
                             public_key,
-                            posted,
+                            checkpointed.unwrap_or(0),
                             chain_id,
                         )
                         .await;

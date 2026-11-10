@@ -90,7 +90,7 @@ pub enum ChainMessageApplyRet {
     Signed(SignedMessageApplyRes),
     /// The IPC chain message execution result
     Ipc(FvmApplyRet),
-    /// Carried EOTS votes: nothing executed in the FVM
+    /// EOTS finality execution result.
     Eots,
 }
 
@@ -679,7 +679,6 @@ fn messages_selection<DB: Blockstore + Clone + 'static>(
     Ok(user_msgs.into_iter().map(ChainMessage::Signed).collect())
 }
 
-/// A well-formed proposal carries at most one `EotsFinality`.
 fn at_most_one_eots_finality(msgs: &[ChainMessage]) -> bool {
     msgs.iter()
         .filter(|m| matches!(m, ChainMessage::Ipc(IpcMessage::EotsFinality(_))))

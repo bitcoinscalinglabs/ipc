@@ -70,9 +70,8 @@ pub trait SubnetManager:
     /// and reduce their power in the subnet.
     async fn unstake(&self, params: JoinParams) -> Result<()>;
 
-    /// Spends the validator's matured unilateral-exit collaterals in the subnet to its backup
-    /// address. Bitcoin parents only.
-    async fn unstake_ue(&self, subnet: SubnetID) -> Result<()> {
+    /// Submits the exit transaction of this validator's matured collaterals. Bitcoin parents only.
+    async fn unstake_ue(&self, subnet: SubnetID) -> Result<ExitTransaction> {
         Err(anyhow::anyhow!(
             "unstake-ue is not supported on this parent network (subnet {subnet})"
         ))
@@ -258,9 +257,7 @@ pub trait SubnetManager:
     ) -> Result<ChainEpoch>;
 
     /// This function asks the parent subnet (bitcoin) to generate the required transaction for the given `checkpoint` and `subnet_id`.
-    /// It is only required when the parent subnet is bitcoin. The reveal carries slash
-    /// pre-signatures from `slash_signatures`, the first `slash_pre_signature_count` entries of
-    /// the gateway's list.
+    /// It is only required when the parent subnet is bitcoin.
     async fn get_checkpoint_transaction(
         &self,
         subnet_id: &SubnetID,
@@ -284,6 +281,16 @@ pub struct GetRewardedCollateralsResponse {
     pub collaterals: Vec<(EthAddress, u64)>,
     pub total_rewarded_collateral: u64,
     pub snapshot: u64,
+}
+
+/// The exit transaction `unstake_ue` submitted.
+#[derive(Debug, Clone)]
+pub struct ExitTransaction {
+    pub txid: String,
+    /// The collateral spent, in sats
+    pub amount: u64,
+    /// The backup address it pays, minus the fee
+    pub address: String,
 }
 
 #[derive(Debug)]
@@ -372,8 +379,7 @@ pub trait BottomUpCheckpointRelayer: Send + Sync {
     /// Get the current epoch in the current subnet
     async fn current_epoch(&self) -> Result<ChainEpoch>;
 
-    /// The child subnet's latest final height (the `finalized` block tag), which the relayer
-    /// reads checkpoints up to.
+    /// The child subnet's latest final height.
     async fn finalized_epoch(&self) -> Result<ChainEpoch> {
         self.current_epoch().await
     }

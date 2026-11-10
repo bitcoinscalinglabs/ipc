@@ -205,8 +205,7 @@ pub struct BottomUpCheckpoint {
     /// This one expected to be signed by the validators from the membership reported in the previous checkpoint.
     /// 0 could mean "no change".
     pub next_configuration_number: u64,
-    /// The length of the gateway's slash pre-signature list at the end of `block_height`.
-    /// The reveal of this checkpoint carries entries from the first `slash_pre_signature_count` only.
+    /// Length of the gateway's slash pre-signature list at the end of `block_height`.
     pub slash_pre_signature_count: u64,
     /// The list of messages for execution
     pub msgs: Vec<IpcEnvelope>,

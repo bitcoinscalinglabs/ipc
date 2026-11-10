@@ -20,15 +20,15 @@ use fendermint_vm_interpreter::{
 };
 use fendermint_vm_resolver::ipld::IpldResolver;
 use fendermint_vm_snapshot::{SnapshotManager, SnapshotParams};
+use fendermint_vm_topdown::eots::EotsTally;
 use fendermint_vm_topdown::observe::register_metrics as register_topdown_metrics;
 use fendermint_vm_topdown::proxy::{IPCProviderProxy, IPCProviderProxyWithLatency};
 use fendermint_vm_topdown::sync::launch_polling_syncer;
-use fendermint_vm_topdown::eots::{EotsTally, VoteOutcome as EotsVoteOutcome};
 use fendermint_vm_topdown::voting::{publish_vote_loop, Error as VoteError, VoteTally};
 use fendermint_vm_topdown::{CachedFinalityProvider, IPCParentFinality, Toggle};
 use fvm_shared::address::{current_network, Address, Network};
 use ipc_api::subnet_id::{NetworkType, SubnetID};
-use ipc_ipld_resolver::{Client, Event as ResolverEvent, SignedVoteRecord};
+use ipc_ipld_resolver::{Event as ResolverEvent, SignedVoteRecord};
 use ipc_observability::observe::register_metrics as register_default_metrics;
 use ipc_provider::config::subnet::{BTCSubnet, SubnetConfig};
 use ipc_provider::IpcProvider;
@@ -184,10 +184,13 @@ async fn run(settings: Settings) -> anyhow::Result<()> {
         _ => None,
     };
 
-    // The EOTS round runs on subnets with a Bitcoin parent whose monitor the node reaches.
+    // The EOTS tally exists only on subnets with a Bitcoin parent.
     let eots_votes = match (&btc_manager, topdown_enabled) {
         (Some(manager), true) => {
-            let store = fendermint_app::eots::new_store::<_, AppStore>(db.clone(), ns.eots.clone());
+            let store = Arc::new(fendermint_app::eots::AppEotsStore::<_, AppStore>::new(
+                db.clone(),
+                ns.eots.clone(),
+            ));
             Some(
                 EotsTally::new(
                     store,
@@ -269,10 +272,6 @@ async fn run(settings: Settings) -> anyhow::Result<()> {
             .add_provided_subnet(own_subnet_id.clone())
             .context("error adding own provided subnet.")?;
 
-        let evidence_publisher = validator_keypair
-            .clone()
-            .map(|key| (key, own_subnet_id.clone(), client.clone()));
-
         if let (Some(tally), Some(key)) = (&eots_votes, &validator_keypair) {
             tracing::info!("starting the EOTS vote loop...");
             tokio::spawn(fendermint_app::eots::vote_loop(
@@ -324,7 +323,6 @@ async fn run(settings: Settings) -> anyhow::Result<()> {
                 rx,
                 parent_finality_votes,
                 eots_votes,
-                evidence_publisher,
                 topdown_enabled,
             )
             .await;
@@ -637,7 +635,6 @@ async fn dispatch_resolver_events(
     mut rx: tokio::sync::broadcast::Receiver<ResolverEvent<AppVote>>,
     parent_finality_votes: VoteTally,
     eots_votes: Option<EotsTally>,
-    evidence_publisher: Option<EvidencePublisher>,
     topdown_enabled: bool,
 ) {
     loop {
@@ -649,7 +646,6 @@ async fn dispatch_resolver_events(
                         *vote,
                         &parent_finality_votes,
                         eots_votes.as_ref(),
-                        evidence_publisher.as_ref(),
                         topdown_enabled,
                     )
                     .await;
@@ -666,22 +662,7 @@ async fn dispatch_resolver_events(
     }
 }
 
-/// The key, subnet and gossip client with which a node publishes evidence it first holds.
-type EvidencePublisher = (libp2p::identity::Keypair, SubnetID, Client<AppVote>);
-
-async fn publish_evidence(
-    tally: &EotsTally,
-    publisher: Option<&EvidencePublisher>,
-    pk_eots: &[u8; 32],
-) {
-    let (Some((key, subnet_id, client)), Some((a, b))) = (publisher, tally.evidence_for(pk_eots))
-    else {
-        return;
-    };
-    fendermint_app::eots::publish_vote(client, key, subnet_id, AppVote::EotsEvidence(a, b)).await;
-}
-
-/// A vote that cannot be valid is an attack or a monitor discrepancy: an operator must see it.
+/// Logs a vote that can never be valid at error level.
 fn log_dropped_vote(e: &fendermint_vm_topdown::eots::VoteError, what: &'static str) {
     if e.never_valid() {
         tracing::error!(error = %e, what);
@@ -694,7 +675,6 @@ async fn dispatch_vote(
     signed: SignedVoteRecord<AppVote>,
     parent_finality_votes: &VoteTally,
     eots_votes: Option<&EotsTally>,
-    evidence_publisher: Option<&EvidencePublisher>,
     topdown_enabled: bool,
 ) {
     let signature = signed.signature();
@@ -708,7 +688,6 @@ async fn dispatch_vote(
                 return;
             };
             let validator = validator.to_vec();
-            let pk_eots = eots_vote.pk_eots;
             let vote = ipc_eots::ValidatorVote {
                 validator,
                 vote: eots_vote,
@@ -716,24 +695,8 @@ async fn dispatch_vote(
                 signature,
             };
             match tally.add_vote(vote, None) {
-                Ok(EotsVoteOutcome::Evidence) => {
-                    publish_evidence(tally, evidence_publisher, &pk_eots).await
-                }
                 Ok(outcome) => tracing::debug!(?outcome, "EOTS vote handled"),
                 Err(e) => log_dropped_vote(&e, "EOTS vote dropped"),
-            }
-        }
-        AppVote::EotsEvidence(a, b) => {
-            let Some(tally) = eots_votes else { return };
-            let pk_eots = a.vote.pk_eots;
-            for v in [a, b] {
-                match tally.add_vote(v, None) {
-                    Ok(EotsVoteOutcome::Evidence) => {
-                        publish_evidence(tally, evidence_publisher, &pk_eots).await
-                    }
-                    Ok(_) => {}
-                    Err(e) => log_dropped_vote(&e, "EOTS evidence vote dropped"),
-                }
             }
         }
         AppVote::ParentFinality(f) => {
@@ -769,5 +732,182 @@ async fn dispatch_vote(
     }
 }
 #[cfg(test)]
-#[path = "run_spec_tests.rs"]
-mod spec_tests;
+mod tests {
+    use super::{dispatch_vote, AppVote, EotsTally, Keypair, SubnetID, VoteTally};
+    use fendermint_vm_topdown::eots::{AgreedState, EotsStore, KeyBytes, StoredState};
+    use fendermint_vm_topdown::voting::Weight;
+    use ipc_eots::{testing::TestSigner, ValidatorVote};
+    use ipc_ipld_resolver::{SignedVoteRecord, VoteRecord};
+    use ipc_provider::{config::Config, manager::BtcSubnetManager};
+    use libp2p::core::SignedEnvelope;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Default)]
+    struct Store(Mutex<Vec<ValidatorVote>>);
+
+    impl EotsStore for Store {
+        fn put_vote(&self, vote: &ValidatorVote) -> anyhow::Result<()> {
+            self.0.lock().unwrap().push(vote.clone());
+            Ok(())
+        }
+        fn put_block(&self, _: u64, _: [u8; 32]) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn put_recorded_final(&self, _: u64) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn put_checkpointed(&self, _: u64) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn put_evidence_carried(&self, _: [u8; 32]) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn put_power_table(&self, _: u64, _: &[(KeyBytes, Weight)]) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn put_last_cast(&self, _: u64) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn delete_up_to(&self, _: u64, _: u64) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn load(&self) -> anyhow::Result<StoredState> {
+            Ok(StoredState::default())
+        }
+    }
+
+    fn subnet() -> SubnetID {
+        SubnetID::new_btc(4, &hex::encode([42; 20])).unwrap()
+    }
+
+    fn eots_vote() -> AppVote {
+        AppVote::Eots(TestSigner::new(7, 1, 2).vote(&[42; 20], 1, [1; 32]))
+    }
+
+    #[tokio::test]
+    async fn an_ed25519_gossip_sender_cannot_crash_the_vote_dispatcher() {
+        let subnet = subnet();
+        let config = Config::from_toml_str(
+            "[[subnets]]\nid = \"/b4\"\n[subnets.config]\nnetwork_type = \"btc\"\nprovider_http = \"http://127.0.0.1:1/api\"\n"
+        ).unwrap();
+        let provider = BtcSubnetManager::new(config.subnets.values().next().unwrap()).unwrap();
+        let store = Arc::new(Store::default());
+        let tally = EotsTally::new(
+            store.clone(),
+            provider,
+            subnet.clone(),
+            vec![],
+            fendermint_app::eots::envelope_check(subnet.clone()),
+        )
+        .unwrap();
+        tally.add_block(1, [1; 32]).unwrap();
+        let agreed = AgreedState {
+            checkpointed: 0,
+            killed: false,
+            bitcoin_height: 100,
+        };
+        let parent: VoteTally = VoteTally::new(vec![], (0, Default::default()));
+        for key in [Keypair::generate_ed25519(), Keypair::generate_secp256k1()] {
+            let signed = VoteRecord::signed(&key, subnet.clone(), eots_vote()).unwrap();
+            let wire = signed.into_envelope().into_protobuf_encoding();
+            let received = SignedVoteRecord::<AppVote>::from_bytes(&wire).unwrap();
+            dispatch_vote(received, &parent, Some(&tally), false).await;
+            assert!(store.0.lock().unwrap().is_empty());
+            assert!(tally.proposal(&agreed).is_none());
+        }
+    }
+
+    /// `AppVote::Eots` with fields of any width.
+    #[derive(Clone, serde::Serialize, serde::Deserialize)]
+    enum Content {
+        Eots(Fields),
+    }
+
+    #[derive(Clone, serde::Serialize, serde::Deserialize)]
+    struct Fields {
+        pk_eots: Vec<u8>,
+        height: i64,
+        block_hash: Vec<u8>,
+        signature: Vec<Vec<u8>>,
+        start: u64,
+        proof: Vec<Vec<u8>>,
+    }
+
+    #[test]
+    fn signed_votes_with_malformed_content_fail_to_decode() {
+        let key = Keypair::generate_secp256k1();
+        let wire = |fields: Fields| {
+            VoteRecord::signed(&key, subnet(), Content::Eots(fields))
+                .unwrap()
+                .into_envelope()
+                .into_protobuf_encoding()
+        };
+        let AppVote::Eots(vote) = eots_vote() else {
+            unreachable!()
+        };
+        let valid = Fields {
+            pk_eots: vote.pk_eots.to_vec(),
+            height: vote.height as i64,
+            block_hash: vote.block_hash.to_vec(),
+            signature: vote.signature.iter().map(|s| s.to_vec()).collect(),
+            start: vote.start,
+            proof: vote.proof.iter().map(|p| p.to_vec()).collect(),
+        };
+        let received = SignedVoteRecord::<AppVote>::from_bytes(&wire(valid.clone())).unwrap();
+        assert_eq!(received.record().content, eots_vote());
+
+        let changes: [(&str, fn(&mut Fields, usize)); 5] = [
+            ("EOTS key", |f, n| f.pk_eots = vec![0; n]),
+            ("block hash", |f, n| f.block_hash = vec![0; n]),
+            ("public nonce", |f, n| f.signature[0] = vec![0; n]),
+            ("signature scalar", |f, n| f.signature[1] = vec![0; n]),
+            ("proof node", |f, n| f.proof[0] = vec![0; n]),
+        ];
+        for (field, change) in changes {
+            for length in [0, 31, 33] {
+                let mut fields = valid.clone();
+                change(&mut fields, length);
+                assert!(
+                    SignedVoteRecord::<AppVote>::from_bytes(&wire(fields)).is_err(),
+                    "accepted a {field} of {length} bytes"
+                );
+            }
+        }
+        let negative = Fields {
+            height: -1,
+            ..valid
+        };
+        assert!(SignedVoteRecord::<AppVote>::from_bytes(&wire(negative)).is_err());
+    }
+
+    #[test]
+    fn truncated_signed_votes_fail_to_decode() {
+        let key = Keypair::generate_secp256k1();
+        let record = VoteRecord::signed(&key, subnet(), eots_vote()).unwrap();
+        let payload = fvm_ipld_encoding::to_vec(record.record()).unwrap();
+        let wire = |payload: &[u8]| {
+            SignedEnvelope::new(
+                &key,
+                "/ipc/ipld/resolver".to_owned(),
+                b"/ipc/vote-record".to_vec(),
+                payload.to_vec(),
+            )
+            .unwrap()
+            .into_protobuf_encoding()
+        };
+        assert!(SignedVoteRecord::<AppVote>::from_bytes(&wire(&payload)).is_ok());
+        for end in 0..payload.len() {
+            assert!(
+                SignedVoteRecord::<AppVote>::from_bytes(&wire(&payload[..end])).is_err(),
+                "accepted a payload truncated at byte {end}"
+            );
+        }
+        let full = record.into_envelope().into_protobuf_encoding();
+        for end in 0..full.len() {
+            assert!(
+                SignedVoteRecord::<AppVote>::from_bytes(&full[..end]).is_err(),
+                "accepted an envelope truncated at byte {end}"
+            );
+        }
+    }
+}

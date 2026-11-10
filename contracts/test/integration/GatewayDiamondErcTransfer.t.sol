@@ -597,7 +597,7 @@ contract GatewayDiamondErcTransferTest is Test, IntegrationTestBase {
         token.mint(address(this), 500);
 
         (address[] memory tokens, int256[] memory deltas, uint256 count) =
-            ercFacet(targetGateway).getTokenSupplyDeltas();
+            ercFacet(targetGateway).getTokenSupplyDeltas(type(uint256).max);
 
         assertEq(count, 1);
         assertEq(tokens[0], address(token));
@@ -608,7 +608,7 @@ contract GatewayDiamondErcTransferTest is Test, IntegrationTestBase {
         ercFacet(targetGateway).registerBridgeableToken(address(token));
 
         // No supply change since registration → count should be 0.
-        (,, uint256 count) = ercFacet(targetGateway).getTokenSupplyDeltas();
+        (,, uint256 count) = ercFacet(targetGateway).getTokenSupplyDeltas(type(uint256).max);
         assertEq(count, 0);
     }
 
@@ -622,7 +622,7 @@ contract GatewayDiamondErcTransferTest is Test, IntegrationTestBase {
         token.mint(address(this), 100);
 
         (address[] memory tokens, int256[] memory deltas, uint256 count) =
-            ercFacet(targetGateway).getTokenSupplyDeltas();
+            ercFacet(targetGateway).getTokenSupplyDeltas(type(uint256).max);
 
         // Only token A has a non-zero delta.
         assertEq(count, 1);
@@ -634,13 +634,38 @@ contract GatewayDiamondErcTransferTest is Test, IntegrationTestBase {
         ercFacet(targetGateway).registerBridgeableToken(address(token));
         token.mint(address(this), 500);
 
-        (,, uint256 countBefore) = ercFacet(targetGateway).getTokenSupplyDeltas();
+        (,, uint256 countBefore) = ercFacet(targetGateway).getTokenSupplyDeltas(type(uint256).max);
         assertEq(countBefore, 1);
 
-        ercFacet(targetGateway).updateSupplySnapshots();
+        ercFacet(targetGateway).updateSupplySnapshots(type(uint256).max);
 
-        (,, uint256 countAfter) = ercFacet(targetGateway).getTokenSupplyDeltas();
+        (,, uint256 countAfter) = ercFacet(targetGateway).getTokenSupplyDeltas(type(uint256).max);
         assertEq(countAfter, 0);
+    }
+
+    function test_getTokenSupplyDeltas_skipsTokenWhoseRegistrationWaits() public {
+        uint256 period = targetGateway.getter().bottomUpCheckPeriod();
+        uint256 height = (block.number / period + 1) * period;
+        // A full batch at `height` makes the registration wait for the checkpoint at `height + period`.
+        while (
+            targetGateway.getter().bottomUpMsgBatch(height).msgs.length <
+            targetGateway.getter().maxMsgsPerBottomUpBatch()
+        ) {
+            OwnableTestToken other = new OwnableTestToken("Other", "OTH", 18, address(this));
+            ercFacet(targetGateway).registerBridgeableToken(address(other));
+        }
+        ercFacet(targetGateway).registerBridgeableToken(address(token));
+        token.mint(address(this), 500);
+
+        (,, uint256 count) = ercFacet(targetGateway).getTokenSupplyDeltas(height);
+        assertEq(count, 0);
+        ercFacet(targetGateway).updateSupplySnapshots(height);
+
+        (address[] memory tokens, int256[] memory deltas, uint256 laterCount) =
+            ercFacet(targetGateway).getTokenSupplyDeltas(height + period);
+        assertEq(laterCount, 1);
+        assertEq(tokens[0], address(token));
+        assertEq(deltas[0], int256(500));
     }
 
     function test_registerBridgeableToken_initialSupplyInMessage() public {

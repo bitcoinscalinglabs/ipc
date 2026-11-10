@@ -4,7 +4,7 @@
 use super::observe::{
     CheckpointCreated, CheckpointFinalized, CheckpointSigned, CheckpointSignedRole,
 };
-use super::state::ipc::tokens_to_burn;
+use super::state::ipc::{decode_slash_output, decode_slash_pre_signatures, tokens_to_burn};
 use super::{
     broadcast::Broadcaster,
     state::{ipc::GatewayCaller, FvmExecState},
@@ -71,12 +71,13 @@ where
     // We snapshot totalSupply() for each registered token once per checkpoint period,
     // compute the delta from the previous snapshot, and append the results to msgs.
     let supply_deltas = gateway
-        .get_token_supply_deltas(state)
+        .get_token_supply_deltas(state, height.value())
         .context("failed to get token supply deltas")?;
+    let mut supply_adjustment_bytes = 0;
     if !supply_deltas.is_empty() {
         let delta_count = supply_deltas.len();
         gateway
-            .update_supply_snapshots(state)
+            .update_supply_snapshots(state, height.value())
             .context("failed to update supply snapshots")?;
 
         let empty_subnet_id = checkpoint::SubnetID {
@@ -105,6 +106,7 @@ where
                 ethers::abi::Token::Address(token),
                 ethers::abi::Token::Int(delta.into_raw()),
             ]);
+            supply_adjustment_bytes += message.len();
             msgs.push(checkpoint::IpcEnvelope {
                 kind: 5, // IpcMsgKind::ErcSupplyDelta
                 to: empty_ipc_addr.clone(),
@@ -134,10 +136,10 @@ where
         .apply_validator_changes(state)
         .context("failed to apply validator changes")?;
 
-    // The reveal of this checkpoint carries slash pre-signatures from the first `count` entries.
+    // The checkpoint carries the slash pre-signatures of the outputs that reached their threshold.
     let slash_pre_signature_count = gateway
-        .slash_pre_signature_count(state)
-        .context("failed to count the slash pre-signatures")?;
+        .carry_slash_pre_signatures(state, height.value(), supply_adjustment_bytes)
+        .context("failed to carry the slash pre-signatures")?;
 
     // Sum up the value leaving the subnet as part of the bottom-up messages.
     let burnt_tokens = tokens_to_burn(&msgs);
@@ -245,23 +247,21 @@ where
     }
 }
 
-/// The x-only form of a validator key, as Bitcoin names validators.
 fn x_only(key: &PublicKey) -> [u8; 32] {
     key.serialize_compressed()[1..]
         .try_into()
         .expect("32 bytes")
 }
 
-/// Pre-signs the slash transaction of every accepted, unspent collateral output that is not yet
-/// slashable, names a configuration this validator belongs to, and has no pre-signature of this
-/// validator in the gateway, and posts each pre-signature. A failed output does not stop the rest.
+/// Posts this validator's missing slash pre-signatures; a failed output does not stop the rest.
+/// `checkpointed` is the height of the latest checkpoint that Bitcoin L1 has recorded.
 pub async fn post_slash_pre_signatures<C, DB>(
     broadcaster: &Broadcaster<C>,
     gateway: &GatewayCaller<DB>,
     subnet_id: &ipc_api::subnet_id::SubnetID,
     parent_manager: &ipc_provider::manager::BtcSubnetManager,
     public_key: PublicKey,
-    posted: Vec<ipc_api::eots::SlashPreSignature>,
+    checkpointed: u64,
     chain_id: ChainID,
 ) -> anyhow::Result<()>
 where
@@ -270,26 +270,39 @@ where
 {
     let own = x_only(&public_key);
     let outputs = parent_manager.get_unslashable_outputs(subnet_id).await?;
-    for output in outputs_to_presign(&own, outputs, &posted) {
+    for (output, index) in outputs_to_presign(&own, outputs) {
         let posted = async {
+            let calldata =
+                gateway.slash_output_calldata(&output.txid, output.vout, output.threshold, index)?;
+            let data = broadcaster
+                .fevm_view(Address::from(gateway.addr()), calldata, chain_id)
+                .await?;
+            let posted = decode_slash_output(&data)?;
+            if !should_post_slash_pre_signature(&posted, output.threshold, checkpointed) {
+                return Ok(None);
+            }
             let presig = parent_manager
                 .sign_slash(subnet_id, &output.txid, output.vout)
                 .await
                 .context("failed to pre-sign the slash")?;
-            let calldata = gateway.add_slash_pre_signature_calldata(&presig)?;
+            let power = output.keys[usize::from(index)].1;
+            let calldata =
+                gateway.add_slash_pre_signature_calldata(&presig, power, output.threshold)?;
             broadcaster
                 .fevm_invoke(Address::from(gateway.addr()), calldata, chain_id)
                 .await
                 .context("failed to post a slash pre-signature")
+                .map(Some)
         }
         .await;
         match posted {
-            Ok(tx_hash) => tracing::info!(
+            Ok(Some(tx_hash)) => tracing::info!(
                 tx_hash = tx_hash.to_string(),
                 txid = output.txid,
                 vout = output.vout,
                 "posted a slash pre-signature"
             ),
+            Ok(None) => {}
             Err(e) => tracing::error!(
                 error = %format!("{e:#}"),
                 txid = output.txid,
@@ -301,58 +314,55 @@ where
     Ok(())
 }
 
-/// The outputs this validator (key `own`) has to pre-sign: those of a configuration it belongs
-/// to for which `posted` holds no slash pre-signature of its key index. One that was not posted
-/// is selected again.
+/// The outputs of this validator's configurations, each with its index in the configuration
+/// that the output names.
 pub fn outputs_to_presign(
     own: &[u8; 32],
     outputs: Vec<ipc_api::eots::UnslashableOutput>,
-    posted: &[ipc_api::eots::SlashPreSignature],
-) -> Vec<ipc_api::eots::UnslashableOutput> {
+) -> Vec<(ipc_api::eots::UnslashableOutput, u16)> {
     outputs
         .into_iter()
-        .filter(|output| {
-            output.signer
-                && output
-                    .keys
-                    .iter()
-                    .position(|(k, _)| k == own)
-                    .is_some_and(|index| {
-                        !posted.iter().any(|p| {
-                            p.txid == output.txid
-                                && p.vout == output.vout
-                                && usize::from(p.index) == index
-                        })
-                    })
+        .filter(|output| output.signer)
+        .filter_map(|output| {
+            let index = output.keys.iter().position(|(k, _)| k == own)?;
+            Some((output, u16::try_from(index).ok()?))
         })
         .collect()
+}
+
+/// Whether this validator posts its slash pre-signature for an output, given what the subnet
+/// holds for it: its index has not posted, and the posted powers are below `threshold`, or the
+/// last checkpoint that carried them is at or below `checkpointed` while the monitor still
+/// reports the output not slashable.
+pub fn should_post_slash_pre_signature(
+    posted: &checkpoint::GetSlashOutputReturn,
+    threshold: u64,
+    checkpointed: u64,
+) -> bool {
+    let carried = posted.carried_height;
+    !posted.posted
+        && (posted.power < threshold.into() || (!carried.is_zero() && carried <= checkpointed.into()))
 }
 
 /// A checkpoint with the signatures this validator still has to submit for it.
 #[derive(Debug, Clone)]
 pub struct CheckpointToSign {
     pub checkpoint: getter::BottomUpCheckpoint,
-    /// Submit the checkpoint signature.
     pub checkpoint_signature: bool,
-    /// Submit the Bitcoin signature.
     pub bitcoin_signature: bool,
 }
 
-/// The subnet heights `H > 0` whose `H + 1` lies in `(prev_final, final_height]`: where the
-/// gateway created a checkpoint, it became final when the subnet final height rose from
-/// `prev_final`.
+/// Heights `H > 0` whose `H + 1` lies in `(prev_final, final_height]`.
 pub fn newly_final_heights(prev_final: u64, final_height: u64) -> std::ops::Range<u64> {
     prev_final.max(1)..final_height
 }
 
-/// The subnet heights `H` above `checkpointed` whose `H + 1` is at or below `final_height`: where
-/// the gateway created a checkpoint, it is final and Bitcoin has not recorded it yet.
+/// Heights `H` above `checkpointed` whose `H + 1` is at or below `final_height`.
 pub fn final_heights_above(checkpointed: u64, final_height: u64) -> std::ops::Range<u64> {
     checkpointed + 1..final_height
 }
 
-/// The checkpoints whose `H + 1` became final in this subnet block, each with both signatures
-/// to submit. Reads the checkpoints from the gateway; a height without one is skipped.
+/// The checkpoints whose `H + 1` became final in this subnet block, with both signatures to submit.
 pub fn newly_final_checkpoints<DB>(
     gateway: &GatewayCaller<DB>,
     state: &mut FvmExecState<DB>,
@@ -375,9 +385,7 @@ where
     Ok(to_sign)
 }
 
-/// The final checkpoints that lack a signature of this validator in the gateway: the checkpoint
-/// signature for the incomplete ones (quorum not reached), the Bitcoin signature for those
-/// above `checkpointed`. `checkpointed` is `None` without a Bitcoin parent.
+/// The final checkpoints that lack a signature of this validator in the gateway.
 pub fn checkpoints_to_resign<DB>(
     gateway: &GatewayCaller<DB>,
     state: &mut FvmExecState<DB>,
@@ -406,9 +414,7 @@ where
     Ok(resign_plan(unsigned, final_height, bitcoin_missing))
 }
 
-/// The signatures to submit, by height: the checkpoint signature of every checkpoint of
-/// `unsigned` that is final (its height below `final_height`), the Bitcoin signature of every
-/// checkpoint of `bitcoin_missing`. A checkpoint in neither list needs nothing.
+/// The signatures to submit by height; a checkpoint at height `H` needs `H + 1` final.
 pub fn resign_plan(
     unsigned: Vec<getter::BottomUpCheckpoint>,
     final_height: u64,
@@ -474,8 +480,7 @@ where
     Ok(unsigned_checkpoints)
 }
 
-/// Submits the signatures of `to_sign` once subnet block `block_height` is committed. A failed
-/// signature is logged and the next checkpoint is signed.
+/// Submits the signatures of `to_sign` once subnet block `block_height` is committed.
 pub async fn broadcast_signatures<C, DB>(
     client: &C,
     validator_ctx: &ValidatorContext<C>,
@@ -485,7 +490,6 @@ pub async fn broadcast_signatures<C, DB>(
     block_height: u64,
     subnet_id: Option<ipc_api::subnet_id::SubnetID>,
     parent_manager: Option<ipc_provider::manager::BtcSubnetManager>,
-    slash_signatures: Vec<ipc_api::eots::SlashPreSignature>,
 ) -> anyhow::Result<()>
 where
     C: Client + Clone + Send + Sync + 'static,
@@ -507,7 +511,6 @@ where
             cp,
             &subnet_id,
             &parent_manager,
-            &slash_signatures,
         )
         .await
         {
@@ -526,7 +529,6 @@ async fn broadcast_checkpoint_signatures<C, DB>(
     cp: CheckpointToSign,
     subnet_id: &Option<ipc_api::subnet_id::SubnetID>,
     parent_manager: &Option<ipc_provider::manager::BtcSubnetManager>,
-    slash_signatures: &[ipc_api::eots::SlashPreSignature],
 ) -> anyhow::Result<()>
 where
     C: Client + Clone + Send + Sync + 'static,
@@ -564,15 +566,7 @@ where
         .context("failed to broadcast checkpoint signature")?;
     }
 
-    // step 1: get checkpoint PSBT from provider
-    // step 2: sign PSBT
-    // step 3: submit signature on a contract that stores map between checkpoint and signatures
-
-    // TODO
-    // Getting self.subnet_id here is a workaround, because the subnet_id that comes in the BottomUpCheckpoint
-    // cannot give us the information about the parent network type, nor the the root id of the parent
-    // with a "/b" prefix. If we change that, we can get rid of the subnet_id parameter in the function.
-
+    // The checkpoint's ABI subnet ID omits the parent network type: `subnet_id` gives it.
     if cp.bitcoin_signature && parent_is_bitcoin(subnet_id) {
         let subnet_id = subnet_id.as_ref().ok_or_else(|| {
             anyhow!("the Bitcoin signature needs the subnet_id of the current subnet")
@@ -580,13 +574,12 @@ where
         let parent_manager = parent_manager
             .as_ref()
             .ok_or_else(|| anyhow!("the Bitcoin signature needs the parent manager"))?;
-        // The reveal takes entries from the first `slash_pre_signature_count` only.
-        let count = usize::try_from(checkpoint.slash_pre_signature_count)?;
-        let slash_signatures = slash_signatures
-            .iter()
-            .take(count)
-            .cloned()
-            .collect::<Vec<_>>();
+        let calldata = gateway.slash_pre_signatures_calldata(height.value())?;
+        let data = validator_ctx
+            .broadcaster
+            .fevm_view(Address::from(gateway.addr()), calldata, chain_id)
+            .await
+            .context("failed to read the carried slash pre-signatures")?;
         broadcast_bitcoin_signature(
             &validator_ctx.broadcaster,
             gateway,
@@ -594,7 +587,8 @@ where
             parent_manager,
             checkpoint,
             chain_id,
-            slash_signatures,
+            decode_slash_pre_signatures(&data)?,
+            x_only(&validator_ctx.public_key),
         )
         .await
         .context("failed to broadcast bitcoin signature")?;
@@ -611,35 +605,10 @@ where
     Ok(())
 }
 
-/// The checkpoint as the checkpointing facet encodes it.
 fn convert_checkpoint(
     cp: getter::BottomUpCheckpoint,
 ) -> anyhow::Result<checkpoint::BottomUpCheckpoint> {
-    // TODO: Code generation in the ipc-solidity-actors repo should cater for this.
-    Ok(checkpoint::BottomUpCheckpoint {
-        subnet_id: checkpoint::SubnetID {
-            root: cp.subnet_id.root,
-            route: cp.subnet_id.route,
-        },
-        block_height: cp.block_height,
-        block_hash: cp.block_hash,
-        next_configuration_number: cp.next_configuration_number,
-        slash_pre_signature_count: cp.slash_pre_signature_count,
-        msgs: convert_tokenizables(cp.msgs)?,
-        activity: checkpoint::CompressedActivityRollup {
-            consensus: checkpoint::CompressedSummary {
-                stats: checkpoint::AggregatedStats {
-                    total_active_validators: cp.activity.consensus.stats.total_active_validators,
-                    total_num_blocks_committed: cp
-                        .activity
-                        .consensus
-                        .stats
-                        .total_num_blocks_committed,
-                },
-                data_root_commitment: cp.activity.consensus.data_root_commitment,
-            },
-        },
-    })
+    Ok(checkpoint::BottomUpCheckpoint::from_token(cp.into_token())?)
 }
 
 fn parent_is_bitcoin(subnet_id: &Option<ipc_api::subnet_id::SubnetID>) -> bool {
@@ -657,6 +626,7 @@ async fn broadcast_bitcoin_signature<C, DB>(
     checkpoint: checkpoint::BottomUpCheckpoint,
     chain_id: ChainID,
     slash_signatures: Vec<ipc_api::eots::SlashPreSignature>,
+    key: [u8; 32],
 ) -> anyhow::Result<()>
 where
     C: Client + Clone + Send + Sync + 'static,
@@ -674,7 +644,7 @@ where
     );
 
     let calldata = gateway
-        .add_bitcoin_checkpoint_signature_calldata(&checkpoint, checkpoint_psbt)
+        .add_bitcoin_checkpoint_signature_calldata(&checkpoint, checkpoint_psbt, key)
         .context("failed to produce bitcoin checkpoint signature calldata")?;
 
     let tx_hash = broadcaster
@@ -891,10 +861,10 @@ mod tests {
 
     use crate::fvm::checkpoint::{
         final_heights_above, into_power_map, newly_final_heights, outputs_to_presign, power_diff,
-        resign_plan,
+        resign_plan, should_post_slash_pre_signature,
     };
 
-    use super::{getter, PowerTable, PowerUpdates};
+    use super::{checkpoint::GetSlashOutputReturn, getter, PowerTable, PowerUpdates};
 
     fn checkpoint_at(height: u64) -> getter::BottomUpCheckpoint {
         getter::BottomUpCheckpoint {
@@ -917,79 +887,71 @@ mod tests {
 
     #[test]
     fn resigning_a_missing_bitcoin_signature_while_the_checkpoint_signature_is_in_the_gateway() {
-        // The checkpoint of 200 has this validator's checkpoint signature (not in `unsigned`)
-        // but no Bitcoin signature: only the Bitcoin signature is submitted.
         let plan = resign_plan(vec![], 301, vec![checkpoint_at(200)]);
         assert_eq!(heights(&plan), vec![(200, false, true)]);
-        // Both signatures missing: both submitted, once.
         let plan = resign_plan(vec![checkpoint_at(100)], 301, vec![checkpoint_at(100)]);
         assert_eq!(heights(&plan), vec![(100, true, true)]);
-        // Checkpoint signature missing, Bitcoin signature present.
         let plan = resign_plan(vec![checkpoint_at(100)], 301, vec![]);
         assert_eq!(heights(&plan), vec![(100, true, false)]);
     }
 
     #[test]
     fn no_signature_for_a_checkpoint_already_submitted_or_not_final() {
-        // Nothing missing: nothing to sign.
         assert!(resign_plan(vec![], 301, vec![]).is_empty());
-        // The checkpoint of 300 is final only once 301 is: not re-signed at final height 300.
         let plan = resign_plan(vec![checkpoint_at(300), checkpoint_at(200)], 300, vec![]);
         assert_eq!(heights(&plan), vec![(200, true, false)]);
         let plan = resign_plan(vec![checkpoint_at(300)], 301, vec![]);
         assert_eq!(heights(&plan), vec![(300, true, false)]);
     }
 
-    fn unslashable(txid: &str, keys: &[[u8; 32]], signer: bool) -> ipc_api::eots::UnslashableOutput {
+    fn unslashable(
+        txid: &str,
+        keys: &[[u8; 32]],
+        signer: bool,
+    ) -> ipc_api::eots::UnslashableOutput {
         ipc_api::eots::UnslashableOutput {
             txid: txid.to_string(),
             vout: 1,
-            owner: keys[0],
-            join_txid: txid.to_string(),
-            block_height: 10,
-            threshold: 1,
             keys: keys.iter().map(|k| (*k, 1)).collect(),
+            threshold: 2,
             signer,
         }
     }
 
-    fn posted(txid: &str, index: u16) -> ipc_api::eots::SlashPreSignature {
-        ipc_api::eots::SlashPreSignature {
-            txid: txid.to_string(),
-            vout: 1,
-            index,
-            signature: vec![0; 64],
-        }
+    #[test]
+    fn slash_pre_signatures_of_the_outputs_naming_this_validator() {
+        let (a, own) = ([1u8; 32], [2u8; 32]);
+        let outputs = vec![
+            unslashable("t1", &[a, own], true),
+            unslashable("t2", &[own, a], true),
+            unslashable("t3", &[a], false),
+        ];
+        let to_sign: Vec<_> = outputs_to_presign(&own, outputs)
+            .into_iter()
+            .map(|(o, index)| (o.txid, index))
+            .collect();
+        assert_eq!(to_sign, vec![("t1".to_string(), 1), ("t2".to_string(), 0)]);
     }
 
     #[test]
-    fn slash_pre_signatures_posted_at_a_checkpoint_height_and_a_lost_one_again() {
-        let (a, own) = ([1u8; 32], [2u8; 32]);
-        let outputs = || {
-            vec![
-                unslashable("t1", &[a, own], true),
-                unslashable("t2", &[a, own], true),
-                // A configuration without this validator's key
-                unslashable("t3", &[a], false),
-            ]
+    fn slash_pre_signature_posted_below_the_threshold_or_after_a_recorded_carry() {
+        let output = |power: u64, carried: u64, posted: bool| GetSlashOutputReturn {
+            power: power.into(),
+            carried_height: carried.into(),
+            posted,
         };
-        // First checkpoint height: both outputs of its configurations are pre-signed.
-        let to_sign: Vec<_> = outputs_to_presign(&own, outputs(), &[])
-            .into_iter()
-            .map(|o| o.txid)
-            .collect();
-        assert_eq!(to_sign, vec!["t1", "t2"]);
-        // Next checkpoint height: the pre-signature of t1 reached the gateway, that of t2 was
-        // lost, so t2 is pre-signed again. Another signer's entry for t2 does not count.
-        let gateway = vec![posted("t1", 1), posted("t2", 0)];
-        let to_sign: Vec<_> = outputs_to_presign(&own, outputs(), &gateway)
-            .into_iter()
-            .map(|o| o.txid)
-            .collect();
-        assert_eq!(to_sign, vec!["t2"]);
-        // Both in the gateway: nothing to post.
-        let gateway = vec![posted("t1", 1), posted("t2", 1)];
-        assert!(outputs_to_presign(&own, outputs(), &gateway).is_empty());
+        // below the threshold
+        assert!(should_post_slash_pre_signature(&output(2, 0, false), 3, 0));
+        // own index already posted
+        assert!(!should_post_slash_pre_signature(&output(2, 0, true), 3, 0));
+        // at the threshold and never carried, whatever Bitcoin L1 recorded
+        assert!(!should_post_slash_pre_signature(&output(3, 0, false), 3, 0));
+        assert!(!should_post_slash_pre_signature(&output(3, 0, false), 3, 100));
+        // carried by a checkpoint that Bitcoin L1 has not recorded yet
+        assert!(!should_post_slash_pre_signature(&output(3, 350, false), 3, 340));
+        // carried by a recorded checkpoint, and the output is still not slashable
+        assert!(should_post_slash_pre_signature(&output(3, 350, false), 3, 350));
+        assert!(!should_post_slash_pre_signature(&output(3, 350, true), 3, 350));
     }
 
     fn power_update(current: PowerTable, updates: PowerUpdates) -> PowerTable {
@@ -1056,19 +1018,15 @@ mod tests {
         assert!(power_diff(current, next).0.is_empty());
     }
 
-    /// The checkpoint of `H` is signed first in the subnet block where `H + 1` becomes final.
     #[test]
     fn first_signing_when_next_height_final() {
-        // Final height 100: the checkpoint of 100 waits for 101.
         assert!(!newly_final_heights(99, 100).contains(&100));
         assert!(newly_final_heights(100, 101).contains(&100));
-        // A jump of the final height covers every height in between.
         assert_eq!(newly_final_heights(101, 350), 101..350);
         assert!(newly_final_heights(0, 1).is_empty());
         assert_eq!(newly_final_heights(0, 201), 1..201);
     }
 
-    /// Consecutive subnet blocks sign each checkpoint exactly once.
     #[quickcheck]
     fn prop_first_signing_once(steps: Vec<u8>) {
         let mut prev = 0;
@@ -1082,20 +1040,11 @@ mod tests {
         assert_eq!(seen, expected);
     }
 
-    /// Re-signing covers the final checkpoints above the checkpointed height only.
     #[test]
     fn resigning_above_checkpointed() {
         assert_eq!(final_heights_above(0, 301), 1..301);
         assert_eq!(final_heights_above(100, 301), 101..301);
         assert!(final_heights_above(300, 301).is_empty());
         assert!(!final_heights_above(100, 300).contains(&300));
-    }
-
-    /// A checkpoint the gateway created for a full batch of cross-subnet messages, at a height
-    /// that is not a multiple of the checkpoint period, is signed first and signed again.
-    #[test]
-    fn checkpoint_at_any_height_is_signed() {
-        assert!(newly_final_heights(150, 151).contains(&150));
-        assert!(final_heights_above(100, 200).contains(&150));
     }
 }

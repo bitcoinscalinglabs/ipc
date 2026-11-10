@@ -6,7 +6,7 @@ import {QuorumMap} from "../structs/Quorum.sol";
 import {BottomUpCheckpoint, BottomUpMsgBatch, IpcEnvelope, ParentFinality} from "../structs/CrossNet.sol";
 import {SubnetID, Subnet, ParentValidatorsTracker} from "../structs/Subnet.sol";
 import {Membership} from "../structs/Subnet.sol";
-import {BitcoinCheckpoint, SlashPreSignature} from "../structs/Bitcoin.sol";
+import {BitcoinCheckpoint, SlashOutput, CarriedSlashOutput} from "../structs/Bitcoin.sol";
 import {AccountHelper} from "../lib/AccountHelper.sol";
 import {FilAddress} from "fevmate/contracts/utils/FilAddress.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
@@ -77,12 +77,12 @@ struct GatewayActorStorage {
     // =========== Bitcoin ===========
     mapping(uint256 => mapping(bytes32 => BitcoinCheckpoint)) bitcoinCheckpoints;
     mapping(uint256 => bytes32[]) bitcoinCheckpointPsbtHashes;
-    /// @notice The subnet final height: the highest subnet height carried by an executed
-    /// `EotsFinality`. Never decreases.
+    /// @notice Highest subnet height carried by an executed `EotsFinality`.
     uint256 subnetFinalHeight;
-    /// @notice Slash pre-signatures posted by validators, in posting order.
-    SlashPreSignature[] slashPreSignatures;
-    /// @notice keccak256(txid, vout, index) of every posted pre-signature, against replays.
+    /// @notice The slash pre-signatures of each output, keyed by keccak256(txid, vout, threshold).
+    /// Deleting them once Bitcoin L1 has made the output slashable is future work.
+    mapping(bytes32 => SlashOutput) slashOutputs;
+    /// @notice keccak256(txid, vout, index) of posted entries, rejects replays.
     mapping(bytes32 => bool) slashPreSignaturePosted;
     // =========== ERC Token Bridging ===========
     /// @notice Tokens registered for bridging on this subnet (home-subnet registration).
@@ -103,6 +103,14 @@ struct GatewayActorStorage {
     /// @notice Last checkpointed totalSupply per registered token.
     ///         Used to compute supply deltas (IPC:ETS) between checkpoints.
     mapping(address => uint256) lastCheckpointedSupply;
+    /// @notice Keys of `slashOutputs` whose posted powers reached their threshold, in that order.
+    bytes32[] slashOutputsToCarry;
+    /// @notice The first entry of `slashOutputsToCarry` that no checkpoint has carried yet.
+    uint256 slashOutputsToCarryStart;
+    /// @notice The outputs that the checkpoint of each height carries.
+    mapping(uint256 => CarriedSlashOutput[]) slashOutputsCarried;
+    /// @notice Height of the checkpoint that carries each registered token's registration.
+    mapping(address => uint256) tokenRegistrationHeight;
 }
 
 struct TokenMetadata {

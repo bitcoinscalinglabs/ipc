@@ -40,13 +40,6 @@ pub(crate) const DEFAULT_MAX_PROPOSAL_RANGE: BlockHeight = 100;
 pub(crate) const DEFAULT_MAX_CACHE_BLOCK: BlockHeight = 500;
 pub(crate) const DEFAULT_PROPOSAL_DELAY: BlockHeight = 2;
 
-/// How long a node waits between two questions to its monitor.
-pub const MONITOR_RETRY: Duration = Duration::from_secs(1);
-
-/// How long one question to the monitor may take before it is asked again, for a connection
-/// that hangs.
-pub const MONITOR_TIMEOUT: Duration = Duration::from_secs(10);
-
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     /// The number of blocks to delay before reporting a height as final on the parent chain.
@@ -198,40 +191,4 @@ pub(crate) fn is_null_round_error(err: &anyhow::Error) -> bool {
 
 pub(crate) fn is_null_round_str(s: &str) -> bool {
     s.contains(NULL_ROUND_ERR_MSG)
-}
-
-/// Asks the monitor until it answers, every `retry`, each question within `timeout`. It warns on
-/// the first unanswered question and on every 30th.
-pub(crate) async fn ask_until_answered<T, F, Fut>(
-    what: &str,
-    retry: Duration,
-    timeout: Duration,
-    ask: F,
-) -> T
-where
-    F: Fn() -> Fut,
-    Fut: std::future::Future<Output = anyhow::Result<T>>,
-{
-    let mut attempts = 0u64;
-    loop {
-        let result = match tokio::time::timeout(timeout, ask()).await {
-            Ok(result) => result,
-            Err(_) => Err(anyhow::anyhow!("no answer within {timeout:?}")),
-        };
-        match result {
-            Ok(answer) => {
-                if attempts > 0 {
-                    tracing::info!(what, attempts, "monitor answered after waiting");
-                }
-                return answer;
-            }
-            Err(e) => {
-                attempts += 1;
-                if attempts == 1 || attempts % 30 == 0 {
-                    tracing::warn!(what, attempts, error = %e, "waiting for the monitor to answer");
-                }
-                tokio::time::sleep(retry).await;
-            }
-        }
-    }
 }

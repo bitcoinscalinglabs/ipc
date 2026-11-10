@@ -196,7 +196,7 @@ contract GatewayGetterFacet {
         return s.checkpointQuorumMap.quorumInfo[h].currentWeight;
     }
 
-    /// @notice Returns the subnet final height, 0 before the first `EotsFinality`.
+    /// @notice 0 before the first `EotsFinality`.
     function subnetFinalHeight() external view returns (uint256) {
         return s.subnetFinalHeight;
     }

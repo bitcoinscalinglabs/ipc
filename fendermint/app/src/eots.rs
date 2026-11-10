@@ -1,5 +1,4 @@
-//! The EOTS round in the application: the persistent store of votes, the voting loop of a
-//! validator, and the finality query.
+//! EOTS in the application: the vote store, the validator's voting loop, and the finality query.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -8,18 +7,18 @@ use anyhow::Context;
 use fendermint_storage::{Codec, KVCollection, KVReadable, KVStore, KVWritable};
 use fendermint_vm_genesis::{Power, Validator};
 use fendermint_vm_topdown::eots::{
-    key_bytes_of, EnvelopeCheck, EotsStore, EotsTally, KeyBytes, StoredState, VoteOutcome,
+    below_conflict, key_bytes_of, EnvelopeCheck, EotsStore, EotsTally, KeyBytes, StoredState,
+    VoteOutcome,
 };
 use fendermint_vm_topdown::voting::Weight;
 use ipc_api::subnet_id::SubnetID;
-use ipc_eots::ValidatorVote;
+use ipc_eots::{FinalityAnswer, ValidatorVote};
 use ipc_ipld_resolver::{Client, SignedVoteRecord, Timestamp, ValidatorKey, VoteRecord};
 use serde::{Deserialize, Serialize};
 use tendermint::abci::response;
 
 use crate::ipc::AppVote;
 
-/// The ABCI query path of the finality query.
 pub const QUERY_PATH: &str = "/eots";
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
@@ -30,6 +29,7 @@ pub enum EotsKey {
     Checkpointed,
     EvidenceCarried([u8; 32]),
     PowerTable(u64),
+    LastCast,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -41,9 +41,9 @@ pub enum EotsValue {
     Carried,
     /// Validator keys with their weights (serde has no array of 33 bytes)
     PowerTable(Vec<(Vec<u8>, Weight)>),
+    LastCast(u64),
 }
 
-/// The store over the application's key-value database.
 pub struct AppEotsStore<DB, S: KVStore> {
     db: DB,
     collection: KVCollection<S, EotsKey, EotsValue>,
@@ -103,6 +103,35 @@ where
         self.put(&EotsKey::PowerTable(height), &EotsValue::PowerTable(table))
     }
 
+    fn put_last_cast(&self, height: u64) -> anyhow::Result<()> {
+        self.put(&EotsKey::LastCast, &EotsValue::LastCast(height))
+    }
+
+    fn delete_up_to(&self, height: u64, power_tables_from: u64) -> anyhow::Result<()> {
+        self.db
+            .with_write(|tx| {
+                let deleted = self
+                    .collection
+                    .iterate(&*tx)
+                    .filter_map(|item| match item {
+                        Ok((key, _)) => match key {
+                            EotsKey::Vote(_, h, _) | EotsKey::Block(h) if h <= height => {
+                                Some(Ok(key))
+                            }
+                            EotsKey::PowerTable(h) if h < power_tables_from => Some(Ok(key)),
+                            _ => None,
+                        },
+                        Err(e) => Some(Err(e)),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                for key in &deleted {
+                    self.collection.delete(tx, key)?;
+                }
+                Ok(())
+            })
+            .context("EOTS store delete failed")
+    }
+
     fn load(&self) -> anyhow::Result<StoredState> {
         let tx = self.db.read();
         let mut state = StoredState::default();
@@ -122,6 +151,7 @@ where
                         .collect();
                     state.power_tables.push((height, table))
                 }
+                (_, EotsValue::LastCast(h)) => state.last_cast = h,
                 _ => {}
             }
         }
@@ -129,31 +159,10 @@ where
     }
 }
 
-/// The finality query's answer: the subnet final height the node serves (the recorded one,
-/// below a conflict), the recorded one itself, and for a height up to the served one its block
-/// hash with the votes held for it.
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct FinalityAnswer {
-    pub final_height: u64,
-    pub recorded_final_height: u64,
-    pub checkpointed_height: u64,
-    pub block: Option<FinalBlock>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct FinalBlock {
-    pub height: u64,
-    pub block_hash: [u8; 32],
-    pub votes: Vec<ValidatorVote>,
-}
-
-/// Answers the finality query; `data` is empty or the JSON of a height.
-/// Answers the finality query. `gateway_final_height` is the subnet final height the gateway
-/// holds in the committed state, the answer's final height when it is known.
+/// `gateway_final_height` comes from the committed state.
 pub fn answer_query(
     tally: Option<&EotsTally>,
     gateway_final_height: Option<u64>,
-    data: &[u8],
 ) -> response::Query {
     let Some(tally) = tally else {
         return response::Query {
@@ -163,34 +172,16 @@ pub fn answer_query(
         };
     };
     let mut status = tally.status();
-    if let Some(final_height) = gateway_final_height {
-        status.final_height = final_height;
-    }
-    let block = if data.is_empty() {
-        None
-    } else {
-        match serde_json::from_slice::<u64>(data) {
-            Ok(height) => tally
-                .final_block(height)
-                .map(|(block_hash, votes)| FinalBlock {
-                    height,
-                    block_hash,
-                    votes,
-                }),
-            Err(e) => {
-                return response::Query {
-                    code: 2.into(),
-                    info: format!("the query data is not a height: {e}"),
-                    ..Default::default()
-                }
-            }
-        }
-    };
+    let conflict_height = tally.first_conflict();
+    status.final_height = below_conflict(
+        gateway_final_height.unwrap_or(status.final_height),
+        conflict_height,
+    );
     let answer = FinalityAnswer {
         final_height: status.final_height,
         recorded_final_height: status.recorded_final_height,
         checkpointed_height: status.checkpointed_height,
-        block,
+        conflict_height,
     };
     response::Query {
         value: serde_json::to_vec(&answer)
@@ -201,8 +192,7 @@ pub fn answer_query(
     }
 }
 
-/// Rule 1 of accepting a vote: the vote's gossip envelope, rebuilt from the validator's key,
-/// the subnet id, the vote and the envelope's timestamp, verifies under the stored signature.
+/// Verifies the signature of a vote's gossip envelope.
 pub fn envelope_check(subnet_id: SubnetID) -> EnvelopeCheck {
     Arc::new(move |vote: &ValidatorVote| {
         let Ok(key) = libp2p::identity::secp256k1::PublicKey::try_from_bytes(&vote.validator)
@@ -220,39 +210,7 @@ pub fn envelope_check(subnet_id: SubnetID) -> EnvelopeCheck {
     })
 }
 
-/// Publishes a vote or evidence under the node's key.
-pub async fn publish_vote(
-    client: &Client<AppVote>,
-    key: &libp2p::identity::Keypair,
-    subnet_id: &SubnetID,
-    content: AppVote,
-) {
-    if let Some(record) = sign(key, subnet_id, content) {
-        publish(client, record);
-    }
-}
-
-/// Publishes again this node's own votes that no block carries yet and every evidence that no
-/// block carries yet.
-async fn republish(
-    tally: &EotsTally,
-    key: &libp2p::identity::Keypair,
-    subnet_id: &SubnetID,
-    client: &Client<AppVote>,
-) {
-    let own = key_bytes_of(&key.public());
-    for v in tally.own_votes_above_recorded(&own) {
-        publish_vote(client, key, subnet_id, AppVote::Eots(v.vote)).await;
-    }
-    for (a, b) in tally.evidence_to_publish() {
-        publish_vote(client, key, subnet_id, AppVote::EotsEvidence(a, b)).await;
-    }
-}
-
-/// A validator's voting loop: after every committed height, it refreshes the monitor's state,
-/// asks its provider to sign the votes it has not cast, and publishes them. At start and every
-/// tenth round it publishes its votes above the recorded final height and the evidence no block
-/// carries yet again.
+/// Signs and publishes the validator's votes after each committed height.
 pub async fn vote_loop(
     tally: EotsTally,
     key: libp2p::identity::Keypair,
@@ -261,14 +219,12 @@ pub async fn vote_loop(
 ) {
     let own = key_bytes_of(&key.public());
     let mut committed = tally.committed();
-    let mut rounds: u64 = 0;
-    republish(&tally, &key, &subnet_id, &client).await;
     loop {
         if committed.changed().await.is_err() {
             return;
         }
         let height = *committed.borrow();
-        if let Err(e) = tally.refresh().await {
+        if let Err(e) = tally.read_monitor().await {
             tracing::warn!(error = %e, "EOTS vote loop: monitor unreachable, not voting");
             continue;
         }
@@ -298,12 +254,9 @@ pub async fn vote_loop(
                     break;
                 }
             }
+            // Future work: implement resending this vote.
             publish(&client, record);
             tally.mark_cast(h);
-        }
-        rounds += 1;
-        if rounds % 10 == 0 {
-            republish(&tally, &key, &subnet_id, &client).await;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
@@ -329,9 +282,7 @@ fn publish(client: &Client<AppVote>, record: SignedVoteRecord<AppVote>) {
     }
 }
 
-/// Seeds the tally's first power table from the ledger, unless the tally holds the tables of
-/// an earlier run. Before genesis the ledger has no state and nothing is seeded: `init_chain`
-/// seeds it once the genesis state is in place.
+/// Initializes the tally's power table from committed state.
 pub fn seed_power_table<Q>(tally: &EotsTally, query: &Q) -> anyhow::Result<bool>
 where
     Q: fendermint_vm_topdown::sync::ParentFinalityStateQuery,
@@ -346,7 +297,6 @@ where
     Ok(true)
 }
 
-/// Installs `validators` as the tally's power table from height 0 on.
 pub fn set_genesis_power_table(
     tally: &EotsTally,
     validators: Vec<Validator<Power>>,
@@ -363,170 +313,5 @@ pub fn set_genesis_power_table(
     tally.set_power_table(0, table)
 }
 
-pub fn new_store<DB, S>(db: DB, ns: S::Namespace) -> Arc<dyn EotsStore>
-where
-    S: KVStore + Codec<EotsKey> + Codec<EotsValue> + Send + Sync + 'static,
-    S::Repr: Ord + 'static,
-    S::Namespace: Send + Sync + 'static,
-    DB: KVWritable<S> + KVReadable<S> + Send + Sync + 'static,
-{
-    Arc::new(AppEotsStore::new(db, ns))
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A vote built from its signed envelope passes the envelope check, and a changed
-    /// signature, timestamp or subnet does not.
-    #[test]
-    fn envelope_check_verifies_the_rebuilt_envelope() {
-        let key = libp2p::identity::Keypair::generate_secp256k1();
-        let subnet_id = SubnetID::new_root(7);
-        let vote = ipc_eots::EotsVote {
-            pk_eots: [1; 32],
-            height: 3,
-            block_hash: [2; 32],
-            signature: [[3; 32]; 2],
-            start: 1,
-            proof: vec![[4; 32]; 2],
-        };
-        let record = VoteRecord::signed(&key, subnet_id.clone(), AppVote::Eots(vote.clone()))
-            .unwrap();
-        let own = ValidatorVote {
-            validator: key_bytes_of(&key.public()).to_vec(),
-            vote,
-            timestamp: record.record().timestamp.into(),
-            signature: record.signature(),
-        };
-        let check = envelope_check(subnet_id);
-        assert!(check(&own));
-
-        let mut tampered = own.clone();
-        tampered.signature[5] ^= 1;
-        assert!(!check(&tampered));
-        let mut later = own.clone();
-        later.timestamp += 1;
-        assert!(!check(&later));
-        assert!(!envelope_check(SubnetID::new_root(8))(&own));
-    }
-
-    /// An empty ledger seeds nothing, as `init_chain` seeds the genesis table later; a ledger
-    /// with validators seeds its table.
-    #[test]
-    fn seed_power_table_waits_for_the_ledger() {
-        use fendermint_vm_genesis::ValidatorKey;
-        use fendermint_vm_topdown::sync::ParentFinalityStateQuery;
-        use quickcheck::Arbitrary;
-
-        struct Ledger(Option<Vec<Validator<Power>>>);
-        impl ParentFinalityStateQuery for Ledger {
-            fn get_latest_committed_finality(
-                &self,
-            ) -> anyhow::Result<Option<fendermint_vm_topdown::IPCParentFinality>> {
-                Ok(None)
-            }
-            fn get_power_table(&self) -> anyhow::Result<Option<Vec<Validator<Power>>>> {
-                Ok(self.0.clone())
-            }
-        }
-
-        struct NoStore;
-        impl EotsStore for NoStore {
-            fn put_vote(&self, _vote: &ValidatorVote) -> anyhow::Result<()> {
-                Ok(())
-            }
-            fn put_block(&self, _height: u64, _hash: [u8; 32]) -> anyhow::Result<()> {
-                Ok(())
-            }
-            fn put_recorded_final(&self, _height: u64) -> anyhow::Result<()> {
-                Ok(())
-            }
-            fn put_evidence_carried(&self, _pk_eots: [u8; 32]) -> anyhow::Result<()> {
-                Ok(())
-            }
-            fn put_power_table(
-                &self,
-                _height: u64,
-                _table: &[(KeyBytes, Weight)],
-            ) -> anyhow::Result<()> {
-                Ok(())
-            }
-            fn load(&self) -> anyhow::Result<StoredState> {
-                Ok(StoredState::default())
-            }
-        }
-
-        fvm_shared::address::set_current_network(fvm_shared::address::Network::Testnet);
-        let subnet_id: SubnetID = "/b4/t410fhor637l2pmjle6whfq7go5upmf74qg6dbr4uzei"
-            .parse()
-            .unwrap();
-        let parent = ipc_provider::config::subnet::Subnet {
-            id: subnet_id.parent().unwrap(),
-            config: ipc_provider::config::subnet::SubnetConfig::Btc(
-                ipc_provider::config::subnet::BTCSubnet {
-                    provider_http: "http://127.0.0.1:1".parse().unwrap(),
-                    provider_timeout: None,
-                    auth_token: None,
-                },
-            ),
-        };
-        let tally = EotsTally::new(
-            Arc::new(NoStore),
-            ipc_provider::manager::BtcSubnetManager::new(&parent).unwrap(),
-            subnet_id.clone(),
-            Vec::new(),
-            Arc::new(|_| true),
-        )
-        .unwrap();
-
-        assert!(!seed_power_table(&tally, &Ledger(None)).unwrap());
-        let validator = Validator {
-            public_key: ValidatorKey::arbitrary(&mut quickcheck::Gen::new(8)),
-            power: Power(1),
-        };
-        assert!(seed_power_table(&tally, &Ledger(Some(vec![validator]))).unwrap());
-
-        // A store with the tables of an earlier run: seeded without the ledger
-        struct StoredTables;
-        impl EotsStore for StoredTables {
-            fn put_vote(&self, _vote: &ValidatorVote) -> anyhow::Result<()> {
-                Ok(())
-            }
-            fn put_block(&self, _height: u64, _hash: [u8; 32]) -> anyhow::Result<()> {
-                Ok(())
-            }
-            fn put_recorded_final(&self, _height: u64) -> anyhow::Result<()> {
-                Ok(())
-            }
-            fn put_evidence_carried(&self, _pk_eots: [u8; 32]) -> anyhow::Result<()> {
-                Ok(())
-            }
-            fn put_power_table(
-                &self,
-                _height: u64,
-                _table: &[(KeyBytes, Weight)],
-            ) -> anyhow::Result<()> {
-                Ok(())
-            }
-            fn load(&self) -> anyhow::Result<StoredState> {
-                Ok(StoredState {
-                    power_tables: vec![(0, vec![([2; 33], 1)])],
-                    ..StoredState::default()
-                })
-            }
-        }
-        let restarted = EotsTally::new(
-            Arc::new(StoredTables),
-            ipc_provider::manager::BtcSubnetManager::new(&parent).unwrap(),
-            subnet_id,
-            Vec::new(),
-            Arc::new(|_| true),
-        )
-        .unwrap();
-        assert!(seed_power_table(&restarted, &Ledger(None)).unwrap());
-    }
-}
-#[cfg(test)]
-#[path = "eots_spec_tests.rs"]
-mod spec_tests;
+mod tests;

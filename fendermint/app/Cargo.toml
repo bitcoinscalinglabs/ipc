@@ -88,6 +88,7 @@ quickcheck_macros = { workspace = true }
 
 fendermint_vm_genesis = { path = "../vm/genesis", features = ["arb"] }
 fendermint_vm_snapshot = { path = "../vm/snapshot", features = ["arb"] }
+ipc-eots = { workspace = true, features = ["testing"] }
 
 # Using a single binary to run the application as well as to execute client commands.
 [[bin]]

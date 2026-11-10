@@ -47,3 +47,4 @@ tracing-subscriber = { workspace = true }
 
 fendermint_crypto = { path = "../../crypto" }
 fendermint_testing = { path = "../../testing", features = ["smt"] }
+ipc-eots = { workspace = true, features = ["testing"] }

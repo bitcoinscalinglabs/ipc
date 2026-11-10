@@ -13,7 +13,6 @@ use cid::Cid;
 use ethers_core::types::{self as et};
 use fendermint_rpc::client::{FendermintClient, TendermintClient};
 
-/// The ABCI query path of the finality query.
 const EOTS_QUERY_PATH: &str = "/eots";
 use fendermint_rpc::query::QueryClient;
 use fendermint_vm_actor_interface::{evm, system};
@@ -22,6 +21,7 @@ use fendermint_vm_message::signed::DomainHash;
 use fendermint_vm_message::{chain::ChainMessage, conv::from_eth::to_fvm_address};
 use fvm_ipld_encoding::{de::DeserializeOwned, RawBytes};
 use fvm_shared::{chainid::ChainID, econ::TokenAmount, error::ExitCode, message::Message};
+use ipc_eots::FinalityAnswer;
 use rand::Rng;
 use tendermint::block::Height;
 use tendermint_rpc::query::Query;
@@ -156,11 +156,7 @@ impl<C> JsonRpcState<C>
 where
     C: Client + Sync + Send,
 {
-    /// The subnet final height the node serves (the recorded one, below a conflict), `None`
-    /// when the subnet has no EOTS finality.
-    ///
-    /// Zero before a block carries the first EOTS quorum: no committed block is final then, and
-    /// the `finalized` and `safe` tags resolve to the genesis block and the initial state.
+    /// `None` when the subnet has no EOTS finality.
     pub async fn final_height(&self) -> JsonRpcResult<Option<tendermint::block::Height>> {
         let res = self
             .tm()
@@ -169,21 +165,15 @@ where
         if res.code.is_err() {
             return Ok(None);
         }
-        let answer: serde_json::Value =
-            serde_json::from_slice(&res.value).context("the finality answer is not JSON")?;
-        let height = answer["final_height"]
-            .as_u64()
-            .context("the finality answer has no final height")?;
+        let answer: FinalityAnswer =
+            serde_json::from_slice(&res.value).context("the finality answer does not parse")?;
         Ok(Some(
-            Height::try_from(height).context("the final height is not a height")?,
+            Height::try_from(answer.final_height).context("the final height is not a height")?,
         ))
     }
 
-    /// The height a `finalized` or `safe` tag resolves to: the subnet final height, or the
-    /// latest committed height minus one where the subnet has no EOTS finality.
-    ///
-    /// Height zero stands for the genesis block ([`from_tm::BLOCK_ZERO`]); CometBFT holds no
-    /// block there, so the callers must not fetch it from the node.
+    /// The height a `finalized` or `safe` tag resolves to: the subnet final height, or the latest
+    /// committed height minus one without EOTS finality. Zero is genesis, absent in CometBFT.
     pub async fn finalized_height(&self) -> JsonRpcResult<tendermint::block::Height> {
         match self.final_height().await? {
             Some(h) => Ok(h),
@@ -309,8 +299,7 @@ where
             et::BlockId::Number(bn) => match bn {
                 // The client might be asking by height of a block, expecting to see the results.
                 et::BlockNumber::Number(height) => Ok(FvmQueryHeight::from(height.as_u64() + 1)),
-                // The state after the final block; with subnet final height zero this is
-                // the initial state, which the node stores under height 1.
+                // The state after the final block.
                 et::BlockNumber::Finalized | et::BlockNumber::Safe => {
                     match self.final_height().await? {
                         Some(h) => Ok(FvmQueryHeight::Height(h.value() + 1)),
@@ -708,128 +697,110 @@ where
 
 #[cfg(test)]
 mod tests {
-    //! `finalized` and `safe` resolve to the node's local subnet finality, also when it is 0
-    //! (`slashing.md`, "The Ethereum JSON-RPC API" and "Final blocks").
-
-    use std::sync::Arc;
     use std::time::Duration;
 
     use async_trait::async_trait;
     use ethers_core::types::{self as et};
     use fendermint_vm_message::query::FvmQueryHeight;
     use fvm_shared::econ::TokenAmount;
-    use tendermint::block::Height;
-    use tendermint_rpc::endpoint::abci_query;
-    use tendermint_rpc::{
-        Client, Error, Method, MockClient, MockRequestMethodMatcher, SimpleRequest,
-    };
+    use tendermint::block::{Commit, Height};
+    use tendermint_rpc::endpoint::{abci_query, block, header};
+    use tendermint_rpc::{Client, Error, Response, SimpleRequest};
 
     use crate::conv::from_tm;
     use crate::state::JsonRpcState;
     use crate::GasOpt;
 
-    /// A `Clone` wrapper, which `JsonRpcState::new` needs and `MockClient` lacks.
+    /// A CometBFT node that has committed the blocks up to `committed` and whose finality query
+    /// answers `final_height`, and `conflict_height` with a recorded subnet final height above it.
     #[derive(Clone)]
-    struct SharedMock(Arc<MockClient<MockRequestMethodMatcher>>);
-
-    #[async_trait]
-    impl Client for SharedMock {
-        async fn perform<R>(&self, request: R) -> Result<R::Output, Error>
-        where
-            R: SimpleRequest,
-        {
-            self.0.perform(request).await
-        }
+    struct Node {
+        final_height: Option<u64>,
+        committed: u64,
+        conflict_height: Option<u64>,
     }
 
-    /// A committed CometBFT block at `height`, as the `block` endpoint returns it
-    /// (an empty block of the tendermint-rpc kvstore fixtures, with the height replaced).
-    fn block_json(height: u64) -> serde_json::Value {
-        let json = r#"{
-          "block": {
-            "data": { "txs": [] },
-            "evidence": { "evidence": [] },
-            "header": {
-              "app_hash": "0000000000000000",
-              "chain_id": "dockerchain",
-              "consensus_hash": "048091BC7DDC283F77BFBF91D73C44DA58C3DF8A9CBC867405D8B7F3DAADA22F",
-              "data_hash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
-              "evidence_hash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
-              "height": "HEIGHT",
-              "last_block_id": {
-                "hash": "C84DC8FF0364FB7E79D3E0EA6ADDB5B1CC7A648B5F940D9480BF1063D7D8594A",
-                "parts": { "hash": "6490012AB9FF265F7E7C23A85A118F4C0671BF37E5B3868A59F5F17F8FB292E2", "total": 1 }
-              },
-              "last_commit_hash": "9F439795B974EC8482447F624110B141BC21B349187177EF0D1C07FEEDACF248",
-              "last_results_hash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
-              "next_validators_hash": "6B95A63B261D3DDC1DFF6FA53F4C591AB8DA58BBA545700BFD45E6A54AAA2A84",
-              "proposer_address": "675F52E8FDA5F4047B8EAF498F946F551ED53DC2",
-              "time": "2022-09-22T18:57:27.243575136Z",
-              "validators_hash": "6B95A63B261D3DDC1DFF6FA53F4C591AB8DA58BBA545700BFD45E6A54AAA2A84",
-              "version": { "app": "1", "block": "11" }
-            },
-            "last_commit": {
-              "block_id": {
-                "hash": "C84DC8FF0364FB7E79D3E0EA6ADDB5B1CC7A648B5F940D9480BF1063D7D8594A",
-                "parts": { "hash": "6490012AB9FF265F7E7C23A85A118F4C0671BF37E5B3868A59F5F17F8FB292E2", "total": 1 }
-              },
-              "height": "PREVIOUS",
-              "round": 0,
-              "signatures": [
-                {
-                  "block_id_flag": 2,
-                  "signature": "44oHR5mAbjwOGjAzFzCD28waXBOlwoRGFck9rKrnq3EmbYz5lY5LObmVXomuo48Fo3y7ZsS9wY4Mj1Gd912/BA==",
-                  "timestamp": "2022-09-22T18:57:27.243575136Z",
-                  "validator_address": "675F52E8FDA5F4047B8EAF498F946F551ED53DC2"
-                }
-              ]
-            }
-          },
-          "block_id": {
-            "hash": "6AA59493037B1673949755B88F86B840FB75285485D95FDBA5BE79D28588F2AC",
-            "parts": { "hash": "0DCBB02A8DFB86E78859A24426ED1D9D2A2C9C3D5C6CD1851477B98705564DD8", "total": 1 }
-          }
-        }"#;
-        assert!(height >= 2, "the fixture block has a last commit");
-        let json = json
-            .replace("HEIGHT", &height.to_string())
-            .replace("PREVIOUS", &(height - 1).to_string());
-        serde_json::from_str(&json).unwrap()
-    }
-
-    /// A node whose finality query answers `final_height` and whose block store holds
-    /// only the block at `committed`, which the test expects the API to ask for.
-    fn node(final_height: Option<u64>, committed: u64) -> JsonRpcState<SharedMock> {
-        let finality = match final_height {
-            Some(h) => abci_query::Response {
-                response: abci_query::AbciQuery {
+    impl Node {
+        fn finality(&self) -> abci_query::Response {
+            let response = match self.final_height {
+                Some(h) => abci_query::AbciQuery {
                     code: tendermint::abci::Code::Ok,
-                    value: serde_json::to_vec(&serde_json::json!({ "final_height": h })).unwrap(),
+                    value: serde_json::to_vec(&ipc_eots::FinalityAnswer {
+                        final_height: h,
+                        recorded_final_height: self.conflict_height.map_or(h, |c| c + 1),
+                        checkpointed_height: 0,
+                        conflict_height: self.conflict_height,
+                    })
+                    .unwrap(),
                     height: Height::try_from(h).unwrap(),
                     ..Default::default()
                 },
-            },
-            None => abci_query::Response {
-                response: abci_query::AbciQuery {
+                None => abci_query::AbciQuery {
                     code: tendermint::abci::Code::from(1),
                     info: "no EOTS finality on this subnet".to_string(),
                     ..Default::default()
                 },
-            },
-        };
-        let block = block_json(committed);
-        let header = serde_json::json!({ "header": block["block"]["header"] });
-        // The mock parses JSON-RPC envelopes, as CometBFT sends them.
-        fn envelope<T: serde::Serialize>(result: &T) -> Result<String, Error> {
-            Ok(serde_json::json!({ "jsonrpc": "2.0", "id": "", "result": result }).to_string())
+            };
+            abci_query::Response { response }
         }
-        let matcher = MockRequestMethodMatcher::default()
-            .map(Method::AbciQuery, envelope(&finality))
-            .map(Method::Block, envelope(&block))
-            .map(Method::Header, envelope(&header));
-        let (client, _driver) = MockClient::new(matcher);
+
+        /// The committed block at the requested height, or the latest one.
+        fn block(&self, height: &serde_json::Value) -> tendermint::Block {
+            let height = height
+                .as_str()
+                .map_or(self.committed, |h| h.parse().unwrap());
+            assert!(
+                (1..=self.committed).contains(&height),
+                "asked for uncommitted block {height}"
+            );
+            let mut block = from_tm::BLOCK_ZERO.clone();
+            block.header.height = Height::try_from(height).unwrap();
+            // The RPC encoding drops a Unix-epoch time, which then fails to decode.
+            block.header.time = tendermint::Time::from_unix_timestamp(height as i64, 0).unwrap();
+            block.last_commit = Some(Commit {
+                height: Height::try_from(height - 1).unwrap(),
+                ..Commit::default()
+            });
+            block
+        }
+    }
+
+    #[async_trait]
+    impl Client for Node {
+        async fn perform<R>(&self, request: R) -> Result<R::Output, Error>
+        where
+            R: SimpleRequest,
+        {
+            let request: serde_json::Value = serde_json::from_str(&request.into_json()).unwrap();
+            let height = &request["params"]["height"];
+            let result = match request["method"].as_str().unwrap() {
+                "abci_query" => serde_json::to_value(self.finality()),
+                "block" => serde_json::to_value(block::Response {
+                    block_id: Default::default(),
+                    block: self.block(height),
+                }),
+                "header" => serde_json::to_value(header::Response {
+                    header: self.block(height).header,
+                }),
+                method => panic!("unexpected request {method}"),
+            }
+            .unwrap();
+            let response = serde_json::json!({ "jsonrpc": "2.0", "id": "", "result": result });
+            Ok(R::Response::from_string(response.to_string())?.into())
+        }
+    }
+
+    fn node(final_height: Option<u64>, committed: u64) -> JsonRpcState<Node> {
+        state_of(Node {
+            final_height,
+            committed,
+            conflict_height: None,
+        })
+    }
+
+    fn state_of(node: Node) -> JsonRpcState<Node> {
         JsonRpcState::new(
-            SharedMock(Arc::new(client)),
+            node,
             Duration::from_secs(1),
             10,
             0,
@@ -841,16 +812,12 @@ mod tests {
         )
     }
 
-    async fn query_height(
-        state: &JsonRpcState<SharedMock>,
-        tag: et::BlockNumber,
-    ) -> FvmQueryHeight {
+    async fn query_height(state: &JsonRpcState<Node>, tag: et::BlockNumber) -> FvmQueryHeight {
         state.query_height(et::BlockId::Number(tag)).await.unwrap()
     }
 
     #[tokio::test]
     async fn finality_zero_is_the_genesis_block_and_initial_state() {
-        // CometBFT has committed block 5, no block carries an EOTS quorum yet.
         let state = node(Some(0), 5);
         for tag in [et::BlockNumber::Finalized, et::BlockNumber::Safe] {
             let final_height = state.final_height().await.unwrap().unwrap();
@@ -869,7 +836,6 @@ mod tests {
                 "{tag:?} serves the genesis header"
             );
 
-            // The initial state is stored under height 1.
             assert_eq!(
                 state.query_height(et::BlockId::Number(tag)).await.unwrap(),
                 FvmQueryHeight::Height(1),
@@ -880,8 +846,7 @@ mod tests {
 
     #[tokio::test]
     async fn finality_above_zero_is_the_final_block_and_its_state() {
-        // A block carried the EOTS quorum of block 3 while CometBFT committed block 5.
-        let state = node(Some(3), 3);
+        let state = node(Some(3), 5);
         for tag in [et::BlockNumber::Finalized, et::BlockNumber::Safe] {
             assert_eq!(state.finalized_height().await.unwrap().value(), 3);
 
@@ -895,7 +860,6 @@ mod tests {
             let header = state.header_by_height(tag).await.unwrap();
             assert_eq!(header.height.value(), 3);
 
-            // The state after block 3 is stored under height 4.
             assert_eq!(
                 state.query_height(et::BlockId::Number(tag)).await.unwrap(),
                 FvmQueryHeight::Height(4),
@@ -905,8 +869,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn finality_below_a_conflict_is_the_answers_final_height() {
+        let state = state_of(Node {
+            final_height: Some(3),
+            committed: 6,
+            conflict_height: Some(4),
+        });
+        for tag in [et::BlockNumber::Finalized, et::BlockNumber::Safe] {
+            assert_eq!(state.finalized_height().await.unwrap().value(), 3);
+            let block = state.block_by_height(tag).await.unwrap();
+            assert_eq!(block.header.height.value(), 3, "{tag:?}");
+        }
+    }
+
+    #[tokio::test]
     async fn genesis_state_height_matches_block_number_zero() {
-        // `finalized` at finality 0 and `eth_getBlockByNumber(0)` read the same state.
         let state = node(Some(0), 5);
         assert_eq!(
             query_height(&state, et::BlockNumber::Finalized).await,

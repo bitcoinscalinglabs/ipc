@@ -31,7 +31,7 @@ use crate::config::subnet::SubnetConfig;
 use crate::config::Subnet;
 use crate::lotus::message::ipc::SubnetInfo;
 use crate::manager::subnet::{
-    BottomUpCheckpointRelayer, GetBlockHashResult, GetRewardedCollateralsResponse,
+    BottomUpCheckpointRelayer, ExitTransaction, GetBlockHashResult, GetRewardedCollateralsResponse,
     SubnetGenesisInfo, TokenMetadata, TopDownFinalityQuery, TopDownQueryPayload, ValidatorRewarder,
 };
 
@@ -117,6 +117,10 @@ impl BtcSubnetManager {
         }
         let data = resp.json::<Value>().await?;
         if let Some(err_obj) = data.get("error") {
+            let code = err_obj
+                .get("code")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
             let message = err_obj
                 .get("message")
                 .and_then(Value::as_str)
@@ -125,7 +129,9 @@ impl BtcSubnetManager {
                 .get("data")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            return Err(anyhow!("{method}: {message} {details}"));
+            return Err(anyhow!(
+                "JSON-RPC error: code={code}, message={message}, details={details}"
+            ));
         }
         data.get("result")
             .cloned()
@@ -142,84 +148,81 @@ impl BtcSubnetManager {
             .ok_or_else(|| anyhow!("{what} is not {N} bytes in hex"))
     }
 
-    /// `geteotskeys`: the EOTS key of every validator that joined with a collateral output.
-    pub async fn get_eots_keys(&self, subnet_id: &SubnetID) -> Result<Vec<ipc_api::eots::EotsKey>> {
+    /// `geteotsrecords`: the EOTS keys and EOTS nonce commitments recorded in Bitcoin blocks above
+    /// `after_bitcoin_height`, and the latest checkpoint, at `max_bitcoin_height` or at the
+    /// latest Bitcoin height the monitor processed.
+    pub async fn eots_records(
+        &self,
+        subnet_id: &SubnetID,
+        after_bitcoin_height: Option<u64>,
+        max_bitcoin_height: Option<u64>,
+    ) -> Result<ipc_api::eots::EotsRecords> {
         let result = self
-            .rpc_call("geteotskeys", json!({ "subnet_id": subnet_id.to_string() }))
+            .rpc_call(
+                "geteotsrecords",
+                json!({
+                    "subnet_id": subnet_id.to_string(),
+                    "after_block_height": after_bitcoin_height,
+                    "max_block_height": max_bitcoin_height,
+                }),
+            )
             .await?;
-        result
+        let keys = result["eots_keys"]
             .as_array()
-            .ok_or_else(|| anyhow!("geteotskeys: not a list"))?
+            .ok_or_else(|| anyhow!("geteotsrecords: eots_keys is not a list"))?
             .iter()
             .map(|e| {
-                Ok(ipc_api::eots::EotsKey {
+                let key = ipc_api::eots::EotsKey {
                     validator: Self::hex_array(&e["pubkey"], "pubkey")?,
                     pk_eots: Self::hex_array(&e["pk_eots"], "pk_eots")?,
-                })
+                };
+                let commitments = e["commitments"]
+                    .as_array()
+                    .ok_or_else(|| anyhow!("geteotsrecords: commitments is not a list"))?
+                    .iter()
+                    .map(Self::recorded_commitment)
+                    .collect::<Result<_>>()?;
+                Ok((key, commitments))
             })
-            .collect()
-    }
-
-    /// `geteotscommitments`: every EOTS nonce commitment the monitor recorded for `pk_eots`.
-    pub async fn get_eots_commitments(
-        &self,
-        subnet_id: &SubnetID,
-        pk_eots: &[u8; 32],
-    ) -> Result<Vec<ipc_api::eots::RecordedCommitment>> {
-        let result = self
-            .rpc_call(
-                "geteotscommitments",
-                json!({ "subnet_id": subnet_id.to_string(), "pk_eots": hex::encode(pk_eots) }),
-            )
-            .await?;
-        result
-            .as_array()
-            .ok_or_else(|| anyhow!("geteotscommitments: not a list"))?
-            .iter()
-            .map(|c| {
-                Ok(ipc_api::eots::RecordedCommitment {
-                    commitment: ipc_eots::EotsNonceCommitment {
-                        start: c["start"].as_u64().ok_or_else(|| anyhow!("start"))?,
-                        count: c["count"]
-                            .as_u64()
-                            .and_then(|n| u32::try_from(n).ok())
-                            .ok_or_else(|| anyhow!("count"))?,
-                        root: Self::hex_array(&c["root"], "root")?,
-                    },
-                    block_height: c["block_height"]
-                        .as_u64()
-                        .ok_or_else(|| anyhow!("block_height"))?,
-                })
+            .collect::<Result<_>>()?;
+        let checkpoint = &result["checkpoint"];
+        let checkpoint = if checkpoint.is_null() {
+            None
+        } else {
+            Some(ipc_api::eots::LatestCheckpoint {
+                height: checkpoint["checkpoint_height"]
+                    .as_u64()
+                    .ok_or_else(|| anyhow!("checkpoint_height"))?,
+                block_hash: Self::hex_array(&checkpoint["checkpoint_hash"], "checkpoint_hash")?,
+                killed: checkpoint["is_kill_checkpoint"].as_bool().unwrap_or(false),
+                bitcoin_height: checkpoint["block_height"]
+                    .as_u64()
+                    .ok_or_else(|| anyhow!("checkpoint block_height"))?,
             })
-            .collect()
-    }
-
-    /// `getsubnetcheckpoint`: the latest checkpoint the monitor recorded, in a Bitcoin block at
-    /// or below `max_bitcoin_height` when given, or `None` while there is none.
-    pub async fn latest_checkpoint(
-        &self,
-        subnet_id: &SubnetID,
-        max_bitcoin_height: Option<u64>,
-    ) -> Result<Option<ipc_api::eots::LatestCheckpoint>> {
-        let result = self
-            .rpc_call(
-                "getsubnetcheckpoint",
-                json!({ "subnet_id": subnet_id.to_string(), "max_block_height": max_bitcoin_height }),
-            )
-            .await?;
-        if result.is_null() {
-            return Ok(None);
-        }
-        Ok(Some(ipc_api::eots::LatestCheckpoint {
-            height: result["checkpoint_height"]
-                .as_u64()
-                .ok_or_else(|| anyhow!("checkpoint_height"))?,
-            block_hash: Self::hex_array(&result["checkpoint_hash"], "checkpoint_hash")?,
+        };
+        Ok(ipc_api::eots::EotsRecords {
             bitcoin_height: result["block_height"]
                 .as_u64()
                 .ok_or_else(|| anyhow!("block_height"))?,
-            killed: result["is_kill_checkpoint"].as_bool().unwrap_or(false),
-        }))
+            keys,
+            checkpoint,
+        })
+    }
+
+    fn recorded_commitment(c: &Value) -> Result<ipc_api::eots::RecordedCommitment> {
+        Ok(ipc_api::eots::RecordedCommitment {
+            commitment: ipc_eots::EotsNonceCommitment {
+                start: c["start"].as_u64().ok_or_else(|| anyhow!("start"))?,
+                count: c["count"]
+                    .as_u64()
+                    .and_then(|n| u32::try_from(n).ok())
+                    .ok_or_else(|| anyhow!("count"))?,
+                root: Self::hex_array(&c["root"], "root")?,
+            },
+            block_height: c["block_height"]
+                .as_u64()
+                .ok_or_else(|| anyhow!("block_height"))?,
+        })
     }
 
     /// `signeotsvote`: this validator's EOTS vote for a subnet block, signed by its provider.
@@ -299,13 +302,6 @@ impl BtcSubnetManager {
                         .as_u64()
                         .and_then(|v| u32::try_from(v).ok())
                         .ok_or_else(|| anyhow!("vout"))?,
-                    owner: Self::hex_array(&o["pubkey"], "pubkey")?,
-                    join_txid: o["join_txid"]
-                        .as_str()
-                        .ok_or_else(|| anyhow!("join_txid"))?
-                        .to_string(),
-                    block_height: o["block_height"].as_u64().unwrap_or(0),
-                    threshold: o["threshold"].as_u64().ok_or_else(|| anyhow!("threshold"))?,
                     keys: o["keys"]
                         .as_array()
                         .ok_or_else(|| anyhow!("keys"))?
@@ -317,6 +313,9 @@ impl BtcSubnetManager {
                             ))
                         })
                         .collect::<Result<Vec<_>>>()?,
+                    threshold: o["threshold"]
+                        .as_u64()
+                        .ok_or_else(|| anyhow!("threshold"))?,
                     signer: o["signer"].as_bool().unwrap_or(false),
                 })
             })
@@ -763,60 +762,13 @@ impl SubnetManager for BtcSubnetManager {
         Ok(())
     }
 
-    async fn unstake_ue(&self, subnet: SubnetID) -> Result<()> {
+    async fn unstake_ue(&self, subnet: SubnetID) -> Result<ExitTransaction> {
         tracing::info!("unstake-ue on btc for subnet {subnet}");
 
         // The provider spends the collaterals of its own validator key
-        let body = json!({
-            "jsonrpc": "2.0",
-            "method": "unstakeue",
-            "id": 1,
-            "params": {
-                "subnet_id": subnet.to_string(),
-            }
-        });
-        tracing::trace!("Request body: {body:?}");
-
-        let resp = self
-            .client
-            .post(self.rpc_url.clone())
-            .json(&body)
-            .send()
+        let result = self
+            .rpc_call("unstakeue", json!({ "subnet_id": subnet.to_string() }))
             .await?;
-
-        if !resp.status().is_success() {
-            return Err(anyhow!(
-                "unstakeue request failed with status: {}",
-                resp.status()
-            ));
-        }
-
-        let data = resp.json::<Value>().await?;
-
-        if let Some(err_obj) = data.get("error") {
-            let code = err_obj
-                .get("code")
-                .and_then(Value::as_i64)
-                .unwrap_or_default();
-            let message = err_obj
-                .get("message")
-                .and_then(Value::as_str)
-                .unwrap_or("Unknown error");
-            let error_data = err_obj
-                .get("data")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            return Err(anyhow!(
-                "JSON-RPC error: code={}, message={}, details={}",
-                code,
-                message,
-                error_data
-            ));
-        }
-
-        let result = data
-            .get("result")
-            .ok_or_else(|| anyhow!("Missing 'result' in JSON-RPC response"))?;
         let txid = result
             .get("txid")
             .and_then(Value::as_str)
@@ -834,10 +786,11 @@ impl SubnetManager for BtcSubnetManager {
         tracing::info!(
             "unstake-ue submitted: txid {txid}, {amount} sats of collateral spent, paid minus the fee to {address}"
         );
-        println!(
-            "unstake-ue transaction submitted: txid {txid}; {amount} sats of collateral spent, paid minus the fee to {address}"
-        );
-        Ok(())
+        Ok(ExitTransaction {
+            txid: txid.to_string(),
+            amount,
+            address: address.to_string(),
+        })
     }
 
     async fn leave_subnet(&self, subnet: SubnetID, _from: Address) -> Result<()> {
@@ -1915,6 +1868,20 @@ impl BottomUpCheckpointRelayer for BtcSubnetManager {
     }
 }
 
+/// The subnet address of an x-only key: the Ethereum address of its even-parity key.
+fn eth_address_of_x_only_key(key: &[u8]) -> Result<EthAddress> {
+    let mut compressed = Vec::with_capacity(33);
+    compressed.push(0x02);
+    compressed.extend_from_slice(key);
+    let pubkey = libsecp256k1::PublicKey::parse_slice(
+        &compressed,
+        Some(libsecp256k1::PublicKeyFormat::Compressed),
+    )
+    .map_err(|_| anyhow!("Invalid x-only public key"))?;
+    let hash = ethers::utils::keccak256(&pubkey.serialize()[1..]);
+    Ok(EthAddress::from_slice(&hash[12..]))
+}
+
 // Produce the JSON shape that bitcoin-ipc's `finalizecheckpointpsbt` RPC
 // expects: for each signatory, an array
 // `[xpub_hex, [sig_chunk_hex, ...]]`. The input `signatures[i]` is the
@@ -1939,20 +1906,6 @@ impl BottomUpCheckpointRelayer for BtcSubnetManager {
 //         ]
 //     ]
 // ]
-/// The subnet address of an x-only key: the Ethereum address of its even-parity key.
-fn eth_address_of_x_only_key(key: &[u8]) -> Result<EthAddress> {
-    let mut compressed = Vec::with_capacity(33);
-    compressed.push(0x02);
-    compressed.extend_from_slice(key);
-    let pubkey = libsecp256k1::PublicKey::parse_slice(
-        &compressed,
-        Some(libsecp256k1::PublicKeyFormat::Compressed),
-    )
-    .map_err(|_| anyhow!("Invalid x-only public key"))?;
-    let hash = ethers::utils::keccak256(&pubkey.serialize()[1..]);
-    Ok(EthAddress::from_slice(&hash[12..]))
-}
-
 fn zip_pubkeys_with_chunked_signatures(
     signatures: Vec<BitcoinSignature>,
     signatories: Vec<[u8; 32]>,

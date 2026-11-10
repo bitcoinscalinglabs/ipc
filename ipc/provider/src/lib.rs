@@ -481,9 +481,11 @@ impl IpcProvider {
         parent_conn.manager().unstake(params).await
     }
 
-    /// Spends the validator's matured unilateral-exit collaterals in `subnet` to its backup
-    /// address. Bitcoin parents only.
-    pub async fn unstake_ue(&mut self, subnet: SubnetID) -> anyhow::Result<()> {
+    /// Submits the exit transaction of this validator's matured collaterals. Bitcoin parents only.
+    pub async fn unstake_ue(
+        &mut self,
+        subnet: SubnetID,
+    ) -> anyhow::Result<crate::manager::ExitTransaction> {
         let parent = subnet.parent().ok_or_else(|| anyhow!("no parent found"))?;
         let parent_conn = self.get_connection(&parent)?;
         parent_conn.manager().unstake_ue(subnet).await

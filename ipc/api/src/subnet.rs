@@ -140,10 +140,9 @@ pub struct BtcJoinParams {
     pub collateral: TokenAmount,
     pub ip: String,
     pub backup_address: String,
-    /// With it the join is a unilateral-exit join (`join-ue`): the collateral seats the validator
-    /// for `epochs` epochs
+    /// Epochs the collateral seats the validator; set for `join-ue`.
     pub epochs: Option<u32>,
-    /// The subnet heights the EOTS nonce commitment of a `join-ue` covers: `(start, count)`
+    /// `(start, count)` of subnet heights the EOTS nonce commitment covers.
     pub eots_nonces: Option<(u64, u32)>,
 }
 

@@ -12,8 +12,9 @@ import {IDiamond} from "../../contracts/interfaces/IDiamond.sol";
 import {IDiamondLoupe} from "../../contracts/interfaces/IDiamondLoupe.sol";
 import {IDiamondCut} from "../../contracts/interfaces/IDiamondCut.sol";
 import {QuorumInfo} from "../../contracts/structs/Quorum.sol";
-import {IpcEnvelope, BottomUpMsgBatch, BottomUpCheckpoint, ParentFinality} from "../../contracts/structs/CrossNet.sol";
+import {IpcEnvelope, CallMsg, BottomUpMsgBatch, BottomUpCheckpoint, ParentFinality} from "../../contracts/structs/CrossNet.sol";
 import {FvmAddress} from "../../contracts/structs/FvmAddress.sol";
+import {SlashPreSignature} from "../../contracts/structs/Bitcoin.sol";
 import {SubnetID, Subnet, IPCAddress, Validator, StakingChange, StakingChangeRequest, Asset, StakingOperation} from "../../contracts/structs/Subnet.sol";
 import {SubnetIDHelper} from "../../contracts/lib/SubnetIDHelper.sol";
 import {FvmAddressHelper} from "../../contracts/lib/FvmAddressHelper.sol";
@@ -1763,7 +1764,8 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
                 checkpoint.blockHeight,
                 abi.encodePacked("psbt"),
                 abi.encodePacked(string.concat("val", Strings.toString(i), "sig")),
-                abi.encodePacked("batchtransfer1")
+                abi.encodePacked("batchtransfer1"),
+                bytes32(0)
             );
             vm.stopPrank();
         }
@@ -1774,7 +1776,8 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
                 bytes memory retrievedPsbt,
                 bytes memory retrievedBatchTransferTx,
                 address[] memory signatories,
-                bytes[] memory retrievedSignatures
+                bytes[] memory retrievedSignatures,
+
             ) = gatewayDiamond.checkpointer().getBitcoinCheckpointSignatures(checkpoint.blockHeight);
 
             require(keccak256(retrievedPsbt) == keccak256(abi.encodePacked("psbt")), "incorrect PSBT");
@@ -1848,7 +1851,8 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             checkpoint.blockHeight,
             abi.encodePacked("psbt1"),
             abi.encodePacked("val0sig"),
-            abi.encodePacked("batchtransfer1")
+            abi.encodePacked("batchtransfer1"),
+            bytes32(0)
         );
         vm.stopPrank();
 
@@ -1858,7 +1862,8 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             checkpoint.blockHeight,
             abi.encodePacked("psbt1"),
             abi.encodePacked("val1sig"),
-            abi.encodePacked("batchtransfer1")
+            abi.encodePacked("batchtransfer1"),
+            bytes32(0)
         );
         vm.stopPrank();
 
@@ -1868,7 +1873,8 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             checkpoint.blockHeight,
             abi.encodePacked("psbt2"),
             abi.encodePacked("val2sig"),
-            abi.encodePacked("batchtransfer2")
+            abi.encodePacked("batchtransfer2"),
+            bytes32(0)
         );
         vm.stopPrank();
 
@@ -1878,6 +1884,7 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
                 bytes memory retrievedPsbt,
                 bytes memory retrievedBatchTransferTx,
                 address[] memory signatories,
+                ,
 
             ) = gatewayDiamond.checkpointer().getBitcoinCheckpointSignatures(checkpoint.blockHeight);
 
@@ -1942,7 +1949,8 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             checkpoint.blockHeight,
             abi.encodePacked("psbt1"),
             abi.encodePacked("val1sig"),
-            abi.encodePacked("batchtransfer1")
+            abi.encodePacked("batchtransfer1"),
+            bytes32(0)
         );
         vm.stopPrank();
 
@@ -1954,7 +1962,8 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             checkpoint.blockHeight,
             abi.encodePacked("psbt1"),
             abi.encodePacked("val1sig"),
-            abi.encodePacked("batchtransfer1")
+            abi.encodePacked("batchtransfer1"),
+            bytes32(0)
         );
         vm.stopPrank();
     }
@@ -1971,7 +1980,8 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             nonExistentHeight,
             abi.encodePacked("psbt1"),
             abi.encodePacked("val0sig"),
-            abi.encodePacked("batchtransfer1")
+            abi.encodePacked("batchtransfer1"),
+            bytes32(0)
         );
         vm.stopPrank();
     }
@@ -2024,7 +2034,8 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             checkpoint.blockHeight,
             abi.encodePacked("psbt1"),
             abi.encodePacked("val0sig"),
-            abi.encodePacked("batchtransfer1")
+            abi.encodePacked("batchtransfer1"),
+            bytes32(0)
         );
 
         // Try to add the same Bitcoin signature again (same PSBT)
@@ -2033,7 +2044,8 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             checkpoint.blockHeight,
             abi.encodePacked("psbt1"),
             abi.encodePacked("new_val0sig"),
-            abi.encodePacked("batchtransfer1")
+            abi.encodePacked("batchtransfer1"),
+            bytes32(0)
         );
         vm.stopPrank();
     }
@@ -2091,7 +2103,8 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
                 checkpoint.blockHeight,
                 abi.encodePacked("psbt", i),
                 abi.encodePacked("sig", i),
-                abi.encodePacked("batchtx", i)
+                abi.encodePacked("batchtx", i),
+                bytes32(0)
             );
             vm.stopPrank();
         }
@@ -2103,7 +2116,8 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
                 bytes memory psbt,
                 bytes memory batchTx,
                 address[] memory signatories,
-                bytes[] memory signatures
+                bytes[] memory signatures,
+
             ) = gatewayDiamond.checkpointer().getBitcoinCheckpointSignatures(height);
 
             // Verify the checkpoint data
@@ -2144,7 +2158,8 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
                     bytes memory psbt,
                     bytes memory batchTx,
                     address[] memory signatories,
-                    bytes[] memory signatures
+                    bytes[] memory signatures,
+
                 ) = gatewayDiamond.checkpointer().getBitcoinCheckpointSignatures(height);
 
                 // Verify the checkpoint data is still intact
@@ -2308,17 +2323,27 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
         for (uint64 i = 0; i < numMsgs; i++) {
             release(releaseAmount);
         }
-        // one batch should be overflow in d+1 and the rest of the messages should have been
-        // added to the next batch
+        // no batch at d+1: the checkpoint at 2d carries 10 messages, the 10 others wait for the one at 3d
+        require(gatewayDiamond.getter().bottomUpMsgBatch(d + 1).blockHeight == 0, "a batch was cut at d+1");
         require(
-            gatewayDiamond.getter().bottomUpMsgBatch(d + 1).msgs.length ==
+            gatewayDiamond.getter().bottomUpMsgBatch(2 * d).msgs.length ==
                 gatewayDiamond.getter().maxMsgsPerBottomUpBatch(),
             "wrong number of messages in full batch"
         );
         require(
-            gatewayDiamond.getter().bottomUpMsgBatch(2 * d).msgs.length == 10,
+            gatewayDiamond.getter().bottomUpMsgBatch(3 * d).msgs.length == 10,
             "wrong number of messages after full batch"
         );
+        // every message is in exactly one batch, in nonce order
+        uint64 nonce;
+        for (uint256 k = 1; k <= 3; k++) {
+            IpcEnvelope[] memory msgs = gatewayDiamond.getter().bottomUpMsgBatch(k * d).msgs;
+            for (uint256 j; j < msgs.length; j++) {
+                require(msgs[j].nonce == nonce, "a message lost or carried twice");
+                nonce++;
+            }
+        }
+        require(nonce == 30, "wrong number of messages in the batches");
     }
 
     function testGatewayDiamond_setSubnetFinalHeight_keepsMaximum() public {
@@ -2367,7 +2392,7 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
     }
 
     /// @dev Creates a checkpoint at the first period height, adds the checkpoint signature of every validator,
-    /// then the Bitcoin signature of validator i over psbts[i].
+    /// then the Bitcoin signature of validator i over psbts[i] unless psbts[i] is empty.
     function _signBitcoinCheckpoint(
         uint256[] memory weights,
         bytes[] memory psbts
@@ -2419,17 +2444,19 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             weight,
             abi.encodePacked(r, s, v)
         );
-        gatewayDiamond.checkpointer().addBitcoinCheckpointSignature(
-            checkpoint.blockHeight,
-            psbt,
-            abi.encodePacked("sig", Strings.toString(i)),
-            abi.encodePacked("batchtransfer")
-        );
+        if (psbt.length != 0) {
+            gatewayDiamond.checkpointer().addBitcoinCheckpointSignature(
+                checkpoint.blockHeight,
+                psbt,
+                abi.encodePacked("sig", Strings.toString(i)),
+                abi.encodePacked("batchtransfer"),
+                bytes32(0)
+            );
+        }
         vm.stopPrank();
     }
 
     function testGatewayDiamond_getBitcoinCheckpointSignatures_mostWeight() public {
-        // the PSBT signed by one validator of weight 70 wins over the PSBT signed by three validators of weight 10
         uint256[] memory weights = new uint256[](4);
         weights[0] = 70;
         weights[1] = 10;
@@ -2443,14 +2470,15 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
         psbts[3] = "psbtA";
 
         uint256 height = _signBitcoinCheckpoint(weights, psbts);
-        (bytes memory psbt, , address[] memory signatories, ) = _heaviestBitcoinCheckpoint(height);
+        (bytes memory psbt, , address[] memory signatories, , ) = gatewayDiamond
+            .checkpointer()
+            .getBitcoinCheckpointSignatures(height);
 
         require(keccak256(psbt) == keccak256("psbtB"), "heaviest PSBT not returned");
         require(signatories.length == 1, "incorrect number of signatories");
     }
 
     function testGatewayDiamond_getBitcoinCheckpointSignatures_mostSignersWhenEqualWeight() public {
-        // with equal weights, the PSBT signed by three validators wins over the PSBT signed by one validator
         (, , uint256[] memory weights) = TestUtils.getFourValidators(vm);
 
         bytes[] memory psbts = new bytes[](4);
@@ -2460,16 +2488,240 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
         psbts[3] = "psbtA";
 
         uint256 height = _signBitcoinCheckpoint(weights, psbts);
-        (bytes memory psbt, , address[] memory signatories, ) = _heaviestBitcoinCheckpoint(height);
+        (bytes memory psbt, , address[] memory signatories, , ) = gatewayDiamond
+            .checkpointer()
+            .getBitcoinCheckpointSignatures(height);
 
         require(keccak256(psbt) == keccak256("psbtA"), "PSBT with most signers not returned");
         require(signatories.length == 3, "incorrect number of signatories");
     }
 
-    function _heaviestBitcoinCheckpoint(
-        uint256 height
-    ) internal view returns (bytes memory, bytes memory, address[] memory, bytes[] memory) {
-        return gatewayDiamond.checkpointer().getBitcoinCheckpointSignatures(height);
+    function testGatewayDiamond_hasBitcoinCheckpointSignature() public {
+        (, address[] memory addrs, uint256[] memory weights) = TestUtils.getFourValidators(vm);
+
+        bytes[] memory psbts = new bytes[](4);
+        psbts[0] = "psbtB";
+        psbts[1] = "psbtA";
+        psbts[2] = "psbtA";
+        psbts[3] = "";
+
+        uint256 height = _signBitcoinCheckpoint(weights, psbts);
+        CheckpointingFacet checkpointer = gatewayDiamond.checkpointer();
+
+        for (uint256 i = 0; i < 3; i++) {
+            require(checkpointer.hasBitcoinCheckpointSignature(height, addrs[i]), "Bitcoin signature not found");
+        }
+        require(
+            !checkpointer.hasBitcoinCheckpointSignature(height, addrs[3]),
+            "a checkpoint signature counted as a Bitcoin signature"
+        );
+        require(!checkpointer.hasBitcoinCheckpointSignature(height, vm.addr(99)), "a non-signer has a signature");
+        require(
+            !checkpointer.hasBitcoinCheckpointSignature(height * 2, addrs[0]),
+            "a signature found at another height"
+        );
+    }
+
+    function testGatewayDiamond_addSlashPreSignature_keepsOrderAndRejectsReplay() public {
+        CheckpointingFacet checkpointer = gatewayDiamond.checkpointer();
+        bytes32 t1 = bytes32(uint256(1));
+        bytes32 t2 = bytes32(uint256(2));
+
+        vm.startPrank(vm.addr(1));
+        checkpointer.addSlashPreSignature(t1, 1, 0, 1, 1, _slashSig("sigA"));
+        checkpointer.addSlashPreSignature(t1, 1, 1, 1, 1, _slashSig("sigB"));
+        vm.stopPrank();
+        vm.startPrank(vm.addr(2));
+        checkpointer.addSlashPreSignature(t1, 2, 0, 1, 1, _slashSig("sigC"));
+        checkpointer.addSlashPreSignature(t2, 1, 0, 1, 1, _slashSig("sigD"));
+
+        vm.expectRevert(SignatureReplay.selector);
+        checkpointer.addSlashPreSignature(t1, 1, 0, 1, 1, _slashSig("sigE"));
+        vm.stopPrank();
+
+        uint256 height = 10;
+        vm.prank(FilAddress.SYSTEM_ACTOR);
+        checkpointer.carrySlashPreSignatures(height, 0);
+        SlashPreSignature[] memory posted = checkpointer.getSlashPreSignatures(height);
+        require(posted.length == 4, "a replay was stored");
+        require(posted[0].txid == t1 && posted[0].vout == 1 && posted[0].index == 0, "first entry");
+        require(keccak256(posted[0].signature) == keccak256(_slashSig("sigA")), "a replay overwrote a signature");
+        require(posted[1].txid == t1 && posted[1].vout == 1 && posted[1].index == 1, "second entry");
+        require(posted[2].txid == t1 && posted[2].vout == 2 && posted[2].index == 0, "third entry");
+        require(posted[3].txid == t2 && posted[3].vout == 1 && posted[3].index == 0, "fourth entry");
+        require(keccak256(posted[3].signature) == keccak256(_slashSig("sigD")), "fourth signature");
+    }
+
+    function testGatewayDiamond_carrySlashPreSignatures_completeOutputsOnly() public {
+        CheckpointingFacet checkpointer = gatewayDiamond.checkpointer();
+        bytes32 txid = bytes32(uint256(7));
+
+        // powers 1 + 1 below the threshold 3: nothing to carry
+        checkpointer.addSlashPreSignature(txid, 0, 0, 1, 3, _slashSig("s0"));
+        checkpointer.addSlashPreSignature(txid, 0, 1, 1, 3, _slashSig("s1"));
+        vm.prank(FilAddress.SYSTEM_ACTOR);
+        require(checkpointer.carrySlashPreSignatures(10, 0) == 0, "an incomplete output was carried");
+
+        // the third post reaches the threshold: the next checkpoint carries all three
+        checkpointer.addSlashPreSignature(txid, 0, 2, 1, 3, _slashSig("s2"));
+        vm.prank(FilAddress.SYSTEM_ACTOR);
+        require(checkpointer.carrySlashPreSignatures(20, 0) == 3, "the complete output was not carried");
+        (uint256 power, uint256 carriedHeight, bool posted) = checkpointer.getSlashOutput(txid, 0, 3, 2);
+        require(power == 3 && carriedHeight == 20 && posted, "wrong output state");
+        (, , posted) = checkpointer.getSlashOutput(txid, 0, 3, 3);
+        require(!posted, "index 3 has not posted");
+        vm.prank(FilAddress.SYSTEM_ACTOR);
+        require(checkpointer.carrySlashPreSignatures(30, 0) == 0, "an output was carried twice");
+
+        // a later post makes the output due again; the earlier checkpoint keeps its three
+        checkpointer.addSlashPreSignature(txid, 0, 3, 1, 3, _slashSig("s3"));
+        vm.prank(FilAddress.SYSTEM_ACTOR);
+        require(checkpointer.carrySlashPreSignatures(40, 0) == 4, "the later post was not carried");
+        require(checkpointer.getSlashPreSignatures(20).length == 3, "a carried checkpoint changed");
+        require(checkpointer.getSlashPreSignatures(40).length == 4, "wrong carried signatures");
+
+        // a post with another threshold is kept apart and does not make the output due
+        checkpointer.addSlashPreSignature(txid, 1, 0, 1, 2, _slashSig("t0"));
+        (power, , ) = checkpointer.getSlashOutput(txid, 1, 3, 0);
+        require(power == 0, "thresholds mixed");
+
+        vm.expectRevert(InvalidSignatureLength.selector);
+        checkpointer.addSlashPreSignature(txid, 2, 0, 1, 3, abi.encodePacked(bytes32(0)));
+        vm.expectRevert(InvalidSignature.selector);
+        checkpointer.addSlashPreSignature(txid, 2, 350, 1, 3, _slashSig("x"));
+        vm.expectRevert(InvalidSignature.selector);
+        checkpointer.addSlashPreSignature(txid, 2, 0, 1, 0, _slashSig("x"));
+    }
+
+    function testGatewayDiamond_carrySlashPreSignatures_sizeLimit() public {
+        CheckpointingFacet checkpointer = gatewayDiamond.checkpointer();
+        // 17 complete outputs of 350 slash pre-signatures: 16 fit in 380,000 bytes (16 * (40 + 67 * 350))
+        for (uint256 o; o < 17; o++) {
+            for (uint16 i; i < 350; i++) {
+                checkpointer.addSlashPreSignature(bytes32(o + 1), 0, i, 1, 350, _slashSig("s"));
+            }
+        }
+        vm.startPrank(FilAddress.SYSTEM_ACTOR);
+        require(checkpointer.carrySlashPreSignatures(10, 0) == 16 * 350, "wrong count at the limit");
+        require(checkpointer.carrySlashPreSignatures(20, 0) == 350, "the output beyond the limit was not carried next");
+        require(checkpointer.carrySlashPreSignatures(30, 0) == 0, "an output was carried twice");
+        vm.stopPrank();
+        SlashPreSignature[] memory carried = checkpointer.getSlashPreSignatures(20);
+        require(carried.length == 350 && carried[0].txid == bytes32(uint256(17)), "wrong output carried next");
+    }
+
+    function testGatewayDiamond_carrySlashPreSignatures_sizeLimitCountsSupplyAdjustments() public {
+        CheckpointingFacet checkpointer = gatewayDiamond.checkpointer();
+        // 16 complete outputs of 350 slash pre-signatures fit in 380,000 bytes, but not with 100 supply adjustments
+        for (uint256 o; o < 16; o++) {
+            for (uint16 i; i < 350; i++) {
+                checkpointer.addSlashPreSignature(bytes32(o + 1), 0, i, 1, 350, _slashSig("s"));
+            }
+        }
+        vm.startPrank(FilAddress.SYSTEM_ACTOR);
+        require(checkpointer.carrySlashPreSignatures(10, 100 * 64) == 15 * 350, "wrong count with the supply adjustments");
+        require(checkpointer.carrySlashPreSignatures(20, 0) == 350, "the rest was not carried next");
+        vm.stopPrank();
+    }
+
+    function testGatewayDiamond_carrySlashPreSignatures_sizeLimitCountsBottomUpMessages() public {
+        address[] memory path = new address[](2);
+        path[0] = makeAddr("root");
+        path[1] = makeAddr("subnet_one");
+        gatewayDiamond = createGatewayDiamond(
+            GatewayDiamond.ConstructorParams({
+                networkName: SubnetID({root: ROOTNET_CHAINID, route: path}),
+                bottomUpCheckPeriod: DEFAULT_CHECKPOINT_PERIOD,
+                majorityPercentage: DEFAULT_MAJORITY_PERCENTAGE,
+                genesisValidators: new Validator[](0),
+                activeValidatorsLimit: 100,
+                commitSha: DEFAULT_COMMIT_SHA,
+                wrappedTokenFactory: address(0),
+                ipcBtcToken: address(0x66),
+                ipcBtcEmissionSubnet: SubnetID({root: 0, route: new address[](0)}),
+                ipcBtcName: "IPC-BTC",
+                ipcBtcSymbol: "IPC-BTC",
+                ipcBtcDecimals: 18,
+                ipcBtcRegisterNative: false
+            })
+        );
+        CheckpointingFacet checkpointer = gatewayDiamond.checkpointer();
+        uint256 height = gatewayDiamond.getter().bottomUpCheckPeriod();
+
+        address sender = address(new MockIpcContract());
+        IpcEnvelope memory envelope = TestUtils.newXnetCallMsg(
+            IPCAddress({subnetId: gatewayDiamond.getter().getNetworkName(), rawAddress: FvmAddressHelper.from(sender)}),
+            IPCAddress({
+                subnetId: SubnetID({root: ROOTNET_CHAINID, route: new address[](1)}),
+                rawAddress: FvmAddressHelper.from(sender)
+            }),
+            0,
+            0
+        );
+        envelope.to.subnetId.route[0] = path[0];
+        envelope.message = abi.encode(CallMsg({method: abi.encodePacked(METHOD_SEND), params: new bytes(5000)}));
+        vm.roll(1);
+        vm.deal(sender, DEFAULT_CROSS_MSG_FEE);
+        vm.prank(sender);
+        gatewayDiamond.messenger().sendContractXnetMessage{value: 0}(envelope);
+        IpcEnvelope[] memory batched = gatewayDiamond.getter().bottomUpMsgBatch(height).msgs;
+        require(batched.length == 1 && batched[0].message.length > 4160, "the long message is not in the batch");
+
+        // 16 outputs of 350 fit in 380,000 bytes alone; the 5,000-byte message leaves room for 15
+        for (uint256 o; o < 17; o++) {
+            for (uint16 i; i < 350; i++) {
+                checkpointer.addSlashPreSignature(bytes32(o + 1), 0, i, 1, 350, _slashSig("s"));
+            }
+        }
+        vm.startPrank(FilAddress.SYSTEM_ACTOR);
+        require(checkpointer.carrySlashPreSignatures(height, 0) == 15 * 350, "wrong count with the batch");
+        require(checkpointer.carrySlashPreSignatures(2 * height, 0) == 2 * 350, "the rest was not carried next");
+        vm.stopPrank();
+    }
+
+    function testGatewayDiamond_getBitcoinCheckpointSignatures_returnsPostedKeys() public {
+        (uint256[] memory privKeys, address[] memory addrs, uint256[] memory weights) = TestUtils.getFourValidators(vm);
+        (bytes32 membershipRoot, ) = MerkleTreeHelper.createMerkleProofsForValidators(addrs, weights);
+        BottomUpCheckpoint memory checkpoint = BottomUpCheckpoint({
+            subnetID: gatewayDiamond.getter().getNetworkName(),
+            blockHeight: gatewayDiamond.getter().bottomUpCheckPeriod(),
+            blockHash: keccak256("block"),
+            nextConfigurationNumber: 1,
+            slashPreSignatureCount: 0,
+            msgs: new IpcEnvelope[](0),
+            activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
+        });
+        vm.prank(FilAddress.SYSTEM_ACTOR);
+        gatewayDiamond.checkpointer().createBottomUpCheckpoint(
+            checkpoint,
+            membershipRoot,
+            weights[0] + weights[1] + weights[2] + weights[3],
+            ActivityHelper.dummyActivityRollup()
+        );
+
+        for (uint256 i; i < 3; i++) {
+            vm.prank(vm.addr(privKeys[i]));
+            gatewayDiamond.checkpointer().addBitcoinCheckpointSignature(
+                checkpoint.blockHeight,
+                abi.encodePacked("psbt"),
+                abi.encodePacked("sig", i),
+                abi.encodePacked("batchtransfer1"),
+                keccak256(abi.encodePacked("key", i))
+            );
+        }
+
+        (, , address[] memory signatories, , bytes32[] memory keys) = gatewayDiamond
+            .checkpointer()
+            .getBitcoinCheckpointSignatures(checkpoint.blockHeight);
+        require(signatories.length == 3 && keys.length == 3, "wrong number of signatories");
+        for (uint256 i; i < 3; i++) {
+            require(signatories[i] == vm.addr(privKeys[i]), "wrong signatory");
+            require(keys[i] == keccak256(abi.encodePacked("key", i)), "wrong key");
+        }
+    }
+
+    function _slashSig(bytes32 tag) internal pure returns (bytes memory) {
+        return abi.encodePacked(tag, bytes32(0));
     }
 
     function newListOfMessages(uint64 size) internal view returns (IpcEnvelope[] memory msgs) {

@@ -2,15 +2,15 @@
 pragma solidity ^0.8.23;
 
 import {GatewayActorModifiers} from "../../lib/LibGatewayActorStorage.sol";
-import {BottomUpCheckpoint} from "../../structs/CrossNet.sol";
+import {BottomUpCheckpoint, BottomUpMsgBatch} from "../../structs/CrossNet.sol";
 import {LibGateway} from "../../lib/LibGateway.sol";
 import {LibQuorum} from "../../lib/LibQuorum.sol";
 import {Subnet} from "../../structs/Subnet.sol";
-import {BitcoinCheckpoint, SlashPreSignature} from "../../structs/Bitcoin.sol";
+import {BitcoinCheckpoint, SlashPreSignature, SlashOutput, CarriedSlashOutput, MAX_SLASH_PRE_SIGNATURE_BYTES, MAX_CONFIGURATION_SIZE} from "../../structs/Bitcoin.sol";
 import {QuorumObjKind} from "../../structs/Quorum.sol";
 import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 
-import {InvalidBatchSource, NotEnoughBalance, MaxMsgsPerBatchExceeded, InvalidCheckpointSource, CheckpointAlreadyExists, NotAuthorized, SignatureReplay} from "../../errors/IPCErrors.sol";
+import {InvalidBatchSource, NotEnoughBalance, MaxMsgsPerBatchExceeded, InvalidCheckpointSource, CheckpointAlreadyExists, NotAuthorized, SignatureReplay, InvalidSignature, InvalidSignatureLength} from "../../errors/IPCErrors.sol";
 import {NotRegisteredSubnet, SubnetNotActive, SubnetNotFound, InvalidSubnet, CheckpointNotCreated} from "../../errors/IPCErrors.sol";
 import {BatchNotCreated, InvalidBatchEpoch, BatchAlreadyExists, NotEnoughSubnetCircSupply, InvalidCheckpointEpoch} from "../../errors/IPCErrors.sol";
 
@@ -136,11 +136,13 @@ contract CheckpointingFacet is GatewayActorModifiers {
         });
     }
 
+    /// @param key - The signer's x-only Bitcoin key, which the provider uses to place its signatures.
     function addBitcoinCheckpointSignature(
         uint256 height,
         bytes calldata psbt,
         bytes calldata signatures,
-        bytes calldata batchTransferTx
+        bytes calldata batchTransferTx,
+        bytes32 key
     ) external {
         // check if the checkpoint was already pruned before getting checkpoint
         // and triggering the signature
@@ -163,16 +165,18 @@ contract CheckpointingFacet is GatewayActorModifiers {
         bytes32 psbtHash = keccak256(psbt);
 
         // Check if this is a new PSBT hash for this height
-        bool hashExists = false;
-        bytes32[] storage hashes = s.bitcoinCheckpointPsbtHashes[height];
-        for (uint i = 0; i < hashes.length; i++) {
-            if (hashes[i] == psbtHash) {
-                hashExists = true;
-                break;
+        {
+            bool hashExists = false;
+            bytes32[] storage hashes = s.bitcoinCheckpointPsbtHashes[height];
+            for (uint i = 0; i < hashes.length; i++) {
+                if (hashes[i] == psbtHash) {
+                    hashExists = true;
+                    break;
+                }
             }
-        }
-        if (!hashExists) {
-            s.bitcoinCheckpointPsbtHashes[height].push(psbtHash);
+            if (!hashExists) {
+                s.bitcoinCheckpointPsbtHashes[height].push(psbtHash);
+            }
         }
 
         BitcoinCheckpoint storage btcCheckpoint = s.bitcoinCheckpoints[height][psbtHash];
@@ -201,34 +205,115 @@ contract CheckpointingFacet is GatewayActorModifiers {
         } else {
             btcCheckpoint.signatories.push(signatory);
             btcCheckpoint.signatures[signatory] = signatures;
-            emit BitcoinCheckpointAdded(height, signatory, keccak256(psbt));
+            btcCheckpoint.keys[signatory] = key;
+            emit BitcoinCheckpointAdded(height, signatory, psbtHash);
         }
     }
 
-    /// @notice Posts a slash pre-signature of a collateral output on Bitcoin. The checkpoint
-    /// builders verify it; the subnet only keeps it. One per output and signer index.
-    function addSlashPreSignature(bytes32 txid, uint32 vout, uint16 index, bytes calldata signature) external {
-        bytes32 key = keccak256(abi.encode(txid, vout, index));
-        if (s.slashPreSignaturePosted[key]) {
+    /// @notice Stored unverified; one per (txid, vout, index). `power` is the signer's power and `threshold`
+    /// the threshold of the configuration that the output's slash leaf names. Once the posted powers of an
+    /// output reach the threshold, the next checkpoint carries all its slash pre-signatures.
+    function addSlashPreSignature(
+        bytes32 txid,
+        uint32 vout,
+        uint16 index,
+        uint64 power,
+        uint64 threshold,
+        bytes calldata signature
+    ) external {
+        if (signature.length != 64) {
+            revert InvalidSignatureLength();
+        }
+        if (index >= MAX_CONFIGURATION_SIZE || threshold == 0) {
+            revert InvalidSignature();
+        }
+        bytes32 posted = keccak256(abi.encode(txid, vout, index));
+        if (s.slashPreSignaturePosted[posted]) {
             revert SignatureReplay();
         }
-        s.slashPreSignaturePosted[key] = true;
-        s.slashPreSignatures.push(SlashPreSignature({txid: txid, vout: vout, index: index, signature: signature}));
+        s.slashPreSignaturePosted[posted] = true;
+
+        bytes32 key = keccak256(abi.encode(txid, vout, threshold));
+        SlashOutput storage output = s.slashOutputs[key];
+        output.threshold = threshold;
+        output.signatures.push(SlashPreSignature({txid: txid, vout: vout, index: index, signature: signature}));
+        output.power += power;
+        if (output.power >= threshold && !output.queued) {
+            output.queued = true;
+            s.slashOutputsToCarry.push(key);
+        }
         emit SlashPreSignatureAdded(txid, vout, index, msg.sender);
     }
 
-    /// @notice Every slash pre-signature posted, in posting order.
-    function getSlashPreSignatures() external view returns (SlashPreSignature[] memory) {
-        return s.slashPreSignatures;
+    /// @notice Called at the creation of the checkpoint at `height`. It carries the outputs waiting in
+    /// `slashOutputsToCarry`, in order, each with all its slash pre-signatures, as many outputs as
+    /// `MAX_SLASH_PRE_SIGNATURE_BYTES` allows. `supplyAdjustmentBytes` is the payload size of the
+    /// supply adjustments that the checkpoint carries after its bottom-up messages. Returns the
+    /// number of slash pre-signatures carried.
+    function carrySlashPreSignatures(
+        uint256 height,
+        uint256 supplyAdjustmentBytes
+    ) external systemActorOnly returns (uint64 count) {
+        // the payloads of the checkpoint's messages (token names and symbols) share the same transaction
+        uint256 size = supplyAdjustmentBytes;
+        (, BottomUpMsgBatch storage batch) = LibGateway.getBottomUpMsgBatch(height);
+        for (uint256 j; j < batch.msgs.length; ++j) {
+            size += batch.msgs[j].message.length;
+        }
+        uint256 i = s.slashOutputsToCarryStart;
+        uint256 end = s.slashOutputsToCarry.length;
+        for (; i < end; ++i) {
+            bytes32 key = s.slashOutputsToCarry[i];
+            SlashOutput storage output = s.slashOutputs[key];
+            uint256 n = output.signatures.length;
+            size += 40 + 67 * n;
+            if (size > MAX_SLASH_PRE_SIGNATURE_BYTES) {
+                break;
+            }
+            output.queued = false;
+            output.carriedHeight = height;
+            s.slashOutputsCarried[height].push(CarriedSlashOutput({output: key, count: uint32(n)}));
+            count += uint64(n);
+        }
+        s.slashOutputsToCarryStart = i;
     }
 
-    /// @notice Get the Bitcoin checkpoint whose signers carry the most weight for a specific
-    /// height. A signer's weight is the one verified with its checkpoint signature.
+    /// @notice The slash pre-signatures that the checkpoint at `height` carries.
+    function getSlashPreSignatures(uint256 height) external view returns (SlashPreSignature[] memory signatures) {
+        CarriedSlashOutput[] storage carried = s.slashOutputsCarried[height];
+        uint256 total;
+        for (uint256 i; i < carried.length; ++i) {
+            total += carried[i].count;
+        }
+        signatures = new SlashPreSignature[](total);
+        uint256 k;
+        for (uint256 i; i < carried.length; ++i) {
+            SlashPreSignature[] storage posted = s.slashOutputs[carried[i].output].signatures;
+            for (uint256 j; j < carried[i].count; ++j) {
+                signatures[k++] = posted[j];
+            }
+        }
+    }
+
+    /// @notice The posted powers of an output with `threshold`, the height of the last checkpoint that carried
+    /// its slash pre-signatures (0 if none), and whether `index` has posted for the output.
+    function getSlashOutput(
+        bytes32 txid,
+        uint32 vout,
+        uint64 threshold,
+        uint16 index
+    ) external view returns (uint256 power, uint256 carriedHeight, bool posted) {
+        SlashOutput storage output = s.slashOutputs[keccak256(abi.encode(txid, vout, threshold))];
+        return (output.power, output.carriedHeight, s.slashPreSignaturePosted[keccak256(abi.encode(txid, vout, index))]);
+    }
+
+    /// @notice Get the Bitcoin checkpoint with the most signer weight (as verified at signing) at a height.
     /// @param height - The height of the block in the checkpoint.
     /// @return psbt - The base64 of the PSBT with the most weight.
     /// @return batchTransferTx - The hex of the batch transfer transaction, if present.
     /// @return signatories - The list of validators who signed.
     /// @return signatures - The list of signatures corresponding to the signatories.
+    /// @return keys - The x-only Bitcoin keys that the signatories posted.
     function getBitcoinCheckpointSignatures(
         uint256 height
     )
@@ -238,7 +323,8 @@ contract CheckpointingFacet is GatewayActorModifiers {
             bytes memory psbt,
             bytes memory batchTransferTx,
             address[] memory signatories,
-            bytes[] memory signatures
+            bytes[] memory signatures,
+            bytes32[] memory keys
         )
     {
         // Check if the checkpoint exists
@@ -250,10 +336,10 @@ contract CheckpointingFacet is GatewayActorModifiers {
         bytes32[] storage hashes = s.bitcoinCheckpointPsbtHashes[height];
         if (hashes.length == 0) {
             // No Bitcoin checkpoints found for this height
-            return (new bytes(0), new bytes(0), new address[](0), new bytes[](0));
+            return (new bytes(0), new bytes(0), new address[](0), new bytes[](0), new bytes32[](0));
         }
 
-        // Find the checkpoint whose signers carry the most weight; ties keep the first.
+        // Ties keep the first.
         bytes32 mostWeightPsbtHash = hashes[0];
         uint256 maxWeight = signersWeight(height, hashes[0]);
 
@@ -274,17 +360,17 @@ contract CheckpointingFacet is GatewayActorModifiers {
         // Return signatories
         signatories = btcCheckpoint.signatories;
 
-        // Map signatories to their signatures
+        // Map signatories to their signatures and keys
         signatures = new bytes[](signatories.length);
+        keys = new bytes32[](signatories.length);
         for (uint256 i = 0; i < signatories.length; i++) {
             signatures[i] = btcCheckpoint.signatures[signatories[i]];
+            keys[i] = btcCheckpoint.keys[signatories[i]];
         }
 
-        return (psbt, batchTransferTx, signatories, signatures);
+        return (psbt, batchTransferTx, signatories, signatures, keys);
     }
 
-    /// @notice Whether `signatory` has added a Bitcoin signature for the checkpoint at `height`,
-    /// on any PSBT.
     function hasBitcoinCheckpointSignature(uint256 height, address signatory) external view returns (bool) {
         bytes32[] storage hashes = s.bitcoinCheckpointPsbtHashes[height];
         for (uint256 i = 0; i < hashes.length; i++) {
@@ -298,8 +384,6 @@ contract CheckpointingFacet is GatewayActorModifiers {
         return false;
     }
 
-    /// @notice The weight of the signers of the Bitcoin checkpoint `psbtHash` at `height`, as
-    /// verified with their checkpoint signatures.
     function signersWeight(uint256 height, bytes32 psbtHash) internal view returns (uint256 weight) {
         address[] storage signatories = s.bitcoinCheckpoints[height][psbtHash].signatories;
         for (uint256 i = 0; i < signatories.length; i++) {
@@ -307,7 +391,6 @@ contract CheckpointingFacet is GatewayActorModifiers {
         }
     }
 
-    /// @notice Raises the subnet final height to `height`; a lower value changes nothing.
     function setSubnetFinalHeight(uint256 height) external systemActorOnly {
         if (height <= s.subnetFinalHeight) {
             return;

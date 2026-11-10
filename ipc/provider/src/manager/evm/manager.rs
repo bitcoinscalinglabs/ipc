@@ -1547,38 +1547,32 @@ impl BottomUpCheckpointRelayer for EthSubnetManager {
                 Arc::new(self.ipc_contract_info.provider.clone()),
             );
 
-            let (psbt, batch_transfer_tx, bitcoin_signatories, bitcoin_signatures) = contract
-                .get_bitcoin_checkpoint_signatures(U256::from(height))
-                .call()
-                .await?;
+            let (psbt, batch_transfer_tx, bitcoin_signatories, bitcoin_signatures, keys) =
+                contract
+                    .get_bitcoin_checkpoint_signatures(U256::from(height))
+                    .call()
+                    .await?;
 
-            if bitcoin_signatories.len() != bitcoin_signatures.len() {
+            if bitcoin_signatories.len() != bitcoin_signatures.len()
+                || keys.len() != bitcoin_signatures.len()
+            {
                 return Err(anyhow!(
-                    "signatories and signatures length mismatch for bitcoin checkpoint at height: {}",
+                    "signatories, signatures and keys length mismatch for bitcoin checkpoint at height: {}",
                     height
                 ));
             }
 
             tracing::debug!("found {} bitcoin signatures", bitcoin_signatures.len());
 
+            // Each signature with the Bitcoin key its signer posted; the provider places them
             let bitcoin_signatures = bitcoin_signatures
                 .into_iter()
                 .map(|s| s.to_vec())
                 .collect::<Vec<_>>();
 
-            let (xonly_pubkeys, bitcoin_signatures) = resolve_signatories_to_xonly_pubkeys(
-                self.ipc_contract_info.gateway_addr,
-                Arc::new(self.ipc_contract_info.provider.clone()),
-                bitcoin_signatories,
-                bitcoin_signatures,
-                "checkpoint",
-                height,
-            )
-            .await?;
-
             Some(BitcoinCheckpointSignatureQuorum {
                 unsigned_psbt: ipc_api::checkpoint::UnsignedPsbt::encode(&psbt)?,
-                signatories: xonly_pubkeys,
+                signatories: keys,
                 signatures: bitcoin_signatures,
                 transfer_tx: ipc_api::checkpoint::BitcoinTx::encode(&batch_transfer_tx)?,
             })
@@ -1641,54 +1635,6 @@ impl BottomUpCheckpointRelayer for EthSubnetManager {
             .as_u64();
         Ok(number as ChainEpoch)
     }
-}
-
-/// Look up the x-only Taproot pubkey of each signatory via the gateway's current
-/// membership and return (pubkeys, signatures) pairs in the same order. Drops any
-/// signatory not present in current membership (with a warning), keeping the
-/// signature/pubkey alignment intact.
-async fn resolve_signatories_to_xonly_pubkeys(
-    gateway_addr: ethers::types::Address,
-    provider: Arc<Provider<Http>>,
-    signatories: Vec<ethers::types::Address>,
-    signatures: Vec<Vec<u8>>,
-    kind: &str,
-    height: ChainEpoch,
-) -> Result<(Vec<[u8; 32]>, Vec<Vec<u8>>)> {
-    let getter = gateway_getter_facet::GatewayGetterFacet::new(gateway_addr, provider);
-    let membership = getter.get_current_membership().call().await?;
-
-    let mut addr_to_xonly: HashMap<ethers::types::Address, [u8; 32]> = HashMap::new();
-    for v in membership.validators.iter() {
-        match ipc_wallet::xonly_from_pubkey_bytes(&v.metadata) {
-            Ok(x) => {
-                addr_to_xonly.insert(v.addr, x);
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "skipping membership entry for validator {:?}: cannot derive x-only pubkey from metadata: {e}",
-                    v.addr
-                );
-            }
-        }
-    }
-
-    let mut kept_pubkeys = Vec::with_capacity(signatories.len());
-    let mut kept_signatures = Vec::with_capacity(signatures.len());
-    for (addr, sig) in signatories.into_iter().zip(signatures.into_iter()) {
-        match addr_to_xonly.get(&addr) {
-            Some(x) => {
-                kept_pubkeys.push(*x);
-                kept_signatures.push(sig);
-            }
-            None => {
-                tracing::warn!(
-                    "dropping bitcoin {kind} signature from validator {addr:?} at height {height}: not in current gateway membership"
-                );
-            }
-        }
-    }
-    Ok((kept_pubkeys, kept_signatures))
 }
 
 lazy_static!(

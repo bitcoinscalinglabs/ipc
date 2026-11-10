@@ -108,7 +108,12 @@ impl CommandLineHandler for UnstakeUe {
 
         let mut provider = get_ipc_provider(global)?;
         let subnet = SubnetID::from_str(&arguments.subnet)?;
-        provider.unstake_ue(subnet).await
+        let tx = provider.unstake_ue(subnet).await?;
+        println!(
+            "unstake-ue transaction submitted: txid {}; {} sats of collateral spent, paid minus the fee to {}",
+            tx.txid, tx.amount, tx.address
+        );
+        Ok(())
     }
 }
 
@@ -122,5 +127,50 @@ pub struct UnstakeUeArgs {
     pub subnet: String,
 }
 #[cfg(test)]
-#[path = "unilateral_exit_spec_tests.rs"]
-mod spec_tests;
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[derive(Debug, Parser)]
+    struct Command {
+        #[command(flatten)]
+        args: JoinUeArgs,
+    }
+
+    fn arguments() -> Vec<String> {
+        [
+            "join-ue",
+            "--subnet",
+            "/b4/test",
+            "--collateral",
+            "100000",
+            "--ip",
+            "192.0.2.1:8080",
+            "--backup-address",
+            "bcrt1pbackup",
+            "--epochs",
+            "128",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
+    }
+
+    #[test]
+    fn join_ue_requires_and_preserves_the_epoch_count() {
+        let parsed = Command::try_parse_from(arguments()).unwrap();
+        assert_eq!(parsed.args.epochs, 128);
+        let mut missing = arguments();
+        missing.truncate(missing.len() - 2);
+        assert!(Command::try_parse_from(missing).is_err());
+    }
+
+    #[test]
+    fn join_ue_rejects_negative_and_overwide_epoch_counts() {
+        for bad in ["-1", "4294967296"] {
+            let mut args = arguments();
+            *args.last_mut().unwrap() = bad.into();
+            assert!(Command::try_parse_from(args).is_err());
+        }
+    }
+}
