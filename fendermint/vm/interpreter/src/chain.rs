@@ -243,7 +243,7 @@ where
                         );
                         return Ok(false);
                     }
-                    // Waits for the monitor: the decision depends on the Bitcoin height alone
+                    // Waits for the recorded state: the decision depends on the Bitcoin height alone
                     let agreed = tally.agreed_state_wait(bitcoin_height).await;
                     if let Err(e) = tally.check_proposal(&data, &agreed) {
                         tracing::error!(error = %e, "rejecting a proposal: carried EOTS votes");
@@ -436,7 +436,7 @@ where
                     // be _at least_ 1 height behind.
                     let (execution_fr, execution_to) = (prev_height + 1, finality.height);
 
-                    // waits for as long as the monitor is unreachable or behind
+                    // waits until the recorded state reaches that Bitcoin height
                     let validator_changes = env
                         .parent_finality_provider
                         .validator_changes_from(execution_fr, execution_to)
@@ -454,7 +454,7 @@ where
                         .store_validator_changes(&mut state, validator_changes)
                         .context("failed to store validator changes")?;
 
-                    // waits for as long as the monitor is unreachable or behind
+                    // waits until the recorded state reaches that Bitcoin height
                     let msgs = env
                         .parent_finality_provider
                         .top_down_msgs_from(execution_fr, execution_to)

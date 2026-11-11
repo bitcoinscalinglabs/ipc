@@ -67,7 +67,7 @@ fn key(seed: u8) -> ValidatorKey {
     )
 }
 
-/// A tally over a memory store, with no monitor: its state is set directly
+/// A tally over a memory store, with no recorded state read: its state is set directly
 fn tally(keys: &[(ValidatorKey, Weight)]) -> EotsTally {
     tally_with_provider("http://127.0.0.1:1", keys)
 }
@@ -488,7 +488,7 @@ fn carried_votes_sizes_stay_under_the_limit_for_350_members() {
     assert!(350 * vote_size(&vote) * 2 <= MAX_CARRIED_BYTES);
 }
 
-/// The EOTS keys a fake monitor holds (validator x-only key, EOTS key, commitment, Bitcoin
+/// The recorded EOTS keys (validator x-only key, EOTS key, commitment, Bitcoin
 /// height), and the checkpoint it answers with.
 #[derive(Default)]
 struct FakeMonitor {
@@ -496,7 +496,7 @@ struct FakeMonitor {
     checkpoint: Option<(u64, [u8; 32])>,
 }
 
-/// A monitor's recorded key and commitment of `signer` for `key`.
+/// The recorded key and commitment of `signer` for `key`.
 fn recorded(
     key: &ValidatorKey,
     signer: &ipc_eots::testing::TestSigner,
@@ -510,10 +510,10 @@ fn recorded(
     )
 }
 
-/// The `after_block_height` and `max_block_height` of every request to a fake provider.
+/// The `after_block_height` and `max_block_height` of every request for recorded EOTS state.
 type Requests = Arc<Mutex<Vec<(Option<u64>, Option<u64>)>>>;
 
-/// A provider that answers `geteotsrecords` from `monitor`, with the records of the Bitcoin
+/// A fake source that answers `geteotsrecords` from `monitor`, with the records of the Bitcoin
 /// heights above `after_block_height` and at or below the answer's height. A Bitcoin height
 /// above `processed` is refused and counted in `refused`.
 async fn fake_provider(
@@ -630,7 +630,7 @@ async fn respond(stream: &mut tokio::net::TcpStream, answer: serde_json::Value) 
     stream.shutdown().await.ok();
 }
 
-/// A fake provider on a free port, serving `monitor` from `processed` on.
+/// A fake source on a free port, serving the records of `monitor` from `processed` on.
 async fn serve(monitor: FakeMonitor, processed: u64) -> (String, tokio::task::JoinHandle<()>) {
     serve_at(
         monitor,
@@ -640,7 +640,7 @@ async fn serve(monitor: FakeMonitor, processed: u64) -> (String, tokio::task::Jo
     .await
 }
 
-/// A fake provider on a free port, serving `monitor` at the Bitcoin height `processed` holds.
+/// A fake source on a free port, serving the records of `monitor` at the Bitcoin height `processed` holds.
 async fn serve_at(
     monitor: FakeMonitor,
     processed: Arc<std::sync::atomic::AtomicU64>,
@@ -702,7 +702,7 @@ fn node_data(
     (t, next)
 }
 
-/// The tally of a node that restarts on the data of `t`, with `provider` as its monitor.
+/// The tally of a node that restarts on the data of `t`, with `provider` as its source of recorded state.
 fn restarted(t: &EotsTally, provider_url: &str) -> EotsTally {
     let fresh = tally_with_provider(provider_url, &[]);
     EotsTally::new(
@@ -733,7 +733,7 @@ async fn a_restarted_node_executes_the_carried_votes_of_the_next_block() {
     .await;
     let r = restarted(&t, &url);
     // The restarted tally holds the power tables and the recorded final height, and has
-    // not reached its monitor yet
+    // not read the recorded state yet
     assert!(r.has_stored_power_tables());
     assert_eq!(r.recorded_final_height(), 2);
     assert!(!r.lock().monitor_read);
@@ -743,7 +743,7 @@ async fn a_restarted_node_executes_the_carried_votes_of_the_next_block() {
     r.execute_proposal(&next).await.unwrap();
     assert_eq!(r.recorded_final_height(), 3);
     assert_eq!(r.final_height(), 3);
-    // The stored votes were checked at the read of the monitor, and the votes at or below the
+    // The stored votes were checked at the read of the recorded state, and the votes at or below the
     // new subnet final height are deleted
     assert!(r.lock().pending.is_empty());
     assert!(r.lock().votes.is_empty());
@@ -761,7 +761,7 @@ async fn a_carried_vote_the_monitor_rejects_is_not_held_and_the_block_stands() {
         ipc_eots::testing::TestSigner::new(12, 1, 20),
     );
     let (t, next) = node_data(&k1, &k2, &s1, &s2);
-    // This node's monitor never recorded the EOTS key of k2
+    // This node never recorded the EOTS key of k2
     let (url, server) = serve(
         FakeMonitor {
             keys: vec![recorded(&k1, &s1, 100)],
@@ -834,7 +834,7 @@ async fn a_vote_signed_with_another_key_than_the_registered_one_is_rejected_and_
         ipc_eots::testing::TestSigner::new(13, 1, 20),
     );
     let (t, mut next) = node_data(&k1, &k2, &s1, &s2);
-    // k2 registered s2's EOTS key with the monitor but signs its vote at height 3 with s3
+    // k2 registered s2's EOTS key but signs its vote at height 3 with s3
     next.votes.retain(|v| v.vote.pk_eots != s2.pk_eots);
     next.votes.push(vote_of(&t, &k2, &s3, 3, [3u8; 32]));
     let (url, server) = serve(
@@ -884,7 +884,7 @@ async fn a_node_that_read_its_monitor_while_it_was_behind_accepts_an_honest_prop
     )
     .await;
     let r = restarted(&t, &url);
-    // This node read its monitor when it had processed height 99 only, before k2's
+    // This node read the recorded state of Bitcoin height 99 only, before k2's
     // key and commitment were recorded
     {
         let mut inner = r.lock();
@@ -895,7 +895,7 @@ async fn a_node_that_read_its_monitor_while_it_was_behind_accepts_an_honest_prop
         inner.monitor_read = true;
         inner.monitor_read_for = 99;
     }
-    // The decision at Bitcoin height 100 reads the monitor again, so the honest proposal
+    // The decision at Bitcoin height 100 reads the recorded state again, so the honest proposal
     // that carries k2's vote passes as on every other node
     let agreed = r.agreed_state(100).await.unwrap();
     assert_eq!(r.lock().monitor_read_for, 100);
@@ -926,7 +926,7 @@ async fn the_agreed_state_waits_for_an_unreachable_provider_and_a_lagging_monito
     use std::sync::atomic::{AtomicU64, Ordering};
     let retry = std::time::Duration::from_millis(50);
     let timeout = std::time::Duration::from_secs(2);
-    // A port nobody listens on yet: the provider is unreachable
+    // A port nobody listens on yet: the recorded state is unreachable
     let port = {
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         l.local_addr().unwrap().port()
@@ -934,7 +934,7 @@ async fn the_agreed_state_waits_for_an_unreachable_provider_and_a_lagging_monito
     let t = tally_with_provider(&format!("http://127.0.0.1:{port}"), &[(key(1), 1)]);
     assert!(t.agreed_state(100).await.is_err(), "unreachable");
 
-    // The provider comes up with its monitor one block behind, then catches up
+    // The recorded state comes up one Bitcoin block behind, then catches up
     let processed = Arc::new(AtomicU64::new(99));
     let refused = Arc::new(AtomicU64::new(0));
     let server = {
@@ -985,10 +985,10 @@ async fn the_agreed_state_waits_for_an_unreachable_provider_and_a_lagging_monito
     );
     assert!(catch_up.is_finished());
 
-    // Once the monitor is there, the plain question has the same answer at once
+    // Once the recorded state is there, the plain question has the same answer at once
     let again = t.agreed_state(100).await.unwrap();
     assert_eq!(again, agreed);
-    // A height above the monitor's is still refused, not answered with an older checkpoint
+    // A height above the recorded state's is still refused, not answered with an older checkpoint
     assert!(t.agreed_state(101).await.is_err());
     server.abort();
 }
@@ -1034,7 +1034,7 @@ async fn the_agreed_state_comes_from_memory_while_the_held_records_cover_the_par
     let k1 = key(1);
     let s1 = TestSigner::new(11, 1, 20);
     let requests = Requests::default();
-    // The checkpoint is recorded at Bitcoin height 100, the monitor processed 101
+    // The checkpoint is recorded at Bitcoin height 100, the recorded state reaches 101
     let (url, server) = serve_at(
         FakeMonitor {
             keys: vec![recorded(&k1, &s1, 100)],
@@ -1059,7 +1059,7 @@ async fn the_agreed_state_comes_from_memory_while_the_held_records_cover_the_par
     assert_eq!(*requests.lock().unwrap(), [(Some(101), Some(99))]);
     assert_eq!(t.lock().monitor_read_for, 101);
     assert_eq!(t.lock().checkpointed(), 42);
-    // Above the monitor's Bitcoin height: refused
+    // Above the recorded Bitcoin height: refused
     assert!(t.agreed_state(102).await.is_err());
     server.abort();
 }
@@ -1094,7 +1094,7 @@ async fn a_vote_waiting_for_its_commitment_is_accepted_at_the_read_that_brings_i
     }
     let vote = vote_of(&t, &k2, &s2_next, 25, block(25));
     assert_eq!(t.add_vote(vote.clone(), None), Ok(VoteOutcome::Pending));
-    // A key the monitor has not recorded yet is rejected, not kept
+    // A key that is not recorded yet is rejected, not kept
     assert_eq!(
         t.add_vote(vote_of(&t, &k3, &s3, 5, block(5)), None),
         Err(VoteError::WrongEotsKey)
@@ -1110,7 +1110,7 @@ async fn a_vote_waiting_for_its_commitment_is_accepted_at_the_read_that_brings_i
 }
 
 /// A tally holding the chain's blocks 1 to 25 and `k`'s EOTS key with the commitment of
-/// `s`, before any read of the monitor.
+/// `s`, before any read of the recorded state.
 fn awaiting_tally(k: &ValidatorKey, s: &TestSigner) -> EotsTally {
     let t = tally(&[(k.clone(), 1)]);
     t.lock().eots_keys.insert(x_only(&key_bytes(k)), s.pk_eots);
@@ -1204,7 +1204,7 @@ async fn a_waiting_vote_at_or_below_a_newly_read_checkpoint_is_dropped() {
         t.add_vote(vote_of(&t, &k, &s_next, 25, block(25)), None),
         Ok(VoteOutcome::Pending)
     );
-    // The monitor records the checkpoint of height 25 at Bitcoin height 100
+    // The checkpoint of height 25 is recorded at Bitcoin height 100
     processed.store(100, Ordering::SeqCst);
     t.read_monitor().await.unwrap();
     assert_eq!(t.lock().checkpointed(), 25);
@@ -2083,7 +2083,7 @@ fn pollution_fixture(with_evidence: bool, obsolete: bool) {
     for height in 1..=2 {
         receiver.add_block(height, block(height)).unwrap();
     }
-    // Other local gossip and monitor-head views must not affect the proposal decision.
+    // Other local gossip and recorded-head views must not affect the proposal decision.
     receiver.lock().checkpoint = Some((2, block(2), true));
     receiver
         .check_proposal(&proposal, &state)
@@ -2158,7 +2158,7 @@ async fn committed_bad_vote(omit_commitment: bool) {
         votes,
         evidence: vec![],
     };
-    // The commitments held in memory match the monitor's
+    // The commitments held in memory match the recorded ones
     let monitored_node = |store: Arc<MemoryStore>| {
         let node = f.node(store, &url);
         if omit_commitment {

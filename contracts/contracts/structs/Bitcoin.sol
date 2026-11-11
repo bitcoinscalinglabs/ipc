@@ -10,8 +10,6 @@ struct BitcoinCheckpoint {
     address[] signatories;
     /// @dev The list of signatures.
     mapping(address => bytes) signatures;
-    /// @dev The x-only Bitcoin key that each signer posted with its signatures.
-    mapping(address => bytes32) keys;
 }
 
 struct SlashPreSignature {

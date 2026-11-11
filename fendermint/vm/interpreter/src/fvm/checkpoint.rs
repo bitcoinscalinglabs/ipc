@@ -332,8 +332,8 @@ pub fn outputs_to_presign(
 
 /// Whether this validator posts its slash pre-signature for an output, given what the subnet
 /// holds for it: its index has not posted, and the posted powers are below `threshold`, or the
-/// last checkpoint that carried them is at or below `checkpointed` while the monitor still
-/// reports the output not slashable.
+/// last checkpoint that carried them is at or below `checkpointed` while the output is still not
+/// slashable.
 pub fn should_post_slash_pre_signature(
     posted: &checkpoint::GetSlashOutputReturn,
     threshold: u64,
@@ -588,7 +588,6 @@ where
             checkpoint,
             chain_id,
             decode_slash_pre_signatures(&data)?,
-            x_only(&validator_ctx.public_key),
         )
         .await
         .context("failed to broadcast bitcoin signature")?;
@@ -626,7 +625,6 @@ async fn broadcast_bitcoin_signature<C, DB>(
     checkpoint: checkpoint::BottomUpCheckpoint,
     chain_id: ChainID,
     slash_signatures: Vec<ipc_api::eots::SlashPreSignature>,
-    key: [u8; 32],
 ) -> anyhow::Result<()>
 where
     C: Client + Clone + Send + Sync + 'static,
@@ -644,7 +642,7 @@ where
     );
 
     let calldata = gateway
-        .add_bitcoin_checkpoint_signature_calldata(&checkpoint, checkpoint_psbt, key)
+        .add_bitcoin_checkpoint_signature_calldata(&checkpoint, checkpoint_psbt)
         .context("failed to produce bitcoin checkpoint signature calldata")?;
 
     let tx_hash = broadcaster

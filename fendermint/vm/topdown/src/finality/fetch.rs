@@ -14,8 +14,8 @@ use ipc_api::staking::StakingChangeRequest;
 use std::sync::Arc;
 use std::time::Duration;
 
-/// How long block execution waits between two questions to the local monitor about the
-/// parent height it has processed.
+/// How long block execution waits between two reads of the Bitcoin height
+/// the recorded state has reached.
 const CONFIRMED_HEIGHT_POLL: Duration = Duration::from_secs(1);
 
 /// The longest wait between two retries of a query to the parent client.
@@ -141,15 +141,15 @@ impl<T: ParentQueryProxy + Send + Sync + 'static> CachedFinalityProvider<T> {
         Ok(Self::new(config, genesis, None, parent_client))
     }
 
-    /// Block until the local monitor reports it has processed `height`, so a
+    /// Block until the recorded state reaches Bitcoin `height`, so a
     /// subsequent top-down / validator-change query returns the complete set
-    /// rather than a premature empty one. It waits for as long as the monitor is
-    /// unreachable or behind.
+    /// rather than a premature empty one. It waits until the recorded state
+    /// reaches that height.
     async fn wait_for_confirmed_height(&self, height: BlockHeight) {
         loop {
             match self.parent_client.get_chain_head_height().await {
-                // The monitor writes a block's effects before advancing its
-                // confirmed height, so `confirmed >= height` means the set for
+                // A block's effects are recorded before the confirmed
+                // height advances, so `confirmed >= height` means the set for
                 // `height` is fully present.
                 Ok(confirmed) if height <= confirmed => return,
                 Ok(confirmed) => tracing::warn!(

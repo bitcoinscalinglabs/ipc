@@ -1547,24 +1547,22 @@ impl BottomUpCheckpointRelayer for EthSubnetManager {
                 Arc::new(self.ipc_contract_info.provider.clone()),
             );
 
-            let (psbt, batch_transfer_tx, bitcoin_signatories, bitcoin_signatures, keys) =
-                contract
-                    .get_bitcoin_checkpoint_signatures(U256::from(height))
-                    .call()
-                    .await?;
+            let (psbt, batch_transfer_tx, bitcoin_signatories, bitcoin_signatures) = contract
+                .get_bitcoin_checkpoint_signatures(U256::from(height))
+                .call()
+                .await?;
 
-            if bitcoin_signatories.len() != bitcoin_signatures.len()
-                || keys.len() != bitcoin_signatures.len()
-            {
+            if bitcoin_signatories.len() != bitcoin_signatures.len() {
                 return Err(anyhow!(
-                    "signatories, signatures and keys length mismatch for bitcoin checkpoint at height: {}",
+                    "signatories and signatures length mismatch for bitcoin checkpoint at height: {}",
                     height
                 ));
             }
 
             tracing::debug!("found {} bitcoin signatures", bitcoin_signatures.len());
 
-            // Each signature with the Bitcoin key its signer posted; the provider places them
+            // Each signer's signatures, without its key: the key is the one of the configuration
+            // that signs the checkpoint for which they verify
             let bitcoin_signatures = bitcoin_signatures
                 .into_iter()
                 .map(|s| s.to_vec())
@@ -1572,7 +1570,6 @@ impl BottomUpCheckpointRelayer for EthSubnetManager {
 
             Some(BitcoinCheckpointSignatureQuorum {
                 unsigned_psbt: ipc_api::checkpoint::UnsignedPsbt::encode(&psbt)?,
-                signatories: keys,
                 signatures: bitcoin_signatures,
                 transfer_tx: ipc_api::checkpoint::BitcoinTx::encode(&batch_transfer_tx)?,
             })

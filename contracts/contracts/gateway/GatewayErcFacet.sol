@@ -99,7 +99,7 @@ contract GatewayErcFacet is GatewayActorModifiers {
     }
 
     /// @notice Returns supply deltas for all registered tokens since the last checkpoint.
-    ///         Called by fendermint at checkpoint time to compute IPC:ETS records.
+    ///         Supply deltas of the registered tokens, for the IPC:ETS records of a checkpoint.
     ///         Uses try/catch so a broken token contract cannot block checkpointing.
     /// @param height   Height of the checkpoint; tokens whose registration a later checkpoint carries are skipped.
     /// @return tokens  Array of token addresses (max-sized; first `count` entries are valid).
@@ -130,7 +130,7 @@ contract GatewayErcFacet is GatewayActorModifiers {
     }
 
     /// @notice Updates stored supply snapshots to current totalSupply values.
-    ///         Called by fendermint after reading deltas, so the next checkpoint starts fresh.
+    ///         Sets the supply snapshots to the current total supplies.
     ///         Uses try/catch so a broken token contract cannot block checkpointing.
     /// @param height Height of the checkpoint; tokens whose registration a later checkpoint carries are skipped.
     function updateSupplySnapshots(uint256 height) external {

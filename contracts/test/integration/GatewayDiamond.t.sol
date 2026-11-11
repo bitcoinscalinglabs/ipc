@@ -1764,8 +1764,7 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
                 checkpoint.blockHeight,
                 abi.encodePacked("psbt"),
                 abi.encodePacked(string.concat("val", Strings.toString(i), "sig")),
-                abi.encodePacked("batchtransfer1"),
-                bytes32(0)
+                abi.encodePacked("batchtransfer1")
             );
             vm.stopPrank();
         }
@@ -1776,8 +1775,7 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
                 bytes memory retrievedPsbt,
                 bytes memory retrievedBatchTransferTx,
                 address[] memory signatories,
-                bytes[] memory retrievedSignatures,
-
+                bytes[] memory retrievedSignatures
             ) = gatewayDiamond.checkpointer().getBitcoinCheckpointSignatures(checkpoint.blockHeight);
 
             require(keccak256(retrievedPsbt) == keccak256(abi.encodePacked("psbt")), "incorrect PSBT");
@@ -1851,8 +1849,7 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             checkpoint.blockHeight,
             abi.encodePacked("psbt1"),
             abi.encodePacked("val0sig"),
-            abi.encodePacked("batchtransfer1"),
-            bytes32(0)
+            abi.encodePacked("batchtransfer1")
         );
         vm.stopPrank();
 
@@ -1862,8 +1859,7 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             checkpoint.blockHeight,
             abi.encodePacked("psbt1"),
             abi.encodePacked("val1sig"),
-            abi.encodePacked("batchtransfer1"),
-            bytes32(0)
+            abi.encodePacked("batchtransfer1")
         );
         vm.stopPrank();
 
@@ -1873,8 +1869,7 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             checkpoint.blockHeight,
             abi.encodePacked("psbt2"),
             abi.encodePacked("val2sig"),
-            abi.encodePacked("batchtransfer2"),
-            bytes32(0)
+            abi.encodePacked("batchtransfer2")
         );
         vm.stopPrank();
 
@@ -1884,7 +1879,6 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
                 bytes memory retrievedPsbt,
                 bytes memory retrievedBatchTransferTx,
                 address[] memory signatories,
-                ,
 
             ) = gatewayDiamond.checkpointer().getBitcoinCheckpointSignatures(checkpoint.blockHeight);
 
@@ -1949,8 +1943,7 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             checkpoint.blockHeight,
             abi.encodePacked("psbt1"),
             abi.encodePacked("val1sig"),
-            abi.encodePacked("batchtransfer1"),
-            bytes32(0)
+            abi.encodePacked("batchtransfer1")
         );
         vm.stopPrank();
 
@@ -1962,8 +1955,7 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             checkpoint.blockHeight,
             abi.encodePacked("psbt1"),
             abi.encodePacked("val1sig"),
-            abi.encodePacked("batchtransfer1"),
-            bytes32(0)
+            abi.encodePacked("batchtransfer1")
         );
         vm.stopPrank();
     }
@@ -1980,8 +1972,7 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             nonExistentHeight,
             abi.encodePacked("psbt1"),
             abi.encodePacked("val0sig"),
-            abi.encodePacked("batchtransfer1"),
-            bytes32(0)
+            abi.encodePacked("batchtransfer1")
         );
         vm.stopPrank();
     }
@@ -2034,8 +2025,7 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             checkpoint.blockHeight,
             abi.encodePacked("psbt1"),
             abi.encodePacked("val0sig"),
-            abi.encodePacked("batchtransfer1"),
-            bytes32(0)
+            abi.encodePacked("batchtransfer1")
         );
 
         // Try to add the same Bitcoin signature again (same PSBT)
@@ -2044,8 +2034,7 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
             checkpoint.blockHeight,
             abi.encodePacked("psbt1"),
             abi.encodePacked("new_val0sig"),
-            abi.encodePacked("batchtransfer1"),
-            bytes32(0)
+            abi.encodePacked("batchtransfer1")
         );
         vm.stopPrank();
     }
@@ -2103,8 +2092,7 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
                 checkpoint.blockHeight,
                 abi.encodePacked("psbt", i),
                 abi.encodePacked("sig", i),
-                abi.encodePacked("batchtx", i),
-                bytes32(0)
+                abi.encodePacked("batchtx", i)
             );
             vm.stopPrank();
         }
@@ -2116,8 +2104,7 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
                 bytes memory psbt,
                 bytes memory batchTx,
                 address[] memory signatories,
-                bytes[] memory signatures,
-
+                bytes[] memory signatures
             ) = gatewayDiamond.checkpointer().getBitcoinCheckpointSignatures(height);
 
             // Verify the checkpoint data
@@ -2158,8 +2145,7 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
                     bytes memory psbt,
                     bytes memory batchTx,
                     address[] memory signatories,
-                    bytes[] memory signatures,
-
+                    bytes[] memory signatures
                 ) = gatewayDiamond.checkpointer().getBitcoinCheckpointSignatures(height);
 
                 // Verify the checkpoint data is still intact
@@ -2449,8 +2435,7 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
                 checkpoint.blockHeight,
                 psbt,
                 abi.encodePacked("sig", Strings.toString(i)),
-                abi.encodePacked("batchtransfer"),
-                bytes32(0)
+                abi.encodePacked("batchtransfer")
             );
         }
         vm.stopPrank();
@@ -2470,7 +2455,7 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
         psbts[3] = "psbtA";
 
         uint256 height = _signBitcoinCheckpoint(weights, psbts);
-        (bytes memory psbt, , address[] memory signatories, , ) = gatewayDiamond
+        (bytes memory psbt, , address[] memory signatories, ) = gatewayDiamond
             .checkpointer()
             .getBitcoinCheckpointSignatures(height);
 
@@ -2488,7 +2473,7 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
         psbts[3] = "psbtA";
 
         uint256 height = _signBitcoinCheckpoint(weights, psbts);
-        (bytes memory psbt, , address[] memory signatories, , ) = gatewayDiamond
+        (bytes memory psbt, , address[] memory signatories, ) = gatewayDiamond
             .checkpointer()
             .getBitcoinCheckpointSignatures(height);
 
@@ -2679,7 +2664,7 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
         vm.stopPrank();
     }
 
-    function testGatewayDiamond_getBitcoinCheckpointSignatures_returnsPostedKeys() public {
+    function testGatewayDiamond_getBitcoinCheckpointSignatures_returnsSignatoriesWithSignatures() public {
         (uint256[] memory privKeys, address[] memory addrs, uint256[] memory weights) = TestUtils.getFourValidators(vm);
         (bytes32 membershipRoot, ) = MerkleTreeHelper.createMerkleProofsForValidators(addrs, weights);
         BottomUpCheckpoint memory checkpoint = BottomUpCheckpoint({
@@ -2705,18 +2690,17 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
                 checkpoint.blockHeight,
                 abi.encodePacked("psbt"),
                 abi.encodePacked("sig", i),
-                abi.encodePacked("batchtransfer1"),
-                keccak256(abi.encodePacked("key", i))
+                abi.encodePacked("batchtransfer1")
             );
         }
 
-        (, , address[] memory signatories, , bytes32[] memory keys) = gatewayDiamond
+        (, , address[] memory signatories, bytes[] memory signatures) = gatewayDiamond
             .checkpointer()
             .getBitcoinCheckpointSignatures(checkpoint.blockHeight);
-        require(signatories.length == 3 && keys.length == 3, "wrong number of signatories");
+        require(signatories.length == 3 && signatures.length == 3, "wrong number of signatories");
         for (uint256 i; i < 3; i++) {
             require(signatories[i] == vm.addr(privKeys[i]), "wrong signatory");
-            require(keys[i] == keccak256(abi.encodePacked("key", i)), "wrong key");
+            require(keccak256(signatures[i]) == keccak256(abi.encodePacked("sig", i)), "wrong signature");
         }
     }
 

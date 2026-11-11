@@ -72,10 +72,7 @@ pub struct BottomUpCheckpointBundle {
 pub struct BitcoinCheckpointSignatureQuorum {
     /// The unsigned PSBT
     pub unsigned_psbt: UnsignedPsbt,
-    /// The 32-byte x-only Taproot pubkey of each signatory.
-    pub signatories: Vec<[u8; 32]>,
-    /// The signatures of each signatory.
-    /// `signatures[i]` contains the signature of `signatories[i]`.
+    /// The signatures of each signatory, one per input of the checkpoint transaction, concatenated.
     pub signatures: Vec<BitcoinSignature>,
     /// The transfer transaction
     pub transfer_tx: BitcoinTx,

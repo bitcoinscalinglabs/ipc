@@ -136,13 +136,11 @@ contract CheckpointingFacet is GatewayActorModifiers {
         });
     }
 
-    /// @param key - The signer's x-only Bitcoin key, which the provider uses to place its signatures.
     function addBitcoinCheckpointSignature(
         uint256 height,
         bytes calldata psbt,
         bytes calldata signatures,
-        bytes calldata batchTransferTx,
-        bytes32 key
+        bytes calldata batchTransferTx
     ) external {
         // check if the checkpoint was already pruned before getting checkpoint
         // and triggering the signature
@@ -205,7 +203,6 @@ contract CheckpointingFacet is GatewayActorModifiers {
         } else {
             btcCheckpoint.signatories.push(signatory);
             btcCheckpoint.signatures[signatory] = signatures;
-            btcCheckpoint.keys[signatory] = key;
             emit BitcoinCheckpointAdded(height, signatory, psbtHash);
         }
     }
@@ -313,7 +310,6 @@ contract CheckpointingFacet is GatewayActorModifiers {
     /// @return batchTransferTx - The hex of the batch transfer transaction, if present.
     /// @return signatories - The list of validators who signed.
     /// @return signatures - The list of signatures corresponding to the signatories.
-    /// @return keys - The x-only Bitcoin keys that the signatories posted.
     function getBitcoinCheckpointSignatures(
         uint256 height
     )
@@ -323,8 +319,7 @@ contract CheckpointingFacet is GatewayActorModifiers {
             bytes memory psbt,
             bytes memory batchTransferTx,
             address[] memory signatories,
-            bytes[] memory signatures,
-            bytes32[] memory keys
+            bytes[] memory signatures
         )
     {
         // Check if the checkpoint exists
@@ -336,7 +331,7 @@ contract CheckpointingFacet is GatewayActorModifiers {
         bytes32[] storage hashes = s.bitcoinCheckpointPsbtHashes[height];
         if (hashes.length == 0) {
             // No Bitcoin checkpoints found for this height
-            return (new bytes(0), new bytes(0), new address[](0), new bytes[](0), new bytes32[](0));
+            return (new bytes(0), new bytes(0), new address[](0), new bytes[](0));
         }
 
         // Ties keep the first.
@@ -360,15 +355,13 @@ contract CheckpointingFacet is GatewayActorModifiers {
         // Return signatories
         signatories = btcCheckpoint.signatories;
 
-        // Map signatories to their signatures and keys
+        // Map signatories to their signatures
         signatures = new bytes[](signatories.length);
-        keys = new bytes32[](signatories.length);
         for (uint256 i = 0; i < signatories.length; i++) {
             signatures[i] = btcCheckpoint.signatures[signatories[i]];
-            keys[i] = btcCheckpoint.keys[signatories[i]];
         }
 
-        return (psbt, batchTransferTx, signatories, signatures, keys);
+        return (psbt, batchTransferTx, signatories, signatures);
     }
 
     function hasBitcoinCheckpointSignature(uint256 height, address signatory) external view returns (bool) {

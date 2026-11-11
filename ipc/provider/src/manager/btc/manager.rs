@@ -95,7 +95,7 @@ impl BtcSubnetManager {
         })
     }
 
-    /// Calls a provider method and returns its `result`, or the JSON-RPC error.
+    /// Calls a JSON-RPC method and returns its `result`, or the error.
     async fn rpc_call(&self, method: &str, params: Value) -> Result<Value> {
         let body = json!({
             "jsonrpc": "2.0",
@@ -150,7 +150,7 @@ impl BtcSubnetManager {
 
     /// `geteotsrecords`: the EOTS keys and EOTS nonce commitments recorded in Bitcoin blocks above
     /// `after_bitcoin_height`, and the latest checkpoint, at `max_bitcoin_height` or at the
-    /// latest Bitcoin height the monitor processed.
+    /// latest processed Bitcoin height.
     pub async fn eots_records(
         &self,
         subnet_id: &SubnetID,
@@ -225,7 +225,7 @@ impl BtcSubnetManager {
         })
     }
 
-    /// `signeotsvote`: this validator's EOTS vote for a subnet block, signed by its provider.
+    /// `signeotsvote`: this validator's EOTS vote for a subnet block.
     pub async fn sign_eots_vote(
         &self,
         subnet_id: &SubnetID,
@@ -283,7 +283,8 @@ impl BtcSubnetManager {
         })
     }
 
-    /// `getunslashableoutputs`: the collateral outputs the monitor has not recorded as slashable.
+    /// `getunslashableoutputs`: the accepted collateral UTXOs and unbonding outputs that are
+    /// unspent and not slashable yet.
     pub async fn get_unslashable_outputs(
         &self,
         subnet_id: &SubnetID,
@@ -765,7 +766,7 @@ impl SubnetManager for BtcSubnetManager {
     async fn unstake_ue(&self, subnet: SubnetID) -> Result<ExitTransaction> {
         tracing::info!("unstake-ue on btc for subnet {subnet}");
 
-        // The provider spends the collaterals of its own validator key
+        // The exit transaction of this validator's collateral UTXOs
         let result = self
             .rpc_call("unstakeue", json!({ "subnet_id": subnet.to_string() }))
             .await?;
@@ -1713,10 +1714,7 @@ impl BottomUpCheckpointRelayer for BtcSubnetManager {
             }
         };
 
-        let signatures_json = zip_pubkeys_with_chunked_signatures(
-            bitcoin_signatures.signatures,
-            bitcoin_signatures.signatories,
-        )?;
+        let signatures_json = chunked_signatures(bitcoin_signatures.signatures);
 
         let body = json!({
             "jsonrpc": "2.0",
@@ -1882,50 +1880,17 @@ fn eth_address_of_x_only_key(key: &[u8]) -> Result<EthAddress> {
     Ok(EthAddress::from_slice(&hash[12..]))
 }
 
-// Produce the JSON shape that bitcoin-ipc's `finalizecheckpointpsbt` RPC
-// expects: for each signatory, an array
-// `[xpub_hex, [sig_chunk_hex, ...]]`. The input `signatures[i]` is the
-// concatenation of fixed-size (64-byte) Schnorr signatures produced by
-// signatories[i]; this function splits each concatenated blob into its constituent
-// chunks and pairs them with the hex-encoded x-only Taproot pubkey of the signer.
-//
-// Example output (two signatories, two signatures each):
-// [
-//     [
-//         "5f0dfed3a527ac740c7d4a594cd3aa1059a936187399fc49e3fc6ea6ae177268",
-//         [
-//             "f245679ccda14b190213d4115ba8c10d484d5f0d1e0a37a493bd88f9fce3f05b5514debb23e83c693a1fdeb0622970fc3691dbbdee87b7430af41acdca58f44c",
-//             "ce02c09922cde3a671337baa86028a094d456a523286dccfcec015eff78fcf8b666db66c7368fe93f5d75fabf64451b2469931aab4386653194572261586e6dd"
-//         ]
-//     ],
-//     [
-//         "67308c2f3915f4c36135f267ed709418c2880025d669e4ada7a206842d53c146",
-//         [
-//             "41592da0f93d2483ca227a75e36c8898d7097c61f56f2770ca8efe260b3d38011353edd64833cd6b5cc1b6e7c2be0b3a55fc55d5aa9cf34bfd4fa57d4ea551bf",
-//             "3e5f2635a43eab0560a038e300a5e1a4fb11cdfe0da4bf9842ca292db3538ff382d55ff05c2a32c412d558ff4333d0a0d16016b97b58971e16a93f43da01fe89"
-//         ]
-//     ]
-// ]
-fn zip_pubkeys_with_chunked_signatures(
-    signatures: Vec<BitcoinSignature>,
-    signatories: Vec<[u8; 32]>,
-) -> Result<Vec<serde_json::Value>> {
-    if signatures.len() != signatories.len() {
-        return Err(anyhow!(
-            "signatures/signatories length mismatch: {} vs {}",
-            signatures.len(),
-            signatories.len()
-        ));
-    }
-    let mut signatures_json = Vec::with_capacity(signatures.len());
-    for (xonly_pubkey, concatenated_signatures) in signatories.iter().zip(signatures.iter()) {
-        let chunks = concatenated_signatures
-            .chunks(libsecp256k1::util::SIGNATURE_SIZE)
-            .map(|c| hex::encode(c.to_vec()))
-            .collect::<Vec<_>>();
-        signatures_json.push(json!([hex::encode(xonly_pubkey), chunks]));
-    }
-    Ok(signatures_json)
+/// Each signer's 64-byte signatures, one per input, in hex, split from the posted concatenation.
+fn chunked_signatures(signatures: Vec<BitcoinSignature>) -> Vec<Vec<String>> {
+    signatures
+        .iter()
+        .map(|concatenated| {
+            concatenated
+                .chunks(libsecp256k1::util::SIGNATURE_SIZE)
+                .map(hex::encode)
+                .collect()
+        })
+        .collect()
 }
 
 #[async_trait]

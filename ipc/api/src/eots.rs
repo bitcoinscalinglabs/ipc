@@ -1,4 +1,4 @@
-//! Types the Bitcoin provider returns for EOTS finality and slashing.
+//! Recorded EOTS state used for EOTS finality and slashing.
 
 use ipc_eots::EotsNonceCommitment;
 use serde::{Deserialize, Serialize};
@@ -10,14 +10,14 @@ pub struct EotsKey {
     pub pk_eots: [u8; 32],
 }
 
-/// An EOTS nonce commitment the monitor recorded, with the Bitcoin block that carried it.
+/// A recorded EOTS nonce commitment, with the Bitcoin block that carried it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecordedCommitment {
     pub commitment: EotsNonceCommitment,
     pub block_height: u64,
 }
 
-/// The latest checkpoint the monitor recorded: subnet height and block hash.
+/// The latest recorded checkpoint: subnet height and block hash.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LatestCheckpoint {
     pub height: u64,
@@ -27,7 +27,7 @@ pub struct LatestCheckpoint {
     pub bitcoin_height: u64,
 }
 
-/// The monitor's EOTS records at one Bitcoin height: the EOTS keys and EOTS nonce commitments
+/// The recorded EOTS state at one Bitcoin height: the EOTS keys and EOTS nonce commitments
 /// recorded above the height the caller named, and the latest checkpoint.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EotsRecords {
@@ -57,6 +57,6 @@ pub struct UnslashableOutput {
     pub keys: Vec<([u8; 32], u64)>,
     /// The threshold of the named configuration
     pub threshold: u64,
-    /// Whether this provider's validator key is one of them
+    /// Whether the validator's key is one of them
     pub signer: bool,
 }

@@ -197,13 +197,13 @@ pub struct FinalityAnswer {
 /// Votes (oldest first) and one double-vote evidence per equivocating key.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
 pub struct EotsFinalityData {
-    /// Bitcoin height whose monitor state the votes are checked against.
+    /// Bitcoin height whose recorded state the votes are checked against.
     pub bitcoin_height: u64,
     pub votes: Vec<ValidatorVote>,
     pub evidence: Vec<(ValidatorVote, ValidatorVote)>,
 }
 
-/// Signing helpers for tests: the signer of the protocol lives in the Bitcoin provider.
+/// Signing helpers for tests.
 #[cfg(any(test, feature = "testing"))]
 pub mod testing {
     use super::*;

@@ -19,11 +19,11 @@ pub type KeyBytes = [u8; 33];
 /// The most carried-vote bytes a block holds: CometBFT's default `max_tx_bytes`.
 pub const MAX_CARRIED_BYTES: usize = 1024 * 1024;
 
-/// How long a node waits between two questions to its monitor.
+/// How long a node waits between two requests for the recorded state.
 const MONITOR_RETRY: Duration = Duration::from_secs(1);
 
-/// How long one call to the provider may take before it is asked again, for a connection that
-/// hangs.
+/// How long one request for the recorded state may take before it is repeated, for a connection
+/// that hangs.
 const MONITOR_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Default, Clone)]
@@ -61,7 +61,7 @@ pub trait EotsStore: Send + Sync {
     fn load(&self) -> anyhow::Result<StoredState>;
 }
 
-/// The monitor's state at an agreed Bitcoin L1 height, against which carried votes are checked.
+/// The recorded state at an agreed Bitcoin L1 height, against which carried votes are checked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AgreedState {
     /// The latest checkpointed subnet height at that Bitcoin height, 0 while there is none
@@ -93,7 +93,7 @@ pub enum VoteError {
 }
 
 impl VoteError {
-    /// Whether no honest validator sends such a vote at any monitor state: a forged envelope,
+    /// Whether no honest validator sends such a vote at any recorded state: a forged envelope,
     /// another key than the registered EOTS key, no power, or a signature that does not verify.
     pub fn never_valid(&self) -> bool {
         matches!(
@@ -116,7 +116,7 @@ pub enum VoteOutcome {
     Evidence,
     /// A third vote of the key at the height: dropped
     Excess,
-    /// The monitor has not recorded the vote's EOTS nonce commitment yet: kept for a later check
+    /// The vote's EOTS nonce commitment is not recorded yet: kept for a later check
     Pending,
 }
 
@@ -130,7 +130,7 @@ pub struct FinalityStatus {
     pub checkpointed_height: u64,
 }
 
-/// The votes checked again after every read of the monitor.
+/// The votes checked again after every read of the recorded state.
 #[derive(Default)]
 struct Pending {
     /// The votes loaded from the store at start
@@ -164,14 +164,14 @@ struct Inner {
     eots_keys: HashMap<[u8; 32], [u8; 32]>,
     /// EOTS key to its recorded commitments with their Bitcoin heights
     commitments: HashMap<[u8; 32], Vec<(EotsNonceCommitment, u64)>>,
-    /// The latest checkpoint the monitor holds: subnet height, block hash, kill flag
+    /// The latest recorded checkpoint: subnet height, block hash, kill flag
     checkpoint: Option<(u64, [u8; 32], bool)>,
     /// The Bitcoin height of the block that recorded `checkpoint`, 0 while there is none
     checkpoint_bitcoin_height: u64,
-    /// Whether the monitor was read at least once
+    /// Whether the recorded state was read at least once
     monitor_read: bool,
-    /// The Bitcoin height up to which the tally holds every EOTS key and commitment the monitor
-    /// recorded
+    /// The Bitcoin height up to which the tally holds every recorded EOTS key and
+    /// commitment
     monitor_read_for: u64,
     /// Whether the power tables come from the store
     stored_power_tables: bool,
@@ -205,7 +205,7 @@ pub struct EotsTally {
     txid20: [u8; 20],
     /// The latest committed height, for the voting loop
     committed: tokio::sync::watch::Sender<u64>,
-    /// Held across a whole read of the monitor, so that two reads never overlap
+    /// Held across a whole read of the recorded state, so that two reads never overlap
     monitor_reading: Arc<tokio::sync::Mutex<()>>,
 }
 
@@ -264,7 +264,7 @@ impl Inner {
         self.checkpoint.map_or(0, |(h, _, _)| h)
     }
 
-    /// Rules 2 to 5 of accepting a vote, against `agreed` or the monitor's latest state.
+    /// Rules 2 to 5 of accepting a vote, against `agreed` or the latest recorded state.
     fn check(
         &self,
         vote: &ValidatorVote,
@@ -370,8 +370,8 @@ impl Inner {
         below_conflict(self.recorded_final, self.conflicts.first().copied())
     }
 
-    /// Whether a vote that failed rule 4 is kept for a check after the next read of the monitor:
-    /// the monitor has not recorded the EOTS nonce commitment the vote names by its start, and
+    /// Whether a vote that failed rule 4 is kept for a check after the next read of the recorded
+    /// state: the EOTS nonce commitment the vote names by its start is not recorded, and
     /// the vote's height is above the subnet final height and at most the chain's latest block.
     fn awaits_commitment(&self, vote: &EotsVote) -> bool {
         let named_recorded = self
@@ -534,15 +534,15 @@ impl EotsTally {
         self.inner.lock().expect("EOTS tally lock")
     }
 
-    /// Reads the monitor's latest state through the provider: see [`Self::read_monitor_at`].
+    /// Reads the latest recorded state: see [`Self::read_monitor_at`].
     pub async fn read_monitor(&self) -> anyhow::Result<()> {
         self.read_monitor_at(None).await.map(|_| ())
     }
 
-    /// Reads from the monitor, in one call to the provider, the EOTS keys and commitments
-    /// recorded above `monitor_read_for` and the latest checkpoint, at `max_bitcoin_height` or at
-    /// the monitor's latest Bitcoin height. An answer that advances `monitor_read_for` is added to
-    /// the tally, and the pending votes are checked again. Returns the answer's checkpoint.
+    /// Reads in one request the EOTS keys and commitments recorded above `monitor_read_for` and the
+    /// latest checkpoint, at `max_bitcoin_height` or the latest recorded one. An answer that
+    /// advances `monitor_read_for` is added to the tally, and the pending votes are checked
+    /// again. Returns the answer's checkpoint.
     async fn read_monitor_at(
         &self,
         max_bitcoin_height: Option<u64>,
@@ -712,12 +712,12 @@ impl EotsTally {
     }
 
     /// The checkpointed subnet height at the Bitcoin height of the last carried proposal, 0
-    /// while the monitor had recorded no checkpoint there.
+    /// while no checkpoint was recorded there.
     pub fn agreed_checkpointed_height(&self) -> u64 {
         self.lock().agreed_checkpointed
     }
 
-    /// The monitor's state at `bitcoin_height`; an error until the provider has processed it.
+    /// The recorded state at `bitcoin_height`; an error until it reaches that Bitcoin height.
     pub async fn agreed_state(&self, bitcoin_height: u64) -> anyhow::Result<AgreedState> {
         // No checkpoint was recorded between the held one and `monitor_read_for`
         let held = {
@@ -741,7 +741,7 @@ impl EotsTally {
         })
     }
 
-    /// `agreed_state`, asked again until the monitor answers.
+    /// `agreed_state`, asked again until it answers.
     pub async fn agreed_state_wait(&self, bitcoin_height: u64) -> AgreedState {
         ask_until_answered(
             &format!("the agreed Bitcoin L1 state at height {bitcoin_height}"),
@@ -1013,7 +1013,7 @@ pub fn subnet_txid20(subnet_id: &SubnetID) -> anyhow::Result<[u8; 20]> {
     }
 }
 
-/// Asks the monitor until it answers, every `retry`, each question within `timeout`. It warns on
+/// Asks for the recorded state until it answers, every `retry`, each request within `timeout`. It warns on
 /// the first unanswered question and on every 30th.
 async fn ask_until_answered<T, F, Fut>(what: &str, retry: Duration, timeout: Duration, ask: F) -> T
 where

@@ -111,7 +111,7 @@ pub struct BtcConstructParams {
     /// The fewest and the most epochs for which a collateral seats its owner
     pub min_timeout: u32,
     pub max_timeout: u32,
-    /// The smallest deposit the monitor credits
+    /// The smallest deposit that is credited
     pub min_deposit: TokenAmount,
     /// Subnet blocks for which a kill proposal stays open
     pub kill_vote_period: u64,

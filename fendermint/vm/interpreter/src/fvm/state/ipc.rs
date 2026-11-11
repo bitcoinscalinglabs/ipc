@@ -320,12 +320,10 @@ impl<DB: Blockstore + Clone> GatewayCaller<DB> {
         Ok(calldata)
     }
 
-    /// `key` is the signer's x-only Bitcoin key, posted with its signatures.
     pub fn add_bitcoin_checkpoint_signature_calldata(
         &self,
         checkpoint: &checkpointing_facet::BottomUpCheckpoint,
         checkpoint_psbt: ipc_api::checkpoint::BitcoinCheckpointSignature,
-        key: [u8; 32],
     ) -> anyhow::Result<et::Bytes> {
         let unsigned_psbt = checkpoint_psbt.unsigned_psbt.clone().decode()?;
         let transfer_tx = checkpoint_psbt.transfer_tx.clone().decode()?;
@@ -346,7 +344,6 @@ impl<DB: Blockstore + Clone> GatewayCaller<DB> {
                 et::Bytes::from(unsigned_psbt),
                 et::Bytes::from(checkpoint_psbt.signature.clone()),
                 et::Bytes::from(transfer_tx),
-                key,
             );
 
         let calldata = call
