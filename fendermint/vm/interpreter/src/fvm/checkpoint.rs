@@ -136,7 +136,7 @@ where
         .apply_validator_changes(state)
         .context("failed to apply validator changes")?;
 
-    // The checkpoint carries the slash pre-signatures of the outputs that reached their threshold.
+    // The checkpoint carries the outputs with a slash pre-signature posted since their last carry.
     let slash_pre_signature_count = gateway
         .carry_slash_pre_signatures(state, height.value(), supply_adjustment_bytes)
         .context("failed to carry the slash pre-signatures")?;
@@ -254,14 +254,12 @@ fn x_only(key: &PublicKey) -> [u8; 32] {
 }
 
 /// Posts this validator's missing slash pre-signatures; a failed output does not stop the rest.
-/// `checkpointed` is the height of the latest checkpoint that Bitcoin L1 has recorded.
 pub async fn post_slash_pre_signatures<C, DB>(
     broadcaster: &Broadcaster<C>,
     gateway: &GatewayCaller<DB>,
     subnet_id: &ipc_api::subnet_id::SubnetID,
     parent_manager: &ipc_provider::manager::BtcSubnetManager,
     public_key: PublicKey,
-    checkpointed: u64,
     chain_id: ChainID,
 ) -> anyhow::Result<()>
 where
@@ -269,25 +267,23 @@ where
     DB: Blockstore + Send + Sync + Clone + 'static,
 {
     let own = x_only(&public_key);
+    let signatory = ethers::types::Address::from(EthAddress::from(public_key).0);
     let outputs = parent_manager.get_unslashable_outputs(subnet_id).await?;
-    for (output, index) in outputs_to_presign(&own, outputs) {
+    for output in outputs_to_presign(&own, outputs) {
         let posted = async {
-            let calldata =
-                gateway.slash_output_calldata(&output.txid, output.vout, output.threshold, index)?;
+            let calldata = gateway.slash_output_calldata(&output.txid, output.vout, signatory)?;
             let data = broadcaster
                 .fevm_view(Address::from(gateway.addr()), calldata, chain_id)
                 .await?;
             let posted = decode_slash_output(&data)?;
-            if !should_post_slash_pre_signature(&posted, output.threshold, checkpointed) {
+            if !should_post_slash_pre_signature(&posted) {
                 return Ok(None);
             }
             let presig = parent_manager
                 .sign_slash(subnet_id, &output.txid, output.vout)
                 .await
                 .context("failed to pre-sign the slash")?;
-            let power = output.keys[usize::from(index)].1;
-            let calldata =
-                gateway.add_slash_pre_signature_calldata(&presig, power, output.threshold)?;
+            let calldata = gateway.add_slash_pre_signature_calldata(&presig)?;
             broadcaster
                 .fevm_invoke(Address::from(gateway.addr()), calldata, chain_id)
                 .await
@@ -314,34 +310,21 @@ where
     Ok(())
 }
 
-/// The outputs of this validator's configurations, each with its index in the configuration
-/// that the output names.
+/// The outputs whose slash leaf names a configuration with this validator's key.
 pub fn outputs_to_presign(
     own: &[u8; 32],
     outputs: Vec<ipc_api::eots::UnslashableOutput>,
-) -> Vec<(ipc_api::eots::UnslashableOutput, u16)> {
+) -> Vec<ipc_api::eots::UnslashableOutput> {
     outputs
         .into_iter()
-        .filter(|output| output.signer)
-        .filter_map(|output| {
-            let index = output.keys.iter().position(|(k, _)| k == own)?;
-            Some((output, u16::try_from(index).ok()?))
-        })
+        .filter(|output| output.signer && output.keys.iter().any(|(k, _)| k == own))
         .collect()
 }
 
-/// Whether this validator posts its slash pre-signature for an output, given what the subnet
-/// holds for it: its index has not posted, and the posted powers are below `threshold`, or the
-/// last checkpoint that carried them is at or below `checkpointed` while the output is still not
-/// slashable.
-pub fn should_post_slash_pre_signature(
-    posted: &checkpoint::GetSlashOutputReturn,
-    threshold: u64,
-    checkpointed: u64,
-) -> bool {
-    let carried = posted.carried_height;
+/// Whether this validator posts its slash pre-signature for an output that is not slashable,
+/// given what the subnet holds for it: it has not posted, as for Bitcoin signatures of a checkpoint.
+pub fn should_post_slash_pre_signature(posted: &checkpoint::GetSlashOutputReturn) -> bool {
     !posted.posted
-        && (posted.power < threshold.into() || (!carried.is_zero() && carried <= checkpointed.into()))
 }
 
 /// A checkpoint with the signatures this validator still has to submit for it.
@@ -926,30 +909,23 @@ mod tests {
         ];
         let to_sign: Vec<_> = outputs_to_presign(&own, outputs)
             .into_iter()
-            .map(|(o, index)| (o.txid, index))
+            .map(|o| o.txid)
             .collect();
-        assert_eq!(to_sign, vec![("t1".to_string(), 1), ("t2".to_string(), 0)]);
+        assert_eq!(to_sign, vec!["t1".to_string(), "t2".to_string()]);
     }
 
     #[test]
-    fn slash_pre_signature_posted_below_the_threshold_or_after_a_recorded_carry() {
-        let output = |power: u64, carried: u64, posted: bool| GetSlashOutputReturn {
-            power: power.into(),
+    fn slash_pre_signature_posted_once() {
+        let output = |carried: u64, posted: bool| GetSlashOutputReturn {
             carried_height: carried.into(),
             posted,
         };
-        // below the threshold
-        assert!(should_post_slash_pre_signature(&output(2, 0, false), 3, 0));
-        // own index already posted
-        assert!(!should_post_slash_pre_signature(&output(2, 0, true), 3, 0));
-        // at the threshold and never carried, whatever Bitcoin L1 recorded
-        assert!(!should_post_slash_pre_signature(&output(3, 0, false), 3, 0));
-        assert!(!should_post_slash_pre_signature(&output(3, 0, false), 3, 100));
-        // carried by a checkpoint that Bitcoin L1 has not recorded yet
-        assert!(!should_post_slash_pre_signature(&output(3, 350, false), 3, 340));
-        // carried by a recorded checkpoint, and the output is still not slashable
-        assert!(should_post_slash_pre_signature(&output(3, 350, false), 3, 350));
-        assert!(!should_post_slash_pre_signature(&output(3, 350, true), 3, 350));
+        // not posted, whether or not a checkpoint carried the output
+        assert!(should_post_slash_pre_signature(&output(0, false)));
+        assert!(should_post_slash_pre_signature(&output(350, false)));
+        // already posted
+        assert!(!should_post_slash_pre_signature(&output(0, true)));
+        assert!(!should_post_slash_pre_signature(&output(350, true)));
     }
 
     fn power_update(current: PowerTable, updates: PowerUpdates) -> PowerTable {

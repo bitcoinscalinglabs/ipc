@@ -79,10 +79,10 @@ struct GatewayActorStorage {
     mapping(uint256 => bytes32[]) bitcoinCheckpointPsbtHashes;
     /// @notice Highest subnet height carried by an executed `EotsFinality`.
     uint256 subnetFinalHeight;
-    /// @notice The slash pre-signatures of each output, keyed by keccak256(txid, vout, threshold).
+    /// @notice The slash pre-signatures of each output, keyed by keccak256(txid, vout).
     /// Deleting them once Bitcoin L1 has made the output slashable is future work.
     mapping(bytes32 => SlashOutput) slashOutputs;
-    /// @notice keccak256(txid, vout, index) of posted entries, rejects replays.
+    /// @notice keccak256(txid, vout, signatory) of posted entries, rejects replays.
     mapping(bytes32 => bool) slashPreSignaturePosted;
     // =========== ERC Token Bridging ===========
     /// @notice Tokens registered for bridging on this subnet (home-subnet registration).
@@ -103,7 +103,8 @@ struct GatewayActorStorage {
     /// @notice Last checkpointed totalSupply per registered token.
     ///         Used to compute supply deltas (IPC:ETS) between checkpoints.
     mapping(address => uint256) lastCheckpointedSupply;
-    /// @notice Keys of `slashOutputs` whose posted powers reached their threshold, in that order.
+    /// @notice Keys of `slashOutputs` with a slash pre-signature posted since their last carry, in order of
+    /// first post.
     bytes32[] slashOutputsToCarry;
     /// @notice The first entry of `slashOutputsToCarry` that no checkpoint has carried yet.
     uint256 slashOutputsToCarryStart;

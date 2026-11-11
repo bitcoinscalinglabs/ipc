@@ -42,9 +42,7 @@ pub struct SlashPreSignature {
     /// The output's txid in its usual (reversed) hex form
     pub txid: String,
     pub vout: u32,
-    /// The signer's index in the ascending key order of the named configuration
-    pub index: u16,
-    /// The 64-byte signature
+    /// The 64-byte signature of the output's slash transaction
     pub signature: Vec<u8>,
 }
 

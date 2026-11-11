@@ -16,9 +16,7 @@ struct SlashPreSignature {
     /// @dev The output's txid in internal byte order.
     bytes32 txid;
     uint32 vout;
-    /// @dev The signer's index in the ascending key order of the configuration the output names.
-    uint16 index;
-    /// @dev The 64-byte BIP340 signature.
+    /// @dev The 64-byte BIP340 signature of the output's slash transaction.
     bytes signature;
 }
 
@@ -28,17 +26,14 @@ struct SlashPreSignature {
 /// rest of the batch-transfer transaction.
 uint256 constant MAX_SLASH_PRE_SIGNATURE_BYTES = 380_000;
 
-/// @dev A configuration has at most this many members, so every slash pre-signature index is below it.
-uint16 constant MAX_CONFIGURATION_SIZE = 350;
+/// @dev The most slash pre-signatures of one output that one checkpoint carries: as many as fit in
+/// `MAX_SLASH_PRE_SIGNATURE_BYTES` alone.
+uint256 constant MAX_SLASH_PRE_SIGNATURES_PER_OUTPUT = (MAX_SLASH_PRE_SIGNATURE_BYTES - 40) / 67;
 
-/// @dev The slash pre-signatures posted for one output with one threshold.
+/// @dev The slash pre-signatures posted for one output.
 struct SlashOutput {
-    /// @dev The threshold of the configuration that the output's slash leaf names, as posted.
-    uint64 threshold;
     /// @dev Whether the output waits for a checkpoint to carry its slash pre-signatures.
     bool queued;
-    /// @dev The sum of the posted powers.
-    uint256 power;
     /// @dev The height of the last checkpoint that carried them, 0 if none.
     uint256 carriedHeight;
     /// @dev In posting order, never shortened.

@@ -353,8 +353,8 @@ impl<DB: Blockstore + Clone> GatewayCaller<DB> {
         Ok(calldata)
     }
 
-    /// Carries the slash pre-signatures of the outputs that reached their threshold with the
-    /// checkpoint at `height`, returning their number. `supply_adjustment_bytes` is the payload
+    /// Carries with the checkpoint at `height` the outputs with a slash pre-signature posted since
+    /// their last carry, each with all its slash pre-signatures, returning their number. `supply_adjustment_bytes` is the payload
     /// size of the supply adjustments that the checkpoint carries.
     pub fn carry_slash_pre_signatures(
         &self,
@@ -381,41 +381,32 @@ impl<DB: Blockstore + Clone> GatewayCaller<DB> {
             .ok_or_else(|| anyhow!("no calldata for reading slash pre-signatures"))
     }
 
-    /// `power` is the signer's power and `threshold` the threshold of the configuration that the
-    /// output's slash leaf names.
+    /// Calldata of the post of a slash pre-signature, stored under the sender's address.
     pub fn add_slash_pre_signature_calldata(
         &self,
         presig: &ipc_api::eots::SlashPreSignature,
-        power: u64,
-        threshold: u64,
     ) -> anyhow::Result<et::Bytes> {
         let call = self.checkpointing.contract().add_slash_pre_signature(
             gateway_txid(&presig.txid)?,
             presig.vout,
-            presig.index,
-            power,
-            threshold,
             et::Bytes::from(presig.signature.clone()),
         );
         call.calldata()
             .ok_or_else(|| anyhow!("no calldata for adding a slash pre-signature"))
     }
 
-    /// Calldata of the read of an output's posted powers with `threshold`, the height of the last
-    /// checkpoint that carried them and whether `index` has posted, decoded by `decode_slash_output`.
+    /// Calldata of the read of the height of the last checkpoint that carried an output's slash
+    /// pre-signatures and whether `signatory` has posted one, decoded by `decode_slash_output`.
     pub fn slash_output_calldata(
         &self,
         txid: &str,
         vout: u32,
-        threshold: u64,
-        index: u16,
+        signatory: et::Address,
     ) -> anyhow::Result<et::Bytes> {
-        let call = self.checkpointing.contract().get_slash_output(
-            gateway_txid(txid)?,
-            vout,
-            threshold,
-            index,
-        );
+        let call =
+            self.checkpointing
+                .contract()
+                .get_slash_output(gateway_txid(txid)?, vout, signatory);
         call.calldata()
             .ok_or_else(|| anyhow!("no calldata for reading a slash output"))
     }
@@ -534,7 +525,6 @@ impl<DB: Blockstore + Clone> GatewayCaller<DB> {
     }
 }
 
-/// Total amount of tokens to mint as a result of top-down messages arriving at the subnet.
 /// Decodes the result of the call built by `GatewayCaller::slash_output_calldata`.
 pub fn decode_slash_output(
     data: &[u8],
@@ -560,7 +550,6 @@ pub fn decode_slash_pre_signatures(
             ipc_api::eots::SlashPreSignature {
                 txid: hex::encode(txid),
                 vout: p.vout,
-                index: p.index,
                 signature: p.signature.to_vec(),
             }
         })
@@ -577,6 +566,7 @@ fn gateway_txid(txid: &str) -> anyhow::Result<[u8; 32]> {
     Ok(txid)
 }
 
+/// Total amount of tokens to mint as a result of top-down messages arriving at the subnet.
 pub fn tokens_to_mint(msgs: &[ipc_api::cross::IpcEnvelope]) -> TokenAmount {
     msgs.iter()
         .fold(TokenAmount::from_atto(0), |mut total, msg| {

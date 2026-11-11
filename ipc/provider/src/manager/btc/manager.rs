@@ -275,10 +275,6 @@ impl BtcSubnetManager {
         Ok(ipc_api::eots::SlashPreSignature {
             txid: txid.to_string(),
             vout,
-            index: v["index"]
-                .as_u64()
-                .and_then(|i| u16::try_from(i).ok())
-                .ok_or_else(|| anyhow!("index"))?,
             signature: signature.to_vec(),
         })
     }
@@ -1386,121 +1382,11 @@ impl SubnetManager for BtcSubnetManager {
     ) -> Result<BitcoinCheckpointSignature> {
         tracing::debug!("Creating bitcoin signatures for checkpoint: {checkpoint:?}");
 
-        // One entry per output, its signatures in ascending index order
-        let mut entries: std::collections::BTreeMap<(String, u32), Vec<(u16, String)>> =
-            std::collections::BTreeMap::new();
-        for s in slash_signatures {
-            entries
-                .entry((s.txid, s.vout))
-                .or_default()
-                .push((s.index, hex::encode(s.signature)));
-        }
-        let slash_entries = entries
-            .into_iter()
-            .map(|((txid, vout), mut signatures)| {
-                signatures.sort_by_key(|(index, _)| *index);
-                signatures.dedup_by_key(|(index, _)| *index);
-                json!({
-                    "txid": txid,
-                    "vout": vout,
-                    "signatures": signatures
-                        .into_iter()
-                        .map(|(index, signature)| json!({ "index": index, "signature": signature }))
-                        .collect::<Vec<_>>(),
-                })
-            })
-            .collect::<Vec<_>>();
-
-        // collect all withdrawals, transfers, and ERC token data from the checkpoint msgs
-        let mut releases = Vec::new();
-        let mut transfers = Vec::new();
-        let mut token_registrations = Vec::new();
-        let mut token_supply_adjustments = Vec::new();
-        let mut token_transfers = Vec::new();
-
-        for msg in checkpoint.msgs {
-            match msg.kind {
-                ipc_api::cross::IpcMsgKind::Transfer => {
-                    let mut destination_subnet = msg.to.subnet()?;
-                    if destination_subnet.is_root() {
-                        // Release
-                        releases.push(json!({
-                            "amount": ipc_api::token_amount_to_satoshi(msg.value)?,
-                            "address": ipc_api::address::bitcoin_address_from_fvm_address(&msg.to.raw_addr()?)?,
-                        }));
-                    } else {
-                        //TODO(btc): The following is because the contracts do not return the correct network type
-                        destination_subnet.root_network_type = NetworkType::Btc;
-                        transfers.push(json!({
-                            "amount": ipc_api::token_amount_to_satoshi(msg.value)?,
-                            "destination_subnet_id": destination_subnet.to_string(),
-                            "subnet_user_address": ipc_api::address::to_eth_address(&msg.to.raw_addr()?)?
-                        }));
-                    }
-                }
-                ipc_api::cross::IpcMsgKind::Call => {
-                    tracing::info!("ignoring call messages: unsupported on bitcoin")
-                }
-                //TODO(btc): add receipt handling
-                ipc_api::cross::IpcMsgKind::Receipt => {}
-                ipc_api::cross::IpcMsgKind::ErcTransfer => {
-                    let (home_subnet, home_token, amount) =
-                        abi_decode_erc_transfer_msg(&msg.message)?;
-                    let mut destination_subnet = msg.to.subnet()?;
-                    destination_subnet.root_network_type = NetworkType::Btc;
-                    let mut home_subnet_btc = home_subnet;
-                    home_subnet_btc.root_network_type = NetworkType::Btc;
-                    let recipient = ipc_api::address::to_eth_address(&msg.to.raw_addr()?)?
-                        .ok_or_else(|| anyhow!("ErcTransfer recipient must be an eth address"))?;
-                    token_transfers.push(json!({
-                        "home_subnet_id": home_subnet_btc.to_string(),
-                        "home_token_address": format!("{:?}", home_token),
-                        "amount": amount.to_string(),
-                        "destination_subnet_id": destination_subnet.to_string(),
-                        "recipient": format!("{:?}", recipient),
-                    }));
-                }
-                ipc_api::cross::IpcMsgKind::ErcRegistration => {
-                    let (_home_subnet, home_token, name, symbol, decimals, initial_supply) =
-                        abi_decode_erc_registration_msg(&msg.message)?;
-                    // home_subnet_id is NOT in the bitcoin-ipc struct —
-                    // derived from the checkpoint's OP_RETURN subnet ID.
-                    token_registrations.push(json!({
-                        "home_token_address": format!("{:?}", home_token),
-                        "name": name,
-                        "symbol": symbol,
-                        "decimals": decimals,
-                        "initial_supply": initial_supply.to_string(),
-                    }));
-                }
-                ipc_api::cross::IpcMsgKind::ErcSupplyDelta => {
-                    let (home_token, delta) = abi_decode_erc_supply_delta_msg(&msg.message)?;
-                    token_supply_adjustments.push(json!({
-                        "home_token_address": format!("{:?}", home_token),
-                        "delta": delta.to_string(),
-                    }));
-                }
-            }
-        }
-
         let body = json!({
             "jsonrpc": "2.0",
             "method": "gencheckpointpsbt",
             "id": 1,
-            "params": {
-                // TODO(btc): should we get the subnet_id from the checkpoint?
-                "subnet_id":            subnet_id.to_string(),
-                "checkpoint_hash":      hex::encode(checkpoint.block_hash),
-                "checkpoint_height":    checkpoint.block_height,
-                "next_committee_configuration_number": checkpoint.next_configuration_number,
-                "slash_pre_signature_count": checkpoint.slash_pre_signature_count,
-                "withdrawals":          releases,
-                "transfers":            transfers,
-                "token_registrations":  token_registrations,
-                "token_supply_adjustments": token_supply_adjustments,
-                "token_transfers":      token_transfers,
-                "slash_signatures":     slash_entries,
-            }
+            "params": gen_checkpoint_psbt_params(subnet_id, checkpoint, slash_signatures)?,
         });
 
         tracing::trace!("Request body: {body:?}");
@@ -1878,6 +1764,116 @@ fn eth_address_of_x_only_key(key: &[u8]) -> Result<EthAddress> {
     .map_err(|_| anyhow!("Invalid x-only public key"))?;
     let hash = ethers::utils::keccak256(&pubkey.serialize()[1..]);
     Ok(EthAddress::from_slice(&hash[12..]))
+}
+
+/// The params of the `gencheckpointpsbt` request for the checkpoint, with the slash pre-signatures
+/// it carries: per output, its posted signatures in posting order.
+fn gen_checkpoint_psbt_params(
+    subnet_id: &SubnetID,
+    checkpoint: BottomUpCheckpoint,
+    slash_signatures: Vec<ipc_api::eots::SlashPreSignature>,
+) -> Result<Value> {
+    // One entry per output with its posted signatures, in posting order
+    let mut entries: std::collections::BTreeMap<(String, u32), Vec<String>> =
+        std::collections::BTreeMap::new();
+    for s in slash_signatures {
+        entries
+            .entry((s.txid, s.vout))
+            .or_default()
+            .push(hex::encode(s.signature));
+    }
+    let slash_entries = entries
+        .into_iter()
+        .map(|((txid, vout), signatures)| {
+            json!({ "txid": txid, "vout": vout, "signatures": signatures })
+        })
+        .collect::<Vec<_>>();
+
+    // collect all withdrawals, transfers, and ERC token data from the checkpoint msgs
+    let mut releases = Vec::new();
+    let mut transfers = Vec::new();
+    let mut token_registrations = Vec::new();
+    let mut token_supply_adjustments = Vec::new();
+    let mut token_transfers = Vec::new();
+
+    for msg in checkpoint.msgs {
+        match msg.kind {
+            ipc_api::cross::IpcMsgKind::Transfer => {
+                let mut destination_subnet = msg.to.subnet()?;
+                if destination_subnet.is_root() {
+                    // Release
+                    releases.push(json!({
+                        "amount": ipc_api::token_amount_to_satoshi(msg.value)?,
+                        "address": ipc_api::address::bitcoin_address_from_fvm_address(&msg.to.raw_addr()?)?,
+                    }));
+                } else {
+                    //TODO(btc): The following is because the contracts do not return the correct network type
+                    destination_subnet.root_network_type = NetworkType::Btc;
+                    transfers.push(json!({
+                        "amount": ipc_api::token_amount_to_satoshi(msg.value)?,
+                        "destination_subnet_id": destination_subnet.to_string(),
+                        "subnet_user_address": ipc_api::address::to_eth_address(&msg.to.raw_addr()?)?
+                    }));
+                }
+            }
+            ipc_api::cross::IpcMsgKind::Call => {
+                tracing::info!("ignoring call messages: unsupported on bitcoin")
+            }
+            //TODO(btc): add receipt handling
+            ipc_api::cross::IpcMsgKind::Receipt => {}
+            ipc_api::cross::IpcMsgKind::ErcTransfer => {
+                let (home_subnet, home_token, amount) = abi_decode_erc_transfer_msg(&msg.message)?;
+                let mut destination_subnet = msg.to.subnet()?;
+                destination_subnet.root_network_type = NetworkType::Btc;
+                let mut home_subnet_btc = home_subnet;
+                home_subnet_btc.root_network_type = NetworkType::Btc;
+                let recipient = ipc_api::address::to_eth_address(&msg.to.raw_addr()?)?
+                    .ok_or_else(|| anyhow!("ErcTransfer recipient must be an eth address"))?;
+                token_transfers.push(json!({
+                    "home_subnet_id": home_subnet_btc.to_string(),
+                    "home_token_address": format!("{:?}", home_token),
+                    "amount": amount.to_string(),
+                    "destination_subnet_id": destination_subnet.to_string(),
+                    "recipient": format!("{:?}", recipient),
+                }));
+            }
+            ipc_api::cross::IpcMsgKind::ErcRegistration => {
+                let (_home_subnet, home_token, name, symbol, decimals, initial_supply) =
+                    abi_decode_erc_registration_msg(&msg.message)?;
+                // home_subnet_id is NOT in the bitcoin-ipc struct —
+                // derived from the checkpoint's OP_RETURN subnet ID.
+                token_registrations.push(json!({
+                    "home_token_address": format!("{:?}", home_token),
+                    "name": name,
+                    "symbol": symbol,
+                    "decimals": decimals,
+                    "initial_supply": initial_supply.to_string(),
+                }));
+            }
+            ipc_api::cross::IpcMsgKind::ErcSupplyDelta => {
+                let (home_token, delta) = abi_decode_erc_supply_delta_msg(&msg.message)?;
+                token_supply_adjustments.push(json!({
+                    "home_token_address": format!("{:?}", home_token),
+                    "delta": delta.to_string(),
+                }));
+            }
+        }
+    }
+
+    Ok(json!({
+        // TODO(btc): should we get the subnet_id from the checkpoint?
+        "subnet_id":            subnet_id.to_string(),
+        "checkpoint_hash":      hex::encode(checkpoint.block_hash),
+        "checkpoint_height":    checkpoint.block_height,
+        "next_committee_configuration_number": checkpoint.next_configuration_number,
+        "slash_pre_signature_count": checkpoint.slash_pre_signature_count,
+        "withdrawals":          releases,
+        "transfers":            transfers,
+        "token_registrations":  token_registrations,
+        "token_supply_adjustments": token_supply_adjustments,
+        "token_transfers":      token_transfers,
+        "slash_pre_signatures": slash_entries,
+    }))
 }
 
 /// Each signer's 64-byte signatures, one per input, in hex, split from the posted concatenation.
@@ -2749,6 +2745,46 @@ mod tests {
         // (f410f…) with a 20-byte subaddress; ID addresses are rejected.
         let child = fvm_shared::address::Address::new_delegated(10, &[0u8; 20]).unwrap();
         SubnetID::new(4, vec![child])
+    }
+
+    #[test]
+    fn gen_checkpoint_psbt_params_hold_the_slash_pre_signatures_per_output() {
+        use ipc_api::checkpoint::consensus::{AggregatedStats, CompressedSummary};
+        let checkpoint = BottomUpCheckpoint {
+            subnet_id: test_subnet_id(),
+            block_height: 30,
+            block_hash: vec![1; 32],
+            next_configuration_number: 0,
+            slash_pre_signature_count: 3,
+            msgs: vec![],
+            activity_rollup: ipc_api::checkpoint::CompressedActivityRollup {
+                consensus: CompressedSummary {
+                    stats: AggregatedStats {
+                        total_active_validators: 0,
+                        total_num_blocks_committed: 0,
+                    },
+                    data_root_commitment: vec![],
+                },
+            },
+        };
+        let txid = "ab".repeat(32);
+        let posted = |vout, byte| ipc_api::eots::SlashPreSignature {
+            txid: txid.clone(),
+            vout,
+            signature: vec![byte; 64],
+        };
+        let slash_signatures = vec![posted(1, 2), posted(0, 1), posted(1, 3)];
+        let params =
+            gen_checkpoint_psbt_params(&test_subnet_id(), checkpoint, slash_signatures).unwrap();
+        assert_eq!(params["slash_pre_signature_count"], 3);
+        // One entry per output, its signatures in posting order
+        assert_eq!(
+            params["slash_pre_signatures"],
+            json!([
+                { "txid": txid, "vout": 0, "signatures": [hex::encode([1; 64])] },
+                { "txid": txid, "vout": 1, "signatures": [hex::encode([2; 64]), hex::encode([3; 64])] },
+            ])
+        );
     }
 
     #[test]

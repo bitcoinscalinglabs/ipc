@@ -6,7 +6,7 @@ import {BottomUpCheckpoint, BottomUpMsgBatch} from "../../structs/CrossNet.sol";
 import {LibGateway} from "../../lib/LibGateway.sol";
 import {LibQuorum} from "../../lib/LibQuorum.sol";
 import {Subnet} from "../../structs/Subnet.sol";
-import {BitcoinCheckpoint, SlashPreSignature, SlashOutput, CarriedSlashOutput, MAX_SLASH_PRE_SIGNATURE_BYTES, MAX_CONFIGURATION_SIZE} from "../../structs/Bitcoin.sol";
+import {BitcoinCheckpoint, SlashPreSignature, SlashOutput, CarriedSlashOutput, MAX_SLASH_PRE_SIGNATURE_BYTES, MAX_SLASH_PRE_SIGNATURES_PER_OUTPUT} from "../../structs/Bitcoin.sol";
 import {QuorumObjKind} from "../../structs/Quorum.sol";
 import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 
@@ -24,7 +24,7 @@ import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet
 
 event BitcoinCheckpointAdded(uint256 indexed height, address indexed signatory, bytes32 indexed psbtHash);
 event SubnetFinalHeightSet(uint256 height);
-event SlashPreSignatureAdded(bytes32 indexed txid, uint32 vout, uint16 index, address indexed signatory);
+event SlashPreSignatureAdded(bytes32 indexed txid, uint32 vout, address indexed signatory);
 
 contract CheckpointingFacet is GatewayActorModifiers {
     using SubnetIDHelper for SubnetID;
@@ -207,46 +207,40 @@ contract CheckpointingFacet is GatewayActorModifiers {
         }
     }
 
-    /// @notice Stored unverified; one per (txid, vout, index). `power` is the signer's power and `threshold`
-    /// the threshold of the configuration that the output's slash leaf names. Once the posted powers of an
-    /// output reach the threshold, the next checkpoint carries all its slash pre-signatures.
-    function addSlashPreSignature(
-        bytes32 txid,
-        uint32 vout,
-        uint16 index,
-        uint64 power,
-        uint64 threshold,
-        bytes calldata signature
-    ) external {
+    /// @notice Stored unverified, one per output and poster, like Bitcoin checkpoint signatures. The next
+    /// checkpoint carries the output with its slash pre-signatures.
+    function addSlashPreSignature(bytes32 txid, uint32 vout, bytes calldata signature) external {
         if (signature.length != 64) {
             revert InvalidSignatureLength();
         }
-        if (index >= MAX_CONFIGURATION_SIZE || threshold == 0) {
-            revert InvalidSignature();
-        }
-        bytes32 posted = keccak256(abi.encode(txid, vout, index));
+        address signatory = msg.sender;
+
+        // Check if the signatory is a member of the configuration that the output's slash leaf names
+        // if (!ok) {
+        //     revert NotAuthorized(signatory);
+        // }
+
+        bytes32 posted = keccak256(abi.encode(txid, vout, signatory));
         if (s.slashPreSignaturePosted[posted]) {
             revert SignatureReplay();
         }
         s.slashPreSignaturePosted[posted] = true;
 
-        bytes32 key = keccak256(abi.encode(txid, vout, threshold));
+        bytes32 key = keccak256(abi.encode(txid, vout));
         SlashOutput storage output = s.slashOutputs[key];
-        output.threshold = threshold;
-        output.signatures.push(SlashPreSignature({txid: txid, vout: vout, index: index, signature: signature}));
-        output.power += power;
-        if (output.power >= threshold && !output.queued) {
+        output.signatures.push(SlashPreSignature({txid: txid, vout: vout, signature: signature}));
+        if (!output.queued) {
             output.queued = true;
             s.slashOutputsToCarry.push(key);
         }
-        emit SlashPreSignatureAdded(txid, vout, index, msg.sender);
+        emit SlashPreSignatureAdded(txid, vout, signatory);
     }
 
     /// @notice Called at the creation of the checkpoint at `height`. It carries the outputs waiting in
-    /// `slashOutputsToCarry`, in order, each with all its slash pre-signatures, as many outputs as
-    /// `MAX_SLASH_PRE_SIGNATURE_BYTES` allows. `supplyAdjustmentBytes` is the payload size of the
-    /// supply adjustments that the checkpoint carries after its bottom-up messages. Returns the
-    /// number of slash pre-signatures carried.
+    /// `slashOutputsToCarry`, in order, each with its slash pre-signatures, at most the first
+    /// `MAX_SLASH_PRE_SIGNATURES_PER_OUTPUT` posted, as many outputs as `MAX_SLASH_PRE_SIGNATURE_BYTES`
+    /// allows. `supplyAdjustmentBytes` is the payload size of the supply adjustments that the
+    /// checkpoint carries after its bottom-up messages. Returns the number of slash pre-signatures carried.
     function carrySlashPreSignatures(
         uint256 height,
         uint256 supplyAdjustmentBytes
@@ -263,6 +257,9 @@ contract CheckpointingFacet is GatewayActorModifiers {
             bytes32 key = s.slashOutputsToCarry[i];
             SlashOutput storage output = s.slashOutputs[key];
             uint256 n = output.signatures.length;
+            if (n > MAX_SLASH_PRE_SIGNATURES_PER_OUTPUT) {
+                n = MAX_SLASH_PRE_SIGNATURES_PER_OUTPUT;
+            }
             size += 40 + 67 * n;
             if (size > MAX_SLASH_PRE_SIGNATURE_BYTES) {
                 break;
@@ -292,16 +289,15 @@ contract CheckpointingFacet is GatewayActorModifiers {
         }
     }
 
-    /// @notice The posted powers of an output with `threshold`, the height of the last checkpoint that carried
-    /// its slash pre-signatures (0 if none), and whether `index` has posted for the output.
+    /// @notice The height of the last checkpoint that carried the output's slash pre-signatures (0 if none),
+    /// and whether `signatory` has posted for the output.
     function getSlashOutput(
         bytes32 txid,
         uint32 vout,
-        uint64 threshold,
-        uint16 index
-    ) external view returns (uint256 power, uint256 carriedHeight, bool posted) {
-        SlashOutput storage output = s.slashOutputs[keccak256(abi.encode(txid, vout, threshold))];
-        return (output.power, output.carriedHeight, s.slashPreSignaturePosted[keccak256(abi.encode(txid, vout, index))]);
+        address signatory
+    ) external view returns (uint256 carriedHeight, bool posted) {
+        SlashOutput storage output = s.slashOutputs[keccak256(abi.encode(txid, vout))];
+        return (output.carriedHeight, s.slashPreSignaturePosted[keccak256(abi.encode(txid, vout, signatory))]);
     }
 
     /// @notice Get the Bitcoin checkpoint with the most signer weight (as verified at signing) at a height.

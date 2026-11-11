@@ -340,7 +340,6 @@ where
                             &subnet_id,
                             &parent_manager,
                             public_key,
-                            checkpointed.unwrap_or(0),
                             chain_id,
                         )
                         .await;

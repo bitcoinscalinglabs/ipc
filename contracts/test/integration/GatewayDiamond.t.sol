@@ -2513,15 +2513,16 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
         bytes32 t2 = bytes32(uint256(2));
 
         vm.startPrank(vm.addr(1));
-        checkpointer.addSlashPreSignature(t1, 1, 0, 1, 1, _slashSig("sigA"));
-        checkpointer.addSlashPreSignature(t1, 1, 1, 1, 1, _slashSig("sigB"));
+        checkpointer.addSlashPreSignature(t1, 1, _slashSig("sigA"));
+        checkpointer.addSlashPreSignature(t1, 2, _slashSig("sigC"));
         vm.stopPrank();
         vm.startPrank(vm.addr(2));
-        checkpointer.addSlashPreSignature(t1, 2, 0, 1, 1, _slashSig("sigC"));
-        checkpointer.addSlashPreSignature(t2, 1, 0, 1, 1, _slashSig("sigD"));
+        checkpointer.addSlashPreSignature(t1, 1, _slashSig("sigB"));
+        checkpointer.addSlashPreSignature(t2, 1, _slashSig("sigD"));
 
+        // one post per output and poster
         vm.expectRevert(SignatureReplay.selector);
-        checkpointer.addSlashPreSignature(t1, 1, 0, 1, 1, _slashSig("sigE"));
+        checkpointer.addSlashPreSignature(t1, 1, _slashSig("sigE"));
         vm.stopPrank();
 
         uint256 height = 10;
@@ -2529,61 +2530,62 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
         checkpointer.carrySlashPreSignatures(height, 0);
         SlashPreSignature[] memory posted = checkpointer.getSlashPreSignatures(height);
         require(posted.length == 4, "a replay was stored");
-        require(posted[0].txid == t1 && posted[0].vout == 1 && posted[0].index == 0, "first entry");
+        require(posted[0].txid == t1 && posted[0].vout == 1, "first entry");
         require(keccak256(posted[0].signature) == keccak256(_slashSig("sigA")), "a replay overwrote a signature");
-        require(posted[1].txid == t1 && posted[1].vout == 1 && posted[1].index == 1, "second entry");
-        require(posted[2].txid == t1 && posted[2].vout == 2 && posted[2].index == 0, "third entry");
-        require(posted[3].txid == t2 && posted[3].vout == 1 && posted[3].index == 0, "fourth entry");
+        require(posted[1].txid == t1 && posted[1].vout == 1, "second entry");
+        require(posted[2].txid == t1 && posted[2].vout == 2, "third entry");
+        require(posted[3].txid == t2 && posted[3].vout == 1, "fourth entry");
         require(keccak256(posted[3].signature) == keccak256(_slashSig("sigD")), "fourth signature");
     }
 
-    function testGatewayDiamond_carrySlashPreSignatures_completeOutputsOnly() public {
+    function testGatewayDiamond_carrySlashPreSignatures_carriesOutputsPostedSinceLastCarry() public {
         CheckpointingFacet checkpointer = gatewayDiamond.checkpointer();
         bytes32 txid = bytes32(uint256(7));
 
-        // powers 1 + 1 below the threshold 3: nothing to carry
-        checkpointer.addSlashPreSignature(txid, 0, 0, 1, 3, _slashSig("s0"));
-        checkpointer.addSlashPreSignature(txid, 0, 1, 1, 3, _slashSig("s1"));
+        // stored per poster, without power or threshold: the next checkpoint carries the output
+        vm.prank(vm.addr(1));
+        checkpointer.addSlashPreSignature(txid, 0, _slashSig("s0"));
+        vm.prank(vm.addr(2));
+        checkpointer.addSlashPreSignature(txid, 0, _slashSig("s1"));
         vm.prank(FilAddress.SYSTEM_ACTOR);
-        require(checkpointer.carrySlashPreSignatures(10, 0) == 0, "an incomplete output was carried");
+        require(checkpointer.carrySlashPreSignatures(10, 0) == 2, "the output was not carried");
+        (uint256 carriedHeight, bool posted) = checkpointer.getSlashOutput(txid, 0, vm.addr(2));
+        require(carriedHeight == 10 && posted, "wrong output state");
+        (, posted) = checkpointer.getSlashOutput(txid, 0, vm.addr(3));
+        require(!posted, "a non-poster has posted");
+        vm.prank(FilAddress.SYSTEM_ACTOR);
+        require(checkpointer.carrySlashPreSignatures(20, 0) == 0, "an output was carried twice");
 
-        // the third post reaches the threshold: the next checkpoint carries all three
-        checkpointer.addSlashPreSignature(txid, 0, 2, 1, 3, _slashSig("s2"));
+        // a later post makes the output due again, with all its signatures; the earlier checkpoint keeps its two
+        vm.prank(vm.addr(3));
+        checkpointer.addSlashPreSignature(txid, 0, _slashSig("s2"));
         vm.prank(FilAddress.SYSTEM_ACTOR);
-        require(checkpointer.carrySlashPreSignatures(20, 0) == 3, "the complete output was not carried");
-        (uint256 power, uint256 carriedHeight, bool posted) = checkpointer.getSlashOutput(txid, 0, 3, 2);
-        require(power == 3 && carriedHeight == 20 && posted, "wrong output state");
-        (, , posted) = checkpointer.getSlashOutput(txid, 0, 3, 3);
-        require(!posted, "index 3 has not posted");
-        vm.prank(FilAddress.SYSTEM_ACTOR);
-        require(checkpointer.carrySlashPreSignatures(30, 0) == 0, "an output was carried twice");
+        require(checkpointer.carrySlashPreSignatures(30, 0) == 3, "the later post was not carried");
+        require(checkpointer.getSlashPreSignatures(10).length == 2, "a carried checkpoint changed");
+        require(checkpointer.getSlashPreSignatures(30).length == 3, "wrong carried signatures");
+        (carriedHeight, ) = checkpointer.getSlashOutput(txid, 0, vm.addr(1));
+        require(carriedHeight == 30, "the last carry is not recorded");
 
-        // a later post makes the output due again; the earlier checkpoint keeps its three
-        checkpointer.addSlashPreSignature(txid, 0, 3, 1, 3, _slashSig("s3"));
-        vm.prank(FilAddress.SYSTEM_ACTOR);
-        require(checkpointer.carrySlashPreSignatures(40, 0) == 4, "the later post was not carried");
-        require(checkpointer.getSlashPreSignatures(20).length == 3, "a carried checkpoint changed");
-        require(checkpointer.getSlashPreSignatures(40).length == 4, "wrong carried signatures");
-
-        // a post with another threshold is kept apart and does not make the output due
-        checkpointer.addSlashPreSignature(txid, 1, 0, 1, 2, _slashSig("t0"));
-        (power, , ) = checkpointer.getSlashOutput(txid, 1, 3, 0);
-        require(power == 0, "thresholds mixed");
+        // a poster posts once per output; another output of the txid is apart
+        vm.prank(vm.addr(1));
+        vm.expectRevert(SignatureReplay.selector);
+        checkpointer.addSlashPreSignature(txid, 0, _slashSig("s3"));
+        vm.prank(vm.addr(1));
+        checkpointer.addSlashPreSignature(txid, 1, _slashSig("t0"));
+        (carriedHeight, posted) = checkpointer.getSlashOutput(txid, 1, vm.addr(1));
+        require(carriedHeight == 0 && posted, "outputs mixed");
 
         vm.expectRevert(InvalidSignatureLength.selector);
-        checkpointer.addSlashPreSignature(txid, 2, 0, 1, 3, abi.encodePacked(bytes32(0)));
-        vm.expectRevert(InvalidSignature.selector);
-        checkpointer.addSlashPreSignature(txid, 2, 350, 1, 3, _slashSig("x"));
-        vm.expectRevert(InvalidSignature.selector);
-        checkpointer.addSlashPreSignature(txid, 2, 0, 1, 0, _slashSig("x"));
+        checkpointer.addSlashPreSignature(txid, 2, abi.encodePacked(bytes32(0)));
     }
 
     function testGatewayDiamond_carrySlashPreSignatures_sizeLimit() public {
         CheckpointingFacet checkpointer = gatewayDiamond.checkpointer();
-        // 17 complete outputs of 350 slash pre-signatures: 16 fit in 380,000 bytes (16 * (40 + 67 * 350))
+        // 17 outputs of 350 slash pre-signatures: 16 fit in 380,000 bytes (16 * (40 + 67 * 350))
         for (uint256 o; o < 17; o++) {
             for (uint16 i; i < 350; i++) {
-                checkpointer.addSlashPreSignature(bytes32(o + 1), 0, i, 1, 350, _slashSig("s"));
+                vm.prank(address(uint160(i + 1)));
+                checkpointer.addSlashPreSignature(bytes32(o + 1), 0, _slashSig("s"));
             }
         }
         vm.startPrank(FilAddress.SYSTEM_ACTOR);
@@ -2595,12 +2597,44 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
         require(carried.length == 350 && carried[0].txid == bytes32(uint256(17)), "wrong output carried next");
     }
 
+    function testGatewayDiamond_carrySlashPreSignatures_carriesTheFirstSignaturesOfAnOutputBeyondTheLimit() public {
+        CheckpointingFacet checkpointer = gatewayDiamond.checkpointer();
+        // 5,672 slash pre-signatures of one output: 40 + 67 * 5,672 bytes exceed 380,000, 5,671 fit
+        uint256 posts = 5_672;
+        uint256 fit = 5_671;
+        for (uint256 i; i < posts; i++) {
+            vm.prank(address(uint160(i + 1)));
+            checkpointer.addSlashPreSignature(bytes32(uint256(1)), 0, _slashSig(bytes32(i)));
+        }
+        vm.prank(vm.addr(1));
+        checkpointer.addSlashPreSignature(bytes32(uint256(2)), 0, _slashSig("t"));
+
+        vm.startPrank(FilAddress.SYSTEM_ACTOR);
+        require(checkpointer.carrySlashPreSignatures(10, 0) == fit, "the output beyond the limit was not carried");
+        require(checkpointer.carrySlashPreSignatures(20, 0) == 1, "the next output was not carried next");
+        require(checkpointer.carrySlashPreSignatures(30, 0) == 0, "the rest of the output was carried again");
+        vm.stopPrank();
+
+        SlashPreSignature[] memory carried = checkpointer.getSlashPreSignatures(10);
+        require(carried.length == fit, "wrong number carried");
+        require(keccak256(carried[0].signature) == keccak256(_slashSig(bytes32(0))), "not the first posted");
+        require(
+            keccak256(carried[fit - 1].signature) == keccak256(_slashSig(bytes32(fit - 1))),
+            "not the first posted"
+        );
+        carried = checkpointer.getSlashPreSignatures(20);
+        require(carried.length == 1 && carried[0].txid == bytes32(uint256(2)), "wrong output carried next");
+        (uint256 carriedHeight, ) = checkpointer.getSlashOutput(bytes32(uint256(1)), 0, vm.addr(1));
+        require(carriedHeight == 10, "the carry is not recorded");
+    }
+
     function testGatewayDiamond_carrySlashPreSignatures_sizeLimitCountsSupplyAdjustments() public {
         CheckpointingFacet checkpointer = gatewayDiamond.checkpointer();
-        // 16 complete outputs of 350 slash pre-signatures fit in 380,000 bytes, but not with 100 supply adjustments
+        // 16 outputs of 350 slash pre-signatures fit in 380,000 bytes, but not with 100 supply adjustments
         for (uint256 o; o < 16; o++) {
             for (uint16 i; i < 350; i++) {
-                checkpointer.addSlashPreSignature(bytes32(o + 1), 0, i, 1, 350, _slashSig("s"));
+                vm.prank(address(uint160(i + 1)));
+                checkpointer.addSlashPreSignature(bytes32(o + 1), 0, _slashSig("s"));
             }
         }
         vm.startPrank(FilAddress.SYSTEM_ACTOR);
@@ -2655,7 +2689,8 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
         // 16 outputs of 350 fit in 380,000 bytes alone; the 5,000-byte message leaves room for 15
         for (uint256 o; o < 17; o++) {
             for (uint16 i; i < 350; i++) {
-                checkpointer.addSlashPreSignature(bytes32(o + 1), 0, i, 1, 350, _slashSig("s"));
+                vm.prank(address(uint160(i + 1)));
+                checkpointer.addSlashPreSignature(bytes32(o + 1), 0, _slashSig("s"));
             }
         }
         vm.startPrank(FilAddress.SYSTEM_ACTOR);
