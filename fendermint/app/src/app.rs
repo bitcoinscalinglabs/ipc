@@ -202,6 +202,11 @@ where
             validators_cache: Arc::new(tokio::sync::Mutex::new(None)),
         };
         app.init_committed_state()?;
+        if let (Some(tally), Some(committed)) =
+            (&app.chain_env.eots_votes, app.get_committed_state()?)
+        {
+            tally.set_latest_height(committed.block_height);
+        }
         Ok(app)
     }
 }
@@ -454,6 +459,7 @@ where
             let (_, validators) = gateway.current_power_table(&mut state)?;
             crate::eots::set_genesis_power_table(tally, validators)?;
         }
+        tally.set_latest_height(state.block_height() as u64);
         tally.set_recorded_final(gateway.subnet_final_height(&mut state)?)
     }
 

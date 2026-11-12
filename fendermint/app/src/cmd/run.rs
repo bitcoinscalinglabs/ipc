@@ -813,7 +813,7 @@ mod tests {
             let received = SignedVoteRecord::<AppVote>::from_bytes(&wire).unwrap();
             dispatch_vote(received, &parent, Some(&tally), false).await;
             assert!(store.0.lock().unwrap().is_empty());
-            assert!(tally.proposal(&agreed).is_none());
+            assert!(tally.proposal(&agreed, 2).is_none());
         }
     }
 

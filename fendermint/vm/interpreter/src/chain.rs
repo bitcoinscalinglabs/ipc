@@ -199,7 +199,7 @@ where
             let bitcoin_height = agreed_bitcoin_height(&mut state)?;
             match tally.agreed_state(bitcoin_height).await {
                 Ok(agreed) => {
-                    if let Some(data) = tally.proposal(&agreed) {
+                    if let Some(data) = tally.proposal(&agreed, state.block_height() as u64) {
                         msgs.push(ChainMessage::Ipc(IpcMessage::EotsFinality(data)));
                     }
                 }
@@ -245,7 +245,9 @@ where
                     }
                     // Waits for the recorded state: the decision depends on the Bitcoin height alone
                     let agreed = tally.agreed_state_wait(bitcoin_height).await;
-                    if let Err(e) = tally.check_proposal(&data, &agreed) {
+                    if let Err(e) =
+                        tally.check_proposal(&data, &agreed, state.block_height() as u64)
+                    {
                         tracing::error!(error = %e, "rejecting a proposal: carried EOTS votes");
                         return Ok(false);
                     }
@@ -370,7 +372,7 @@ where
                         .as_ref()
                         .ok_or_else(|| anyhow!("cannot execute EOTS finality: no EOTS tally"))?;
                     tally
-                        .execute_proposal(&data)
+                        .execute_proposal(&data, state.block_height() as u64)
                         .await
                         .context("failed to apply carried EOTS votes")?;
                     // The gateway keeps the subnet final height; the tally mirrors it.

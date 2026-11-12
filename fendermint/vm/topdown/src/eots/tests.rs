@@ -174,6 +174,9 @@ fn votes_make_blocks_final_in_order() {
         t.add_vote(vote_of(&t, &k1, &s2, 3, [3; 32]), None),
         Err(VoteError::WrongEotsKey)
     );
+    for h in 5..=30 {
+        t.add_block(h, [h as u8; 32]).unwrap();
+    }
     let s1_short = ipc_eots::testing::TestSigner::new(11, 1, 2);
     let mut far = vote_of(&t, &k1, &s1_short, 2, [9; 32]);
     far.vote.height = 30;
@@ -267,7 +270,10 @@ fn a_subnet_block_executed_again_after_its_votes_became_final_is_applied_without
         killed: false,
         bitcoin_height: 100,
     };
-    assert!(t.apply_proposal(&next, &agreed).unwrap().is_empty());
+    assert!(t
+        .apply_proposal(&next, &agreed, t.next_height())
+        .unwrap()
+        .is_empty());
     assert_eq!(t.recorded_final_height(), 3);
     let reloaded = EotsTally::new(
         t.store.clone(),
@@ -277,7 +283,10 @@ fn a_subnet_block_executed_again_after_its_votes_became_final_is_applied_without
         Arc::new(|_| true),
     )
     .unwrap();
-    assert!(reloaded.apply_proposal(&next, &agreed).unwrap().is_empty());
+    assert!(reloaded
+        .apply_proposal(&next, &agreed, reloaded.next_height())
+        .unwrap()
+        .is_empty());
     assert_eq!(reloaded.recorded_final_height(), 3);
 }
 
@@ -325,34 +334,39 @@ fn proposals_carry_final_heights_and_are_checked_against_the_agreed_state() {
         killed: false,
         bitcoin_height: 100,
     };
-    let data = t.proposal(&agreed).unwrap();
+    let data = t.proposal(&agreed, t.next_height()).unwrap();
     assert_eq!(data.votes.len(), 4);
     assert_eq!(data.bitcoin_height, 100);
-    t.check_proposal(&data, &agreed).unwrap();
+    t.check_proposal(&data, &agreed, t.next_height()).unwrap();
     // Commitments recorded above the agreed Bitcoin height do not count
     let earlier = AgreedState {
         checkpointed: 0,
         killed: false,
         bitcoin_height: 99,
     };
-    assert!(t.check_proposal(&data, &earlier).is_err());
-    assert!(t.proposal(&earlier).is_none());
+    assert!(t.check_proposal(&data, &earlier, t.next_height()).is_err());
+    assert!(t.proposal(&earlier, t.next_height()).is_none());
     let mut gap = data.clone();
     gap.votes.retain(|v| v.vote.height == 2);
-    assert!(t.check_proposal(&gap, &agreed).is_err());
+    assert!(t.check_proposal(&gap, &agreed, t.next_height()).is_err());
     let mut thin = data.clone();
     thin.votes.retain(|v| {
         v.vote.height == 1 && v.validator == key_bytes(&k2).to_vec() || v.vote.height == 2
     });
-    assert!(t.check_proposal(&thin, &agreed).is_err());
+    assert!(t.check_proposal(&thin, &agreed, t.next_height()).is_err());
     let mut bad_evidence = data.clone();
     bad_evidence
         .evidence
         .push((data.votes[0].clone(), data.votes[0].clone()));
-    assert!(t.check_proposal(&bad_evidence, &agreed).is_err());
-    assert!(t.apply_proposal(&data, &agreed).unwrap().is_empty());
+    assert!(t
+        .check_proposal(&bad_evidence, &agreed, t.next_height())
+        .is_err());
+    assert!(t
+        .apply_proposal(&data, &agreed, t.next_height())
+        .unwrap()
+        .is_empty());
     assert_eq!(t.recorded_final_height(), 2);
-    assert!(t.proposal(&agreed).is_none());
+    assert!(t.proposal(&agreed, t.next_height()).is_none());
     // A checkpointed height above the recorded one is the new floor of carried heights
     let checkpointed = AgreedState {
         checkpointed: 2,
@@ -360,11 +374,15 @@ fn proposals_carry_final_heights_and_are_checked_against_the_agreed_state() {
         bitcoin_height: 100,
     };
     t.add_vote(vote_of(&t, &k1, &s1, 3, [3; 32]), None).unwrap();
-    let next = t.proposal(&checkpointed).unwrap();
+    let next = t.proposal(&checkpointed, t.next_height()).unwrap();
     assert!(next.votes.iter().all(|v| v.vote.height == 3));
-    t.check_proposal(&next, &checkpointed).unwrap();
+    t.check_proposal(&next, &checkpointed, t.next_height())
+        .unwrap();
     assert_eq!(t.agreed_checkpointed_height(), 0);
-    assert!(t.apply_proposal(&next, &checkpointed).unwrap().is_empty());
+    assert!(t
+        .apply_proposal(&next, &checkpointed, t.next_height())
+        .unwrap()
+        .is_empty());
     assert_eq!(t.agreed_checkpointed_height(), 2);
     assert_eq!(t.recorded_final_height(), 3);
     let reloaded = EotsTally::new(
@@ -692,11 +710,14 @@ fn node_data(
         killed: false,
         bitcoin_height: 100,
     };
-    let mut data = t.proposal(&agreed).unwrap();
+    let mut data = t.proposal(&agreed, t.next_height()).unwrap();
     data.votes.retain(|v| v.vote.height <= 2);
-    assert!(t.apply_proposal(&data, &agreed).unwrap().is_empty());
+    assert!(t
+        .apply_proposal(&data, &agreed, t.next_height())
+        .unwrap()
+        .is_empty());
     assert_eq!(t.recorded_final_height(), 2);
-    let next = t.proposal(&agreed).unwrap();
+    let next = t.proposal(&agreed, t.next_height()).unwrap();
     assert!(next.votes.iter().all(|v| v.vote.height == 3));
     assert_eq!(next.votes.len(), 2);
     (t, next)
@@ -740,7 +761,7 @@ async fn a_restarted_node_executes_the_carried_votes_of_the_next_block() {
     // The store holds the votes above the subnet final height only
     assert_eq!(r.lock().pending.len(), 2);
     // The next block carries the votes of height 3: executed as on every other node
-    r.execute_proposal(&next).await.unwrap();
+    r.execute_proposal(&next, r.next_height()).await.unwrap();
     assert_eq!(r.recorded_final_height(), 3);
     assert_eq!(r.final_height(), 3);
     // The stored votes were checked at the read of the recorded state, and the votes at or below the
@@ -771,7 +792,7 @@ async fn a_carried_vote_the_monitor_rejects_is_not_held_and_the_block_stands() {
     )
     .await;
     let r = restarted(&t, &url);
-    r.execute_proposal(&next).await.unwrap();
+    r.execute_proposal(&next, r.next_height()).await.unwrap();
     // The recorded final height follows the block
     assert_eq!(r.recorded_final_height(), 3);
     assert!(r.lock().votes.is_empty());
@@ -849,13 +870,15 @@ async fn a_vote_signed_with_another_key_than_the_registered_one_is_rejected_and_
     let r = restarted(&t, &url);
     // The proposal check refuses the block that carries the vote
     let agreed = r.agreed_state(100).await.unwrap();
-    let refused = r.check_proposal(&next, &agreed).unwrap_err();
+    let refused = r
+        .check_proposal(&next, &agreed, r.next_height())
+        .unwrap_err();
     assert!(
         refused.contains("not the EOTS key of the validator"),
         "{refused}"
     );
     // The execution of the committed block goes on without the vote
-    r.execute_proposal(&next).await.unwrap();
+    r.execute_proposal(&next, r.next_height()).await.unwrap();
     assert_eq!(r.recorded_final_height(), 3);
     let text = log.text();
     assert!(text.contains("ERROR"), "{text}");
@@ -899,7 +922,7 @@ async fn a_node_that_read_its_monitor_while_it_was_behind_accepts_an_honest_prop
     // that carries k2's vote passes as on every other node
     let agreed = r.agreed_state(100).await.unwrap();
     assert_eq!(r.lock().monitor_read_for, 100);
-    r.check_proposal(&next, &agreed).unwrap();
+    r.check_proposal(&next, &agreed, r.next_height()).unwrap();
     server.abort();
 }
 
@@ -1155,6 +1178,277 @@ fn one_waiting_vote_is_kept_per_eots_key_and_height() {
     assert_eq!(t.lock().pending.len(), 2);
 }
 
+#[tokio::test]
+async fn a_vote_failing_the_key_check_before_the_first_read_is_checked_again_after_it() {
+    let (k1, k2) = (key(1), key(2));
+    let (s1, s2) = (TestSigner::new(11, 1, 20), TestSigner::new(12, 1, 20));
+    // Only k1's EOTS key is recorded
+    let (url, server) = serve(
+        FakeMonitor {
+            keys: vec![recorded(&k1, &s1, 100)],
+            checkpoint: None,
+        },
+        100,
+    )
+    .await;
+    let t = tally_with_provider(&url, &[(k1.clone(), 1), (k2.clone(), 1)]);
+    for h in 1..=5 {
+        t.add_block(h, block(h)).unwrap();
+    }
+    let (v1, v2) = (
+        vote_of(&t, &k1, &s1, 5, block(5)),
+        vote_of(&t, &k2, &s2, 5, block(5)),
+    );
+    assert_eq!(t.add_vote(v1.clone(), None), Ok(VoteOutcome::Pending));
+    assert_eq!(t.add_vote(v2.clone(), None), Ok(VoteOutcome::Pending));
+    assert_eq!(t.lock().pending.len(), 2);
+    t.read_monitor().await.unwrap();
+    let inner = t.lock();
+    assert!(inner.pending.is_empty());
+    assert_eq!(inner.votes[&5][&s1.pk_eots], [v1]);
+    assert!(!inner.votes[&5].contains_key(&s2.pk_eots));
+    drop(inner);
+    assert_eq!(t.add_vote(v2, None), Err(VoteError::WrongEotsKey));
+    server.abort();
+}
+
+#[tokio::test]
+async fn a_vote_kept_before_the_first_read_waits_for_its_commitment_when_that_read_brings_only_its_key(
+) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    let k = key(2);
+    let s = TestSigner::new(12, 1, 20);
+    // k's EOTS key is recorded at 100, its commitment at 101
+    let processed = Arc::new(AtomicU64::new(100));
+    let (url, server) = serve_at(
+        FakeMonitor {
+            keys: vec![
+                (x_only(&key_bytes(&k)), s.pk_eots, None, 100),
+                recorded(&k, &s, 101),
+            ],
+            checkpoint: None,
+        },
+        processed.clone(),
+        Requests::default(),
+    )
+    .await;
+    let t = tally_with_provider(&url, &[(k.clone(), 1)]);
+    for h in 1..=5 {
+        t.add_block(h, block(h)).unwrap();
+    }
+    let vote = vote_of(&t, &k, &s, 5, block(5));
+    assert_eq!(t.add_vote(vote.clone(), None), Ok(VoteOutcome::Pending));
+    t.read_monitor().await.unwrap();
+    let inner = t.lock();
+    assert!(inner.pending.wrong_key.is_empty());
+    assert_eq!(inner.pending.uncommitted.len(), 1);
+    assert!(inner.votes.get(&5).is_none());
+    drop(inner);
+    assert!(t.store.load().unwrap().votes.is_empty());
+    processed.store(101, Ordering::SeqCst);
+    t.read_monitor().await.unwrap();
+    let inner = t.lock();
+    assert!(inner.pending.is_empty());
+    assert_eq!(inner.votes[&5][&s.pk_eots], [vote.clone()]);
+    drop(inner);
+    assert_eq!(t.store.load().unwrap().votes, [vote]);
+    server.abort();
+}
+
+#[test]
+fn a_vote_whose_audit_path_is_longer_than_any_commitment_allows_is_not_kept() {
+    let k = key(2);
+    let (s, s_next) = (TestSigner::new(12, 1, 20), TestSigner::new(12, 21, 20));
+    let with_path = |mut vote: ValidatorVote, len: usize| {
+        vote.vote.proof = vec![[0; 32]; len];
+        vote
+    };
+    let too_long = ipc_eots::MAX_AUDIT_PATH + 1;
+    let invalid = Err(VoteError::Invalid(ipc_eots::EotsError::InvalidProof));
+    // Failing the key check before the first read
+    let t = tally(&[(k.clone(), 1)]);
+    for h in 1..=10 {
+        t.add_block(h, block(h)).unwrap();
+    }
+    let vote = with_path(vote_of(&t, &k, &s, 10, block(10)), too_long);
+    assert_eq!(t.add_vote(vote, None), invalid);
+    let vote = with_path(vote_of(&t, &k, &s, 9, block(9)), ipc_eots::MAX_AUDIT_PATH);
+    assert_eq!(t.add_vote(vote, None), Ok(VoteOutcome::Pending));
+    assert_eq!(t.lock().pending.len(), 1);
+    // Failing rule 4 for a commitment not recorded yet
+    let t = awaiting_tally(&k, &s);
+    let vote = with_path(vote_of(&t, &k, &s_next, 25, block(25)), too_long);
+    assert_eq!(t.add_vote(vote, None), invalid);
+    assert!(t.lock().pending.is_empty());
+}
+
+#[test]
+fn one_vote_failing_the_key_check_is_kept_per_validator_and_height_before_the_first_read() {
+    let (k, unpowered) = (key(2), key(3));
+    let (s, other) = (TestSigner::new(12, 1, 20), TestSigner::new(13, 1, 20));
+    let t = tally(&[(k.clone(), 1)]);
+    for h in 1..=10 {
+        t.add_block(h, block(h)).unwrap();
+    }
+    // Two votes of k at the same height under two unrecorded keys: the first is kept
+    for (signer, hash) in [(&s, block(10)), (&other, [0xA5; 32])] {
+        assert_eq!(
+            t.add_vote(vote_of(&t, &k, signer, 10, hash), None),
+            Ok(VoteOutcome::Pending)
+        );
+    }
+    assert_eq!(t.lock().pending.len(), 1);
+    assert_eq!(
+        t.add_vote(vote_of(&t, &k, &s, 9, block(9)), None),
+        Ok(VoteOutcome::Pending)
+    );
+    assert_eq!(t.lock().pending.len(), 2);
+    // More than 10 above the chain's latest block, or of a validator without power: not kept
+    let mut far = vote_of(&t, &k, &s, 10, block(10));
+    far.vote.height = 21;
+    assert_eq!(t.add_vote(far, None), Err(VoteError::AboveLatest(21, 10)));
+    assert_eq!(
+        t.add_vote(vote_of(&t, &unpowered, &s, 10, block(10)), None),
+        Err(VoteError::WrongEotsKey)
+    );
+    assert_eq!(t.lock().pending.len(), 2);
+    // At or below the subnet final height: deleted
+    let mut inner = t.lock();
+    inner.recorded_final = 9;
+    inner.delete_final();
+    assert_eq!(inner.pending.len(), 1);
+}
+
+#[tokio::test]
+async fn at_most_256_votes_failing_the_key_check_are_kept_per_validator_before_the_first_read() {
+    let (k1, k2) = (key(1), key(2));
+    // Three commitments under one EOTS key cover the 257 heights
+    let s1: Vec<TestSigner> = [(1, 128), (129, 128), (257, 1)]
+        .into_iter()
+        .map(|(start, count)| TestSigner::new(11, start, count))
+        .collect();
+    let s1_at = |h: u64| &s1[((h - 1) / 128) as usize];
+    let s2 = TestSigner::new(12, 1, 20);
+    let mut keys: Vec<_> = s1.iter().map(|s| recorded(&k1, s, 100)).collect();
+    keys.push(recorded(&k2, &s2, 100));
+    let (url, server) = serve(
+        FakeMonitor {
+            keys,
+            checkpoint: None,
+        },
+        100,
+    )
+    .await;
+    let t = tally_with_provider(&url, &[(k1.clone(), 1), (k2.clone(), 1)]);
+    for h in 1..=257 {
+        t.add_block(h, block(h)).unwrap();
+    }
+    // k1 votes at 257 heights: the first 256 are kept, the 257th is refused
+    for h in 1..=256 {
+        assert_eq!(
+            t.add_vote(vote_of(&t, &k1, s1_at(h), h, block(h)), None),
+            Ok(VoteOutcome::Pending)
+        );
+    }
+    assert_eq!(
+        t.add_vote(vote_of(&t, &k1, s1_at(257), 257, block(257)), None),
+        Err(VoteError::WrongEotsKey)
+    );
+    // Another validator's vote is still kept
+    let v2 = vote_of(&t, &k2, &s2, 5, block(5));
+    assert_eq!(t.add_vote(v2.clone(), None), Ok(VoteOutcome::Pending));
+    assert_eq!(t.lock().pending.len(), 257);
+    t.read_monitor().await.unwrap();
+    let inner = t.lock();
+    assert!(inner.pending.is_empty());
+    for h in 1..=256 {
+        assert!(inner.votes[&h].contains_key(&s1[0].pk_eots));
+    }
+    assert!(inner.votes.get(&257).is_none());
+    assert_eq!(inner.votes[&5][&s2.pk_eots], [v2]);
+    drop(inner);
+    assert_eq!(t.store.load().unwrap().votes.len(), 257);
+    server.abort();
+}
+
+#[tokio::test]
+async fn the_votes_of_the_lowest_256_heights_waiting_for_their_commitment_are_kept_per_validator() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    let (k1, k2) = (key(1), key(2));
+    // Three commitments under one EOTS key cover the 257 heights
+    let s1: Vec<TestSigner> = [(1, 128), (129, 128), (257, 1)]
+        .into_iter()
+        .map(|(start, count)| TestSigner::new(11, start, count))
+        .collect();
+    let s1_at = |h: u64| &s1[((h - 1) / 128) as usize];
+    let s2 = TestSigner::new(12, 1, 20);
+    // The EOTS keys are recorded at 100, their commitments at 101
+    let mut keys = vec![
+        (x_only(&key_bytes(&k1)), s1[0].pk_eots, None, 100),
+        (x_only(&key_bytes(&k2)), s2.pk_eots, None, 100),
+    ];
+    keys.extend(s1.iter().map(|s| recorded(&k1, s, 101)));
+    keys.push(recorded(&k2, &s2, 101));
+    let processed = Arc::new(AtomicU64::new(100));
+    let (url, server) = serve_at(
+        FakeMonitor {
+            keys,
+            checkpoint: None,
+        },
+        processed.clone(),
+        Requests::default(),
+    )
+    .await;
+    let t = tally_with_provider(&url, &[(k1.clone(), 1), (k2.clone(), 1)]);
+    for h in 1..=257 {
+        t.add_block(h, block(h)).unwrap();
+    }
+    t.read_monitor().await.unwrap();
+    // k1 votes at heights 2 to 257, then at 1: the vote at 1 replaces the one at 257
+    for h in (2..=257).chain([1]) {
+        assert_eq!(
+            t.add_vote(vote_of(&t, &k1, s1_at(h), h, block(h)), None),
+            Ok(VoteOutcome::Pending)
+        );
+    }
+    assert_eq!(
+        t.add_vote(vote_of(&t, &k1, s1_at(257), 257, block(257)), None),
+        Err(VoteError::NotCommitted(257))
+    );
+    // Another validator's vote is still kept
+    let v2 = vote_of(&t, &k2, &s2, 5, block(5));
+    assert_eq!(t.add_vote(v2.clone(), None), Ok(VoteOutcome::Pending));
+    assert_eq!(t.lock().pending.len(), 257);
+    processed.store(101, Ordering::SeqCst);
+    t.read_monitor().await.unwrap();
+    let inner = t.lock();
+    assert!(inner.pending.is_empty());
+    for h in 1..=256 {
+        assert!(inner.votes[&h].contains_key(&s1[0].pk_eots));
+    }
+    assert!(inner.votes.get(&257).is_none());
+    assert_eq!(inner.votes[&5][&s2.pk_eots], [v2]);
+    drop(inner);
+    assert_eq!(t.store.load().unwrap().votes.len(), 257);
+    server.abort();
+}
+
+#[test]
+fn a_vote_failing_the_key_check_after_the_first_read_is_not_kept() {
+    let k = key(2);
+    let t = tally(&[(k.clone(), 1)]);
+    signer_for(&t, &k, 12);
+    for h in 1..=10 {
+        t.add_block(h, block(h)).unwrap();
+    }
+    let other = TestSigner::new(13, 1, 20);
+    assert_eq!(
+        t.add_vote(vote_of(&t, &k, &other, 10, block(10)), None),
+        Err(VoteError::WrongEotsKey)
+    );
+    assert!(t.lock().pending.is_empty());
+}
+
 #[test]
 fn a_vote_naming_a_recorded_commitment_that_does_not_cover_its_height_is_not_kept() {
     let k = key(2);
@@ -1268,7 +1562,7 @@ async fn two_reads_of_the_monitor_run_one_after_the_other() {
 fn the_size_of_carried_votes_is_their_encoded_length() {
     let (t, signers) = three_voters(1);
     vote_all(&t, &signers, 1, [1; 32]);
-    let data = t.proposal(&agreed()).unwrap();
+    let data = t.proposal(&agreed(), t.next_height()).unwrap();
     assert_eq!(data.votes.len(), 3);
     let sizes: usize = data.votes.iter().map(vote_size).sum();
     // The encoded list adds one byte, its length
@@ -1401,11 +1695,15 @@ fn a_final_block_other_than_the_chains_keeps_the_served_finality_below_it() {
     vote_all(&t, &signers, 1, [1u8; 32]);
     t.lock().recorded_final = 1;
     assert_eq!(t.final_height(), 1);
-    // The votes for the other block at height 2 come before the chain's block
+    // The votes for the other block at height 2 come before the chain's block: kept until it
     let other = [0xB2u8; 32];
     assert_eq!(
         vote_all(&t, &signers, 2, other),
-        [VoteOutcome::New, VoteOutcome::New, VoteOutcome::New]
+        [
+            VoteOutcome::Pending,
+            VoteOutcome::Pending,
+            VoteOutcome::Pending
+        ]
     );
     assert!(!log.text().contains(&hex::encode(other)));
     t.add_block(2, [2u8; 32]).unwrap();
@@ -1573,15 +1871,17 @@ impl Fixture {
         for height in 1..=2 {
             node.add_block(height, block(height)).unwrap();
             for vote in self.quorum(height) {
-                node.add_vote(vote, Some(&agreed())).unwrap();
+                node.add_vote(vote, Some((&agreed(), node.next_height())))
+                    .unwrap();
             }
         }
         let proposal = node
-            .proposal(&agreed())
+            .proposal(&agreed(), node.next_height())
             .expect("honest quorum must keep producing blocks");
-        node.check_proposal(&proposal, &agreed()).unwrap();
+        node.check_proposal(&proposal, &agreed(), node.next_height())
+            .unwrap();
         assert!(node
-            .apply_proposal(&proposal, &agreed())
+            .apply_proposal(&proposal, &agreed(), node.next_height())
             .unwrap()
             .is_empty());
         assert_eq!(node.recorded_final_height(), 2);
@@ -1590,7 +1890,9 @@ impl Fixture {
 
     fn assert_rejected_and_live(&self, bad: ValidatorVote) {
         let (node, store) = self.fresh_node();
-        node.add_block(1, block(1)).unwrap();
+        for height in 1..=5 {
+            node.add_block(height, block(height)).unwrap();
+        }
         let before = node.status();
         assert!(node.add_vote(bad.clone(), None).is_err());
         assert_eq!(node.status(), before);
@@ -1604,7 +1906,8 @@ impl Fixture {
             evidence: vec![],
         };
         assert!(
-            node.check_proposal(&proposal, &agreed()).is_err(),
+            node.check_proposal(&proposal, &agreed(), node.next_height())
+                .is_err(),
             "one bad carried vote rejects the whole proposal"
         );
         assert_eq!(node.status(), before);
@@ -1704,12 +2007,12 @@ fn a_registered_validator_without_power_cannot_pollute_a_proposal() {
     let (node, store) = f.fresh_node();
     node.update_power_table(1, vec![(ValidatorKey::from(f.keys[3].public()), 0)])
         .unwrap();
+    node.add_block(1, block(1)).unwrap();
     let bad = f.vote(3, 1, block(1));
     assert!(matches!(
         node.add_vote(bad.clone(), None),
         Err(VoteError::UnpoweredValidator(1))
     ));
-    node.add_block(1, block(1)).unwrap();
     let mut votes = f.quorum(1);
     votes.push(bad);
     assert!(node
@@ -1719,7 +2022,8 @@ fn a_registered_validator_without_power_cannot_pollute_a_proposal() {
                 votes,
                 evidence: vec![]
             },
-            &agreed()
+            &agreed(),
+            node.next_height()
         )
         .is_err());
     assert!(store.load().unwrap().votes.is_empty());
@@ -1731,6 +2035,9 @@ fn future_power_does_not_authorize_a_vote_in_the_past() {
     let f = Fixture::new();
     let (node, _) = f.fresh_node();
     let key = ValidatorKey::from(f.keys[3].public());
+    for height in 1..=2 {
+        node.add_block(height, block(height)).unwrap();
+    }
     node.update_power_table(1, vec![(key.clone(), 0)]).unwrap();
     node.update_power_table(2, vec![(key, 1)]).unwrap();
     assert!(matches!(
@@ -1747,13 +2054,15 @@ fn future_power_does_not_authorize_a_vote_in_the_past() {
 fn a_missing_commitment_does_not_enter_the_store_or_finality() {
     let f = Fixture::new();
     let (node, store) = f.fresh_node();
+    node.add_block(1, block(1)).unwrap();
     node.lock().commitments.remove(&f.signers[3].pk_eots);
-    assert!(matches!(
+    // Kept for a check after the next read of the recorded state
+    assert_eq!(
         node.add_vote(f.vote(3, 1, block(1)), None),
-        Err(VoteError::NotCommitted(1))
-    ));
+        Ok(VoteOutcome::Pending)
+    );
     assert!(store.load().unwrap().votes.is_empty());
-    assert!(node.lock().pending.is_empty());
+    assert_eq!(node.lock().pending.len(), 1);
     f.live_after_rejection(&node);
 }
 
@@ -1762,6 +2071,9 @@ fn votes_at_or_below_the_checkpoint_are_dropped() {
     let f = Fixture::new();
     let (node, store) = f.fresh_node();
     node.lock().checkpoint = Some((2, block(2), false));
+    for height in 1..=3 {
+        node.add_block(height, block(height)).unwrap();
+    }
     for height in [1, 2] {
         assert!(matches!(
             node.add_vote(f.vote(3, height, block(height)), None),
@@ -1796,7 +2108,7 @@ fn fork_votes_are_held_but_do_not_finalize_the_local_block() {
         node.add_vote(f.vote(actor, 1, [99; 32]), None).unwrap();
     }
     assert_eq!(node.lock().known_final(), 0);
-    assert!(node.proposal(&agreed()).is_none());
+    assert!(node.proposal(&agreed(), node.next_height()).is_none());
     assert_eq!(store.load().unwrap().blocks, vec![(1, block(1))]);
     assert_eq!(
         node.add_vote(f.vote(0, 1, block(1)), None).unwrap(),
@@ -1807,10 +2119,11 @@ fn fork_votes_are_held_but_do_not_finalize_the_local_block() {
         node.add_vote(f.vote(actor, 1, block(1)), None).unwrap();
     }
     assert_eq!(node.lock().known_final(), 1);
-    let proposal = node.proposal(&agreed()).unwrap();
-    node.check_proposal(&proposal, &agreed()).unwrap();
+    let proposal = node.proposal(&agreed(), node.next_height()).unwrap();
+    node.check_proposal(&proposal, &agreed(), node.next_height())
+        .unwrap();
     assert!(node
-        .apply_proposal(&proposal, &agreed())
+        .apply_proposal(&proposal, &agreed(), node.next_height())
         .unwrap()
         .is_empty());
     assert_eq!(node.recorded_final_height(), 1);
@@ -1851,6 +2164,7 @@ fn repeated_and_third_votes_do_not_amplify_the_tally() {
 fn resigning_an_envelope_does_not_create_another_vote() {
     let f = Fixture::new();
     let (node, store) = f.fresh_node();
+    node.add_block(1, block(1)).unwrap();
     let first = f.vote(3, 1, block(1));
     assert_eq!(
         node.add_vote(first.clone(), None).unwrap(),
@@ -1892,10 +2206,11 @@ fn evidence_preserves_power_until_the_validator_is_removed() {
         "the equivocator's valid vote still counts"
     );
     assert_eq!(node.final_height(), 0);
-    let proposal = node.proposal(&agreed()).unwrap();
-    node.check_proposal(&proposal, &agreed()).unwrap();
+    let proposal = node.proposal(&agreed(), node.next_height()).unwrap();
+    node.check_proposal(&proposal, &agreed(), node.next_height())
+        .unwrap();
     assert!(node
-        .apply_proposal(&proposal, &agreed())
+        .apply_proposal(&proposal, &agreed(), node.next_height())
         .unwrap()
         .is_empty());
     assert_eq!(node.final_height(), 1);
@@ -1913,10 +2228,11 @@ fn evidence_preserves_power_until_the_validator_is_removed() {
     node.add_vote(f.vote(2, 2, block(2)), None).unwrap();
     assert_eq!(node.lock().known_final(), 2);
     assert_eq!(node.final_height(), 1);
-    let proposal = node.proposal(&agreed()).unwrap();
-    node.check_proposal(&proposal, &agreed()).unwrap();
+    let proposal = node.proposal(&agreed(), node.next_height()).unwrap();
+    node.check_proposal(&proposal, &agreed(), node.next_height())
+        .unwrap();
     assert!(node
-        .apply_proposal(&proposal, &agreed())
+        .apply_proposal(&proposal, &agreed(), node.next_height())
         .unwrap()
         .is_empty());
     assert_eq!(node.final_height(), 2);
@@ -1932,7 +2248,9 @@ fn a_proposer_cannot_count_one_vote_more_than_once() {
         votes: vec![f.vote(3, 1, block(1)); 4],
         evidence: vec![],
     };
-    assert!(node.check_proposal(&data, &agreed()).is_err());
+    assert!(node
+        .check_proposal(&data, &agreed(), node.next_height())
+        .is_err());
     f.live_after_rejection(&node);
 }
 
@@ -1949,7 +2267,8 @@ fn a_carried_quorum_for_another_block_rejects_the_proposal() {
                 votes,
                 evidence: vec![]
             },
-            &agreed()
+            &agreed(),
+            node.next_height()
         )
         .is_err());
     f.live_after_rejection(&node);
@@ -1968,7 +2287,8 @@ fn a_proposer_cannot_skip_an_unfinalized_height() {
                 votes: f.quorum(2),
                 evidence: vec![]
             },
-            &agreed()
+            &agreed(),
+            node.next_height()
         )
         .is_err());
     f.live_after_rejection(&node);
@@ -1994,7 +2314,9 @@ fn invalid_evidence_rejects_an_otherwise_honest_proposal() {
             votes: f.quorum(1),
             evidence: vec![pair],
         };
-        assert!(node.check_proposal(&data, &agreed()).is_err());
+        assert!(node
+            .check_proposal(&data, &agreed(), node.next_height())
+            .is_err());
         assert!(store.load().unwrap().votes.is_empty());
         assert_eq!(node.recorded_final_height(), 0);
     }
@@ -2016,10 +2338,10 @@ fn a_proposal_with_more_than_one_evidence_of_one_eots_key_is_rejected() {
         votes: f.quorum(1),
         evidence,
     };
-    node.check_proposal(&data(evidence[..1].to_vec()), &agreed())
+    node.check_proposal(&data(evidence[..1].to_vec()), &agreed(), node.next_height())
         .unwrap();
     let refused = node
-        .check_proposal(&data(evidence.clone()), &agreed())
+        .check_proposal(&data(evidence.clone()), &agreed(), node.next_height())
         .unwrap_err();
     assert!(
         refused.contains("more than one carried evidence"),
@@ -2031,7 +2353,13 @@ fn a_proposal_with_more_than_one_evidence_of_one_eots_key_is_rejected() {
         node.add_vote(b, None).unwrap();
     }
     assert_eq!(node.evidence().len(), 2);
-    assert_eq!(node.proposal(&agreed()).unwrap().evidence.len(), 1);
+    assert_eq!(
+        node.proposal(&agreed(), node.next_height())
+            .unwrap()
+            .evidence
+            .len(),
+        1
+    );
     f.live_after_rejection(&node);
 }
 
@@ -2069,7 +2397,7 @@ fn pollution_fixture(with_evidence: bool, obsolete: bool) {
         ..agreed()
     };
     let proposal = proposer
-        .proposal(&state)
+        .proposal(&state, proposer.next_height())
         .expect("an honest quorum is available");
     assert!(!proposal
         .votes
@@ -2086,20 +2414,26 @@ fn pollution_fixture(with_evidence: bool, obsolete: bool) {
     // Other local gossip and recorded-head views must not affect the proposal decision.
     receiver.lock().checkpoint = Some((2, block(2), true));
     receiver
-        .check_proposal(&proposal, &state)
+        .check_proposal(&proposal, &state, receiver.next_height())
         .expect("non-proposer gossip cannot poison an honest block");
     assert!(receiver
-        .apply_proposal(&proposal, &state)
+        .apply_proposal(&proposal, &state, receiver.next_height())
         .unwrap()
         .is_empty());
     assert_eq!(receiver.recorded_final_height(), 2);
     receiver.add_block(3, block(3)).unwrap();
     for vote in f.quorum(3) {
-        receiver.add_vote(vote, Some(&state)).unwrap();
+        receiver
+            .add_vote(vote, Some((&state, receiver.next_height())))
+            .unwrap();
     }
-    let next = receiver.proposal(&state).unwrap();
-    receiver.check_proposal(&next, &state).unwrap();
-    receiver.apply_proposal(&next, &state).unwrap();
+    let next = receiver.proposal(&state, receiver.next_height()).unwrap();
+    receiver
+        .check_proposal(&next, &state, receiver.next_height())
+        .unwrap();
+    receiver
+        .apply_proposal(&next, &state, receiver.next_height())
+        .unwrap();
     assert_eq!(receiver.recorded_final_height(), 3);
 }
 
@@ -2182,10 +2516,13 @@ async fn committed_bad_vote(omit_commitment: bool) {
         };
         let start = logs.0.lock().unwrap().len();
         let final_before = current.recorded_final_height() >= 1;
-        tokio::time::timeout(Duration::from_secs(5), current.execute_proposal(&data))
-            .await
-            .expect("committed delivery must finish")
-            .expect("a rejected carried vote must not abort execution");
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            current.execute_proposal(&data, current.next_height()),
+        )
+        .await
+        .expect("committed delivery must finish")
+        .expect("a rejected carried vote must not abort execution");
         assert_eq!(current.recorded_final_height(), 1);
         assert_eq!(current.final_height(), 1);
         assert!(!current.store.load().unwrap().votes.contains(&bad));
@@ -2212,7 +2549,10 @@ async fn committed_bad_vote(omit_commitment: bool) {
             votes: honest_votes.clone(),
             evidence: vec![],
         };
-        clean.execute_proposal(&honest).await.unwrap();
+        clean
+            .execute_proposal(&honest, clean.next_height())
+            .await
+            .unwrap();
         assert_eq!(current.status(), clean.status());
         assert_eq!(
             current.store.load().unwrap().blocks,
@@ -2229,8 +2569,13 @@ async fn committed_bad_vote(omit_commitment: bool) {
                 votes: f.quorum(2),
                 evidence: vec![],
             };
-            current.check_proposal(&next, &agreed()).unwrap();
-            current.execute_proposal(&next).await.unwrap();
+            current
+                .check_proposal(&next, &agreed(), current.next_height())
+                .unwrap();
+            current
+                .execute_proposal(&next, current.next_height())
+                .await
+                .unwrap();
             assert_eq!(current.recorded_final_height(), 2);
         }
     }
@@ -2245,4 +2590,208 @@ async fn a_committed_vote_with_a_bad_signature_is_dropped_on_delivery_replay_and
 #[tokio::test]
 async fn a_committed_vote_without_a_monitor_commitment_is_dropped_on_delivery_replay_and_sync() {
     committed_bad_vote(true).await;
+}
+
+/// A tally holding the chain's blocks 1 to 5 and the EOTS key and commitment of `k`.
+fn tally_at_height_5(k: &ValidatorKey) -> (EotsTally, TestSigner) {
+    let t = tally(&[(k.clone(), 1)]);
+    let s = signer_for(&t, k, 11);
+    for h in 1..=5 {
+        t.add_block(h, block(h)).unwrap();
+    }
+    (t, s)
+}
+
+#[test]
+fn votes_up_to_10_heights_above_the_latest_block_are_kept_and_checked_when_the_block_arrives() {
+    let k = key(1);
+    let (t, s) = tally_at_height_5(&k);
+    let (v6, v15) = (
+        vote_of(&t, &k, &s, 6, block(6)),
+        vote_of(&t, &k, &s, 15, block(15)),
+    );
+    let mut tampered = vote_of(&t, &k, &s, 7, block(7));
+    tampered.vote.signature[1][0] ^= 1;
+    for v in [&v6, &v15, &tampered] {
+        assert_eq!(t.add_vote(v.clone(), None), Ok(VoteOutcome::Pending));
+    }
+    assert_eq!(
+        t.add_vote(vote_of(&t, &k, &s, 16, block(16)), None),
+        Err(VoteError::AboveLatest(16, 5))
+    );
+    assert_eq!(t.lock().pending.len(), 3);
+    assert!(t.lock().votes.is_empty());
+    t.add_block(6, block(6)).unwrap();
+    assert_eq!(t.lock().votes[&6][&s.pk_eots], [v6]);
+    assert_eq!(t.lock().pending.len(), 2);
+    // The vote failing a rule when its block arrives is dropped
+    t.add_block(7, block(7)).unwrap();
+    assert!(!t.lock().votes.contains_key(&7));
+    assert_eq!(t.lock().pending.len(), 1);
+    for h in 8..=15 {
+        t.add_block(h, block(h)).unwrap();
+    }
+    assert_eq!(t.lock().votes[&15][&s.pk_eots], [v15]);
+    assert!(t.lock().pending.is_empty());
+    assert_eq!(t.store.load().unwrap().votes.len(), 2);
+}
+
+#[test]
+fn a_validator_voting_at_1000_heights_above_the_latest_block_leaves_at_most_10_kept_and_none_stored(
+) {
+    let k = key(1);
+    let (t, s) = tally_at_height_5(&k);
+    let template = vote_of(&t, &k, &s, 6, block(6));
+    let mut kept = 0;
+    for h in 6..1006 {
+        let mut v = template.clone();
+        v.vote.height = h;
+        match t.add_vote(v, None) {
+            Ok(VoteOutcome::Pending) => kept += 1,
+            Err(VoteError::AboveLatest(height, 5)) => assert_eq!(height, h),
+            other => panic!("unexpected outcome at {h}: {other:?}"),
+        }
+    }
+    assert_eq!(kept, 10);
+    assert_eq!(t.lock().pending.len(), 10);
+    assert!(t.lock().votes.is_empty());
+    assert!(t.store.load().unwrap().votes.is_empty());
+}
+
+#[test]
+fn after_a_start_a_vote_at_the_latest_height_is_not_refused_before_the_next_block() {
+    let k = key(1);
+    let (t, _) = tally_at_height_5(&k);
+    t.set_recorded_final(3).unwrap();
+    let r = restarted(&t, "http://127.0.0.1:1");
+    let s = signer_for(&r, &k, 11);
+    assert_eq!(
+        r.add_vote(vote_of(&r, &k, &s, 5, block(5)), None),
+        Ok(VoteOutcome::New)
+    );
+    assert_eq!(
+        r.add_vote(vote_of(&r, &k, &s, 15, block(15)), None),
+        Ok(VoteOutcome::Pending)
+    );
+    assert_eq!(
+        r.add_vote(vote_of(&r, &k, &s, 16, block(16)), None),
+        Err(VoteError::AboveLatest(16, 5))
+    );
+}
+
+fn evidence_at(t: &EotsTally, k: &ValidatorKey, s: &TestSigner, h: u64) -> EotsFinalityData {
+    EotsFinalityData {
+        bitcoin_height: BITCOIN_HEIGHT,
+        votes: vec![],
+        evidence: vec![(vote_of(t, k, s, h, block(h)), vote_of(t, k, s, h, [99; 32]))],
+    }
+}
+
+#[test]
+fn evidence_at_or_above_the_carrying_block_is_refused_in_a_proposal_and_dropped_at_execution() {
+    let k = key(1);
+    let (t, s) = tally_at_height_5(&k);
+    for h in [6, 7] {
+        let refused = t
+            .check_proposal(&evidence_at(&t, &k, &s, h), &agreed(), 6)
+            .unwrap_err();
+        assert!(
+            refused.contains(&format!("carried evidence at height {h}")),
+            "{refused}"
+        );
+    }
+    // The same parent with the carrying block's hash already held, as after a crash in it
+    t.add_block(6, block(6)).unwrap();
+    assert!(t
+        .check_proposal(&evidence_at(&t, &k, &s, 6), &agreed(), 6)
+        .is_err());
+    // A committed block with such evidence stands: its votes are dropped
+    let rejected = t
+        .apply_proposal(&evidence_at(&t, &k, &s, 6), &agreed(), 6)
+        .unwrap();
+    assert_eq!(rejected.len(), 2);
+    assert!(rejected
+        .iter()
+        .all(|(_, e)| *e == VoteError::AboveLatest(6, 5)));
+    assert!(t.evidence().is_empty());
+    assert!(t.store.load().unwrap().votes.is_empty());
+    // Evidence below the carrying block is accepted
+    t.check_proposal(&evidence_at(&t, &k, &s, 5), &agreed(), 6)
+        .unwrap();
+    assert!(t
+        .apply_proposal(&evidence_at(&t, &k, &s, 5), &agreed(), 6)
+        .unwrap()
+        .is_empty());
+    assert_eq!(t.evidence().len(), 1);
+}
+
+#[test]
+fn a_proposer_selects_only_evidence_below_the_carrying_block() {
+    let k = key(1);
+    let (t, s) = tally_at_height_5(&k);
+    t.add_block(6, block(6)).unwrap();
+    let (a, b) = evidence_at(&t, &k, &s, 6).evidence.remove(0);
+    t.add_vote(a, None).unwrap();
+    t.add_vote(b, None).unwrap();
+    assert_eq!(t.evidence().len(), 1);
+    assert!(t.proposal(&agreed(), 6).is_none());
+    assert_eq!(t.proposal(&agreed(), 7).unwrap().evidence.len(), 1);
+}
+
+#[test]
+fn a_vote_of_a_validator_seated_by_a_configuration_not_yet_executed_is_kept_until_its_block() {
+    let (a, b, c, d) = (key(1), key(2), key(3), key(4));
+    let (t, _) = tally_at_height_5(&a);
+    // B and D have recorded EOTS keys and no power at 8 in the receiver's tables yet
+    let (sb, sd) = (signer_for(&t, &b, 12), signer_for(&t, &d, 14));
+    let vb = vote_of(&t, &b, &sb, 8, block(8));
+    assert_eq!(t.add_vote(vb.clone(), None), Ok(VoteOutcome::Pending));
+    assert_eq!(
+        t.add_vote(vote_of(&t, &d, &sd, 8, block(8)), None),
+        Ok(VoteOutcome::Pending)
+    );
+    // C's EOTS key is not recorded
+    let sc = TestSigner::new(13, 1, 20);
+    assert_eq!(
+        t.add_vote(vote_of(&t, &c, &sc, 8, block(8)), None),
+        Err(VoteError::AboveLatest(8, 5))
+    );
+    // The execution of block 6 applies the configuration that seats B from 8 on
+    t.add_block(6, block(6)).unwrap();
+    t.update_power_table(8, vec![(b.clone(), 1)]).unwrap();
+    t.add_block(7, block(7)).unwrap();
+    assert_eq!(t.lock().pending.len(), 2);
+    t.add_block(8, block(8)).unwrap();
+    assert_eq!(t.lock().votes[&8][&sb.pk_eots], [vb]);
+    assert!(!t.lock().votes[&8].contains_key(&sd.pk_eots));
+    assert!(t.lock().pending.is_empty());
+}
+
+#[test]
+fn after_a_snapshot_import_the_committed_height_bounds_the_kept_votes() {
+    let k = key(1);
+    let t = tally(&[(k.clone(), 1)]);
+    let s = TestSigner::new(11, 81, 40);
+    {
+        let mut inner = t.lock();
+        inner.eots_keys.insert(x_only(&key_bytes(&k)), s.pk_eots);
+        inner
+            .commitments
+            .insert(s.pk_eots, vec![(s.commitment, BITCOIN_HEIGHT)]);
+        inner.monitor_read = true;
+    }
+    // As the import seeds it: committed height 100, recorded final 80, no block hash
+    t.set_recorded_final(80).unwrap();
+    t.set_latest_height(100);
+    assert!(t.lock().chain.is_empty());
+    let v101 = vote_of(&t, &k, &s, 101, block(101));
+    assert_eq!(t.add_vote(v101.clone(), None), Ok(VoteOutcome::Pending));
+    assert_eq!(
+        t.add_vote(vote_of(&t, &k, &s, 111, block(111)), None),
+        Err(VoteError::AboveLatest(111, 100))
+    );
+    assert!(t.lock().votes.is_empty());
+    t.add_block(101, block(101)).unwrap();
+    assert_eq!(t.lock().votes[&101][&s.pk_eots], [v101]);
+    assert!(t.lock().pending.is_empty());
 }

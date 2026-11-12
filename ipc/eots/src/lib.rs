@@ -97,6 +97,10 @@ fn node_hash(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
     hasher.finalize().into()
 }
 
+/// The most hashes an audit path of a commitment holds: `count` is a `u32`, so its tree is at
+/// most 32 levels deep.
+pub const MAX_AUDIT_PATH: usize = 32;
+
 /// Checks the RFC 6962 audit path `path` of `leaf` at `index` in a tree of `size` leaves against
 /// `root` (RFC 9162, section 2.1.3.2).
 pub fn verify_audit_path(
