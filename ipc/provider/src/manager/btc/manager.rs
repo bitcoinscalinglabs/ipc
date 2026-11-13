@@ -519,6 +519,12 @@ impl SubnetManager for BtcSubnetManager {
             body["params"]["eots_nonce_start"] = json!(start);
             body["params"]["eots_nonce_count"] = json!(count);
         }
+        if let Some(initial_balance) = params.initial_balance {
+            body["params"]["initial_balance"] = json!({
+                "amount": token_amount_to_satoshi(initial_balance.amount)?,
+                "address": payload_to_evm_address(initial_balance.address.payload())?,
+            });
+        }
         tracing::trace!("Request body: {body:?}");
 
         let resp = self

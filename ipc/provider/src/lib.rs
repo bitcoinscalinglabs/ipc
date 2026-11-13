@@ -15,7 +15,8 @@ use ipc_api::evm::payload_to_evm_address;
 use ipc_api::staking::{StakingChangeRequest, ValidatorInfo};
 use ipc_api::subnet::{
     BtcFundParams, BtcJoinParams, BtcKillSubnetParams, ConstructParams, EthFundParams,
-    EthJoinParams, EthKillSubnetParams, FundParams, JoinParams, KillSubnetParams, PreFundParams,
+    EthJoinParams, EthKillSubnetParams, FundParams, InitialBalance, JoinParams, KillSubnetParams,
+    PreFundParams,
 };
 use ipc_api::{cross::IpcEnvelope, subnet_id::SubnetID};
 use ipc_wallet::{
@@ -283,8 +284,9 @@ impl IpcProvider {
         backup_address: Option<String>,
         epochs: Option<u32>,
         eots_nonces: Option<(u64, u32)>,
+        initial_balance: Option<TokenAmount>,
     ) -> anyhow::Result<ChainEpoch> {
-        if epochs.is_some() {
+        if epochs.is_some() || initial_balance.is_some() {
             self.require_bitcoin_parent(&subnet)?;
         }
         let parent_id = subnet.parent().ok_or_else(|| anyhow!("no parent found"))?;
@@ -333,6 +335,10 @@ impl IpcProvider {
                     backup_address,
                     epochs,
                     eots_nonces,
+                    initial_balance: initial_balance.map(|amount| InitialBalance {
+                        address: sender,
+                        amount,
+                    }),
                 })
             }
         };
@@ -415,6 +421,7 @@ impl IpcProvider {
                     backup_address: String::new(),
                     epochs: None,
                     eots_nonces: None,
+                    initial_balance: None,
                 })
             }
         };
@@ -474,6 +481,7 @@ impl IpcProvider {
                     backup_address: String::new(),
                     epochs: None,
                     eots_nonces: None,
+                    initial_balance: None,
                 })
             }
         };

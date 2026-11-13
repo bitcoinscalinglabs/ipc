@@ -29,16 +29,11 @@ impl CommandLineHandler for JoinUe {
             None => None,
         };
 
-        if let Some(initial_balance) = arguments.initial_balance.filter(|x| !x.is_zero()) {
+        // The provider sends the prefund transaction after the join's checks, before the join
+        let initial_balance = arguments.initial_balance.filter(|x| !x.is_zero());
+        if let Some(initial_balance) = initial_balance {
             log::info!("pre-funding address with {initial_balance}");
-            provider
-                .pre_fund(
-                    subnet.clone(),
-                    from,
-                    token_amount_from_satoshi(initial_balance),
-                )
-                .await?;
-        };
+        }
 
         let epoch = provider
             .join_subnet(
@@ -49,6 +44,7 @@ impl CommandLineHandler for JoinUe {
                 Some(arguments.backup_address.clone()),
                 Some(arguments.epochs),
                 Some((arguments.eots_nonce_start, arguments.eots_nonce_count)),
+                initial_balance.map(token_amount_from_satoshi),
             )
             .await?;
         println!("join-ue transaction submitted at height: {epoch}");

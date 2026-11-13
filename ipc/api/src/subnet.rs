@@ -144,6 +144,15 @@ pub struct BtcJoinParams {
     pub epochs: Option<u32>,
     /// `(start, count)` of subnet heights the EOTS nonce commitment covers.
     pub eots_nonces: Option<(u64, u32)>,
+    /// The genesis balance a `join-ue` prefunds, after its checks and before its transactions.
+    pub initial_balance: Option<InitialBalance>,
+}
+
+/// A genesis balance prefunded with a join: `--initial-balance` to the address of `--from`.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InitialBalance {
+    pub address: Address,
+    pub amount: TokenAmount,
 }
 
 /// Consensus types supported by hierarchical consensus
