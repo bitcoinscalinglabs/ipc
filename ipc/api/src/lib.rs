@@ -13,6 +13,7 @@ use num_traits::ToPrimitive;
 pub mod address;
 pub mod checkpoint;
 pub mod cross;
+pub mod eots;
 pub mod error;
 pub mod gateway;
 #[cfg(feature = "fil-actor")]

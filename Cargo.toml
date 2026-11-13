@@ -12,6 +12,7 @@ members = [
   "ipc/wallet",
   "ipc/provider",
   "ipc/api",
+  "ipc/eots",
   "ipc/types",
   "ipc/observability",
 
@@ -177,6 +178,7 @@ zeroize = "1.6"
 
 # Workspace deps
 ipc-api = { path = "ipc/api" }
+ipc-eots = { path = "ipc/eots" }
 ipc-provider = { path = "ipc/provider" }
 ipc-wallet = { path = "ipc/wallet", features = ["with-ethers"] }
 ipc_ipld_resolver = { path = "ipld/resolver" }

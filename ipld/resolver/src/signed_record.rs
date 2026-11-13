@@ -65,8 +65,25 @@ where
         Ok(signed_record)
     }
 
+    /// Rebuilds a signed record from its parts and verifies it as a received one.
+    pub fn from_parts(key: &PublicKey, record: R, signature: Vec<u8>) -> anyhow::Result<Self> {
+        let payload = fvm_ipld_encoding::to_vec(&record)?;
+        let bytes = encode_envelope(
+            &key.encode_protobuf(),
+            R::payload_type().as_bytes(),
+            &payload,
+            &signature,
+        );
+        let signed_record = Self::from_bytes(&bytes)?;
+        Ok(signed_record)
+    }
+
     pub fn record(&self) -> &R {
         &self.record
+    }
+
+    pub fn signature(&self) -> Vec<u8> {
+        envelope_signature(&self.envelope.clone().into_protobuf_encoding())
     }
 
     pub fn envelope(&self) -> &SignedEnvelope {
@@ -80,6 +97,66 @@ where
     pub fn into_envelope(self) -> SignedEnvelope {
         self.envelope
     }
+}
+
+/// Field numbers of the envelope's protobuf message (libp2p RFC 0002), all length-delimited.
+const ENVELOPE_FIELDS: [u8; 4] = [1, 2, 3, 5];
+const ENVELOPE_SIGNATURE_FIELD: u8 = 5;
+
+fn put_varint(buf: &mut Vec<u8>, mut n: usize) {
+    while n >= 0x80 {
+        buf.push((n as u8) | 0x80);
+        n >>= 7;
+    }
+    buf.push(n as u8);
+}
+
+fn get_varint(bytes: &[u8], pos: &mut usize) -> Option<usize> {
+    let mut n = 0usize;
+    let mut shift = 0;
+    loop {
+        let b = *bytes.get(*pos)?;
+        *pos += 1;
+        n |= usize::from(b & 0x7f) << shift;
+        if b & 0x80 == 0 {
+            return Some(n);
+        }
+        shift += 7;
+        if shift > usize::BITS {
+            return None;
+        }
+    }
+}
+
+/// The protobuf encoding of an envelope, as `SignedEnvelope::into_protobuf_encoding` writes it.
+fn encode_envelope(key: &[u8], payload_type: &[u8], payload: &[u8], signature: &[u8]) -> Vec<u8> {
+    let mut buf = Vec::new();
+    for (field, value) in ENVELOPE_FIELDS
+        .iter()
+        .zip([key, payload_type, payload, signature])
+    {
+        buf.push(field << 3 | 2);
+        put_varint(&mut buf, value.len());
+        buf.extend_from_slice(value);
+    }
+    buf
+}
+
+fn envelope_signature(bytes: &[u8]) -> Vec<u8> {
+    let mut pos = 0;
+    while let Some(tag) = get_varint(bytes, &mut pos) {
+        let Some(len) = get_varint(bytes, &mut pos) else {
+            break;
+        };
+        let Some(value) = bytes.get(pos..pos + len) else {
+            break;
+        };
+        if tag == usize::from(ENVELOPE_SIGNATURE_FIELD) << 3 | 2 {
+            return value.to_vec();
+        }
+        pos += len;
+    }
+    Vec::new()
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -116,5 +193,19 @@ pub mod tests {
             SignedRecord::<R>::from_signed_envelope(envelope).expect("record roundtrip");
 
         signed_record2.into_record() == *signed_record.record()
+    }
+
+    pub fn prop_from_parts<R>(signed_record: SignedRecord<R>, key: &libp2p::identity::PublicKey) -> bool
+    where
+        R: Serialize + DeserializeOwned + Record + PartialEq + Clone,
+    {
+        let signature = signed_record.signature();
+        let rebuilt = SignedRecord::from_parts(key, signed_record.record().clone(), signature.clone())
+            .expect("the envelope rebuilds from its parts");
+        let mut tampered = signature.clone();
+        tampered[0] ^= 1;
+        rebuilt.record() == signed_record.record()
+            && rebuilt.signature() == signature
+            && SignedRecord::from_parts(key, signed_record.record().clone(), tampered).is_err()
     }
 }

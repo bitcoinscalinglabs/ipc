@@ -27,6 +27,7 @@ use fendermint_vm_interpreter::bytes::{
     BytesMessageApplyRes, BytesMessageCheckRes, BytesMessageQuery, BytesMessageQueryRes,
 };
 use fendermint_vm_interpreter::chain::{ChainEnv, ChainMessageApplyRet, IllegalMessage};
+use fendermint_vm_interpreter::fvm::state::ipc::GatewayCaller;
 use fendermint_vm_interpreter::fvm::state::{
     empty_state_tree, CheckStateRef, FvmExecState, FvmQueryState, FvmStateParams,
     FvmUpdatableParams,
@@ -40,6 +41,7 @@ use fendermint_vm_interpreter::{
 };
 use fendermint_vm_message::query::FvmQueryHeight;
 use fendermint_vm_snapshot::{SnapshotClient, SnapshotError};
+use fendermint_vm_topdown::eots::EotsTally;
 use fvm::engine::MultiEngine;
 use fvm_ipld_blockstore::Blockstore;
 use fvm_shared::chainid::ChainID;
@@ -200,6 +202,11 @@ where
             validators_cache: Arc::new(tokio::sync::Mutex::new(None)),
         };
         app.init_committed_state()?;
+        if let (Some(tally), Some(committed)) =
+            (&app.chain_env.eots_votes, app.get_committed_state()?)
+        {
+            tally.set_latest_height(committed.block_height);
+        }
         Ok(app)
     }
 }
@@ -434,6 +441,56 @@ where
         Ok(())
     }
 
+    fn gateway_final_height(&self) -> Option<u64> {
+        let mut state = self.read_only_view(None).ok().flatten()?;
+        GatewayCaller::default()
+            .subnet_final_height(&mut state)
+            .ok()
+    }
+
+    /// Takes the EOTS power table, unless the tally holds one from its store, and the subnet
+    /// final height from the gateway in the committed state.
+    fn seed_eots_tally(&self, tally: &EotsTally) -> Result<()> {
+        let mut state = self
+            .read_only_view(None)?
+            .context("the committed state is not queryable")?;
+        let gateway = GatewayCaller::default();
+        if !tally.has_stored_power_tables() {
+            let (_, validators) = gateway.current_power_table(&mut state)?;
+            crate::eots::set_genesis_power_table(tally, validators)?;
+        }
+        tally.set_latest_height(state.block_height() as u64);
+        tally.set_recorded_final(gateway.subnet_final_height(&mut state)?)
+    }
+
+    /// Notifies the snapshotter of the greatest multiple of the snapshot interval that is above
+    /// `final_before` and at most the gateway's subnet final height, with its state from the
+    /// state history. That state is pruned once the height is `state_hist_size` below the
+    /// committed one: the height then gets no snapshot.
+    async fn notify_final_snapshot(&self, snapshots: &SnapshotClient, final_before: u64) {
+        let Some(final_height) = self.gateway_final_height() else {
+            return;
+        };
+        let height = final_height - final_height % snapshots.snapshot_interval();
+        if height == 0 || height <= final_before {
+            return;
+        }
+        // The history holds the state after a subnet block at the next height.
+        let params = self.state_hist.get(&self.db.read(), &(height + 1));
+        match params {
+            Ok(Some(params)) => atomically(|| snapshots.notify(height, params.clone())).await,
+            Ok(None) => tracing::warn!(
+                height,
+                "no snapshot at this final height: its state is no longer stored"
+            ),
+            Err(e) => tracing::warn!(
+                height,
+                error = %e,
+                "no snapshot at this final height: its state cannot be read"
+            ),
+        }
+    }
+
     /// Retrieves a validator from the cache, initializing it if necessary.
     async fn get_validator_from_cache(&self, id: &tendermint::account::Id) -> Result<PublicKey> {
         let mut cache = self.validators_cache.lock().await;
@@ -563,12 +620,26 @@ where
 
         self.set_committed_state(app_state)?;
 
+        if let Some(tally) = &self.chain_env.eots_votes {
+            let mut state = self
+                .read_only_view(None)?
+                .context("genesis state not queryable")?;
+            let (_, validators) = GatewayCaller::default().current_power_table(&mut state)?;
+            crate::eots::set_genesis_power_table(tally, validators)?;
+        }
+
         Ok(response)
     }
 
     /// Query the application for data at the current or past height.
     #[instrument(level = "trace", skip(self))]
     async fn query(&self, request: request::Query) -> AbciResult<response::Query> {
+        if request.path == crate::eots::QUERY_PATH {
+            return Ok(crate::eots::answer_query(
+                self.chain_env.eots_votes.as_ref(),
+                self.gateway_final_height(),
+            ));
+        }
         let db = self.state_store_clone();
         let height = FvmQueryHeight::from(request.height.value());
         let (state_params, block_height) = self.state_params_at_height(height)?;
@@ -794,6 +865,12 @@ where
             .get_validator_from_cache(&request.header.proposer_address)
             .await?;
 
+        if let Some(tally) = &self.chain_env.eots_votes {
+            tally
+                .add_block(block_height as u64, block_hash)
+                .context("failed to record the block hash for EOTS votes")?;
+        }
+
         let state = FvmExecState::new(db, self.multi_engine.as_ref(), block_height, state_params)
             .context("error creating new state")?
             .with_block_hash(block_hash)
@@ -833,6 +910,7 @@ where
                     to_deliver_tx(ret.fvm, ret.domain_hash, block_hash)
                 }
                 ChainMessageApplyRet::Ipc(ret) => to_deliver_tx(ret, None, block_hash),
+                ChainMessageApplyRet::Eots => response::DeliverTx::default(),
             },
         };
 
@@ -962,12 +1040,22 @@ where
         //    (even though this state will only be available to query from the next height);
         //    CometBFT is going to offer it with the `app_hash` of 901, but in this case that's good, because
         //    that hash reflects the changes made by block 900, which this state param is the result of.
-        if let Some(ref snapshots) = self.snapshots {
-            atomically(|| snapshots.notify(block_height, state.state_params.clone())).await;
-        }
+        // With EOTS finality, the snapshot of a height waits until the height is final.
+        let final_before = match (&self.snapshots, &self.chain_env.eots_votes) {
+            (Some(snapshots), None) => {
+                atomically(|| snapshots.notify(block_height, state.state_params.clone())).await;
+                None
+            }
+            (Some(_), Some(_)) => Some(self.gateway_final_height().unwrap_or_default()),
+            (None, _) => None,
+        };
 
         // Commit app state to the datastore.
         self.set_committed_state(state)?;
+
+        if let (Some(snapshots), Some(final_before)) = (&self.snapshots, final_before) {
+            self.notify_final_snapshot(snapshots, final_before).await;
+        }
 
         // Reset check state.
         let mut guard = self.check_state.lock().await;
@@ -977,6 +1065,10 @@ where
             height: block_height,
             app_hash: HexEncodableBlockHash(app_hash.clone().into()),
         });
+
+        if let Some(tally) = &self.chain_env.eots_votes {
+            tally.notify_committed(block_height);
+        }
 
         Ok(response::Commit {
             data: app_hash.into(),
@@ -1112,6 +1204,10 @@ where
                         state.block_height = snapshot.manifest.block_height;
                         state.state_params = snapshot.manifest.state_params;
                         self.set_committed_state(state)?;
+
+                        if let Some(tally) = &self.chain_env.eots_votes {
+                            self.seed_eots_tally(tally)?;
+                        }
 
                         // TODO: We can remove the `current_download` from the STM
                         // state here which would cause it to get dropped from /tmp,

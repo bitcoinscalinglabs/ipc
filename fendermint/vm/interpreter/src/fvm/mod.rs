@@ -92,6 +92,11 @@ where
     subnet_id: Option<ipc_api::subnet_id::SubnetID>,
     /// The manager of the parent subnet. Only used for bitcoin parent subnets.
     parent_manager: Option<ipc_provider::manager::BtcSubnetManager>,
+    /// The EOTS vote tally, when the parent is Bitcoin: checkpoints are signed only once final.
+    eots_tally: Option<fendermint_vm_topdown::eots::EotsTally>,
+    /// The subnet final height seen at the previous end-block, `None` since the process started:
+    /// the checkpoints that became final since then get their first signatures.
+    last_final_height: std::sync::Arc<std::sync::Mutex<Option<u64>>>,
 }
 
 impl<DB, C> FvmMessageInterpreter<DB, C>
@@ -117,6 +122,8 @@ where
             upgrade_scheduler,
             subnet_id: None,
             parent_manager: None,
+            eots_tally: None,
+            last_final_height: Default::default(),
         }
     }
 
@@ -141,7 +148,14 @@ where
             upgrade_scheduler,
             subnet_id: Some(subnet_id),
             parent_manager: Some(parent_manager),
+            eots_tally: None,
+            last_final_height: Default::default(),
         }
+    }
+
+    pub fn with_eots_tally(mut self, tally: Option<fendermint_vm_topdown::eots::EotsTally>) -> Self {
+        self.eots_tally = tally;
+        self
     }
 
     pub fn with_push_chain_meta(mut self, push_chain_meta: bool) -> Self {

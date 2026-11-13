@@ -25,6 +25,7 @@ cid = { workspace = true }
 fvm_shared = { workspace = true, features  = ["crypto"] }
 fvm_ipld_encoding = { workspace = true }
 ipc-api = { workspace = true }
+ipc-eots = { workspace = true }
 
 fendermint_crypto = { path = "../../crypto" }
 fendermint_vm_encoding = { path = "../encoding" }

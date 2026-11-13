@@ -25,6 +25,18 @@ impl Timestamp {
     }
 }
 
+impl From<u64> for Timestamp {
+    fn from(secs: u64) -> Self {
+        Self(secs)
+    }
+}
+
+impl From<Timestamp> for u64 {
+    fn from(timestamp: Timestamp) -> Self {
+        timestamp.0
+    }
+}
+
 impl Sub<Duration> for Timestamp {
     type Output = Self;
 

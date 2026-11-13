@@ -2,15 +2,15 @@
 pragma solidity ^0.8.23;
 
 import {GatewayActorModifiers} from "../../lib/LibGatewayActorStorage.sol";
-import {BottomUpCheckpoint} from "../../structs/CrossNet.sol";
+import {BottomUpCheckpoint, BottomUpMsgBatch} from "../../structs/CrossNet.sol";
 import {LibGateway} from "../../lib/LibGateway.sol";
 import {LibQuorum} from "../../lib/LibQuorum.sol";
 import {Subnet} from "../../structs/Subnet.sol";
-import {BitcoinCheckpoint, BitcoinBootstrapHandover} from "../../structs/Bitcoin.sol";
+import {BitcoinCheckpoint, SlashPreSignature, SlashOutput, CarriedSlashOutput, MAX_SLASH_PRE_SIGNATURE_BYTES, MAX_SLASH_PRE_SIGNATURES_PER_OUTPUT} from "../../structs/Bitcoin.sol";
 import {QuorumObjKind} from "../../structs/Quorum.sol";
 import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 
-import {InvalidBatchSource, NotEnoughBalance, MaxMsgsPerBatchExceeded, InvalidCheckpointSource, CheckpointAlreadyExists, NotAuthorized, SignatureReplay} from "../../errors/IPCErrors.sol";
+import {InvalidBatchSource, NotEnoughBalance, MaxMsgsPerBatchExceeded, InvalidCheckpointSource, CheckpointAlreadyExists, NotAuthorized, SignatureReplay, InvalidSignature, InvalidSignatureLength} from "../../errors/IPCErrors.sol";
 import {NotRegisteredSubnet, SubnetNotActive, SubnetNotFound, InvalidSubnet, CheckpointNotCreated} from "../../errors/IPCErrors.sol";
 import {BatchNotCreated, InvalidBatchEpoch, BatchAlreadyExists, NotEnoughSubnetCircSupply, InvalidCheckpointEpoch} from "../../errors/IPCErrors.sol";
 
@@ -23,7 +23,8 @@ import {ActivityRollupRecorded, FullActivityRollup} from "../../structs/Activity
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
 event BitcoinCheckpointAdded(uint256 indexed height, address indexed signatory, bytes32 indexed psbtHash);
-event BitcoinBootstrapHandoverAdded(address indexed signatory, bytes32 indexed psbtHash);
+event SubnetFinalHeightSet(uint256 height);
+event SlashPreSignatureAdded(bytes32 indexed txid, uint32 vout, address indexed signatory);
 
 contract CheckpointingFacet is GatewayActorModifiers {
     using SubnetIDHelper for SubnetID;
@@ -162,16 +163,18 @@ contract CheckpointingFacet is GatewayActorModifiers {
         bytes32 psbtHash = keccak256(psbt);
 
         // Check if this is a new PSBT hash for this height
-        bool hashExists = false;
-        bytes32[] storage hashes = s.bitcoinCheckpointPsbtHashes[height];
-        for (uint i = 0; i < hashes.length; i++) {
-            if (hashes[i] == psbtHash) {
-                hashExists = true;
-                break;
+        {
+            bool hashExists = false;
+            bytes32[] storage hashes = s.bitcoinCheckpointPsbtHashes[height];
+            for (uint i = 0; i < hashes.length; i++) {
+                if (hashes[i] == psbtHash) {
+                    hashExists = true;
+                    break;
+                }
             }
-        }
-        if (!hashExists) {
-            s.bitcoinCheckpointPsbtHashes[height].push(psbtHash);
+            if (!hashExists) {
+                s.bitcoinCheckpointPsbtHashes[height].push(psbtHash);
+            }
         }
 
         BitcoinCheckpoint storage btcCheckpoint = s.bitcoinCheckpoints[height][psbtHash];
@@ -200,13 +203,106 @@ contract CheckpointingFacet is GatewayActorModifiers {
         } else {
             btcCheckpoint.signatories.push(signatory);
             btcCheckpoint.signatures[signatory] = signatures;
-            emit BitcoinCheckpointAdded(height, signatory, keccak256(psbt));
+            emit BitcoinCheckpointAdded(height, signatory, psbtHash);
         }
     }
 
-    /// @notice Get the Bitcoin checkpoint with the most signatures for a specific height.
+    /// @notice Stored unverified, one per output and poster, like Bitcoin checkpoint signatures. The next
+    /// checkpoint carries the output with its slash pre-signatures.
+    function addSlashPreSignature(bytes32 txid, uint32 vout, bytes calldata signature) external {
+        if (signature.length != 64) {
+            revert InvalidSignatureLength();
+        }
+        address signatory = msg.sender;
+
+        // Check if the signatory is a member of the configuration that the output's slash leaf names
+        // if (!ok) {
+        //     revert NotAuthorized(signatory);
+        // }
+
+        bytes32 posted = keccak256(abi.encode(txid, vout, signatory));
+        if (s.slashPreSignaturePosted[posted]) {
+            revert SignatureReplay();
+        }
+        s.slashPreSignaturePosted[posted] = true;
+
+        bytes32 key = keccak256(abi.encode(txid, vout));
+        SlashOutput storage output = s.slashOutputs[key];
+        output.signatures.push(SlashPreSignature({txid: txid, vout: vout, signature: signature}));
+        if (!output.queued) {
+            output.queued = true;
+            s.slashOutputsToCarry.push(key);
+        }
+        emit SlashPreSignatureAdded(txid, vout, signatory);
+    }
+
+    /// @notice Called at the creation of the checkpoint at `height`. It carries the outputs waiting in
+    /// `slashOutputsToCarry`, in order, each with its slash pre-signatures, at most the first
+    /// `MAX_SLASH_PRE_SIGNATURES_PER_OUTPUT` posted, as many outputs as `MAX_SLASH_PRE_SIGNATURE_BYTES`
+    /// allows. `supplyAdjustmentBytes` is the payload size of the supply adjustments that the
+    /// checkpoint carries after its bottom-up messages. Returns the number of slash pre-signatures carried.
+    function carrySlashPreSignatures(
+        uint256 height,
+        uint256 supplyAdjustmentBytes
+    ) external systemActorOnly returns (uint64 count) {
+        // the payloads of the checkpoint's messages (token names and symbols) share the same transaction
+        uint256 size = supplyAdjustmentBytes;
+        (, BottomUpMsgBatch storage batch) = LibGateway.getBottomUpMsgBatch(height);
+        for (uint256 j; j < batch.msgs.length; ++j) {
+            size += batch.msgs[j].message.length;
+        }
+        uint256 i = s.slashOutputsToCarryStart;
+        uint256 end = s.slashOutputsToCarry.length;
+        for (; i < end; ++i) {
+            bytes32 key = s.slashOutputsToCarry[i];
+            SlashOutput storage output = s.slashOutputs[key];
+            uint256 n = output.signatures.length;
+            if (n > MAX_SLASH_PRE_SIGNATURES_PER_OUTPUT) {
+                n = MAX_SLASH_PRE_SIGNATURES_PER_OUTPUT;
+            }
+            size += 40 + 67 * n;
+            if (size > MAX_SLASH_PRE_SIGNATURE_BYTES) {
+                break;
+            }
+            output.queued = false;
+            output.carriedHeight = height;
+            s.slashOutputsCarried[height].push(CarriedSlashOutput({output: key, count: uint32(n)}));
+            count += uint64(n);
+        }
+        s.slashOutputsToCarryStart = i;
+    }
+
+    /// @notice The slash pre-signatures that the checkpoint at `height` carries.
+    function getSlashPreSignatures(uint256 height) external view returns (SlashPreSignature[] memory signatures) {
+        CarriedSlashOutput[] storage carried = s.slashOutputsCarried[height];
+        uint256 total;
+        for (uint256 i; i < carried.length; ++i) {
+            total += carried[i].count;
+        }
+        signatures = new SlashPreSignature[](total);
+        uint256 k;
+        for (uint256 i; i < carried.length; ++i) {
+            SlashPreSignature[] storage posted = s.slashOutputs[carried[i].output].signatures;
+            for (uint256 j; j < carried[i].count; ++j) {
+                signatures[k++] = posted[j];
+            }
+        }
+    }
+
+    /// @notice The height of the last checkpoint that carried the output's slash pre-signatures (0 if none),
+    /// and whether `signatory` has posted for the output.
+    function getSlashOutput(
+        bytes32 txid,
+        uint32 vout,
+        address signatory
+    ) external view returns (uint256 carriedHeight, bool posted) {
+        SlashOutput storage output = s.slashOutputs[keccak256(abi.encode(txid, vout))];
+        return (output.carriedHeight, s.slashPreSignaturePosted[keccak256(abi.encode(txid, vout, signatory))]);
+    }
+
+    /// @notice Get the Bitcoin checkpoint with the most signer weight (as verified at signing) at a height.
     /// @param height - The height of the block in the checkpoint.
-    /// @return psbt - The base64 of the PSBT with the most signatures.
+    /// @return psbt - The base64 of the PSBT with the most weight.
     /// @return batchTransferTx - The hex of the batch transfer transaction, if present.
     /// @return signatories - The list of validators who signed.
     /// @return signatures - The list of signatures corresponding to the signatories.
@@ -234,25 +330,19 @@ contract CheckpointingFacet is GatewayActorModifiers {
             return (new bytes(0), new bytes(0), new address[](0), new bytes[](0));
         }
 
-        // Find the checkpoint with the most signatures
-        bytes32 mostSignedPsbtHash;
-        uint256 maxSignatures = 0;
+        // Ties keep the first.
+        bytes32 mostWeightPsbtHash = hashes[0];
+        uint256 maxWeight = signersWeight(height, hashes[0]);
 
-        for (uint256 i = 0; i < hashes.length; i++) {
-            bytes32 currentHash = hashes[i];
-            BitcoinCheckpoint storage currentCheckpoint = s.bitcoinCheckpoints[height][currentHash];
-
-            uint256 signatureCount = currentCheckpoint.signatories.length;
-
-            // When multiple PSBTs have the same number of signatures,
-            if (signatureCount > maxSignatures) {
-                maxSignatures = signatureCount;
-                mostSignedPsbtHash = currentHash;
+        for (uint256 i = 1; i < hashes.length; i++) {
+            uint256 weight = signersWeight(height, hashes[i]);
+            if (weight > maxWeight) {
+                maxWeight = weight;
+                mostWeightPsbtHash = hashes[i];
             }
         }
 
-        // Get the checkpoint with the most signatures
-        BitcoinCheckpoint storage btcCheckpoint = s.bitcoinCheckpoints[height][mostSignedPsbtHash];
+        BitcoinCheckpoint storage btcCheckpoint = s.bitcoinCheckpoints[height][mostWeightPsbtHash];
 
         // Return the PSBT and batch transfer tx
         psbt = btcCheckpoint.psbt;
@@ -270,104 +360,32 @@ contract CheckpointingFacet is GatewayActorModifiers {
         return (psbt, batchTransferTx, signatories, signatures);
     }
 
-    function addBitcoinBootstrapHandoverSignature(
-        bytes calldata psbt,
-        bytes calldata signatures
-    ) external {
-
-        address signatory = msg.sender;
-        bytes32 psbtHash = keccak256(psbt);
-
-        // Check if this is a new PSBT hash
-        bool hashExists = false;
-        for (uint i = 0; i < s.bitcoinBootstrapHandoverPsbtHashes.length; i++) {
-            if (s.bitcoinBootstrapHandoverPsbtHashes[i] == psbtHash) {
-                hashExists = true;
-                break;
+    function hasBitcoinCheckpointSignature(uint256 height, address signatory) external view returns (bool) {
+        bytes32[] storage hashes = s.bitcoinCheckpointPsbtHashes[height];
+        for (uint256 i = 0; i < hashes.length; i++) {
+            address[] storage signatories = s.bitcoinCheckpoints[height][hashes[i]].signatories;
+            for (uint256 j = 0; j < signatories.length; j++) {
+                if (signatories[j] == signatory) {
+                    return true;
+                }
             }
         }
-        if (!hashExists) {
-            s.bitcoinBootstrapHandoverPsbtHashes.push(psbtHash);
-        }
+        return false;
+    }
 
-        BitcoinBootstrapHandover storage btcHandover = s.bitcoinBootstrapHandovers[psbtHash];
-        // Set the PSBT if it hasn't been set yet
-        if (btcHandover.psbt.length == 0) {
-            btcHandover.psbt = psbt;
-        }
-
-        // Check if sender is already a signatory
-        bool alreadySigned = false;
-        for (uint i = 0; i < btcHandover.signatories.length; i++) {
-            if (btcHandover.signatories[i] == signatory) {
-                alreadySigned = true;
-                break;
-            }
-        }
-
-        // Add the signature to the Bitcoin handover transaction if not already a signatory
-        if (alreadySigned) {
-            revert SignatureReplay();
-        } else {
-            btcHandover.signatories.push(signatory);
-            btcHandover.signatures[signatory] = signatures;
-            emit BitcoinBootstrapHandoverAdded(signatory, keccak256(psbt));
+    function signersWeight(uint256 height, bytes32 psbtHash) internal view returns (uint256 weight) {
+        address[] storage signatories = s.bitcoinCheckpoints[height][psbtHash].signatories;
+        for (uint256 i = 0; i < signatories.length; i++) {
+            weight += s.checkpointQuorumMap.quorumSignerWeights[height][signatories[i]];
         }
     }
 
-    /// @notice Get the Bitcoin bootstrap handover with the most signatures.
-    /// @return psbt - The base64 of the PSBT with the most signatures.
-    /// @return signatories - The list of validators who signed.
-    /// @return signatures - The list of signatures corresponding to the signatories.
-    function getBitcoinBootstrapHandoverSignatures(
-    )
-        external
-        view
-        returns (
-            bytes memory psbt,
-            address[] memory signatories,
-            bytes[] memory signatures
-        )
-    {
-        bytes32[] storage hashes = s.bitcoinBootstrapHandoverPsbtHashes;
-        if (hashes.length == 0) {
-            // No Bitcoin handovers found
-            return (new bytes(0), new address[](0), new bytes[](0));
+    function setSubnetFinalHeight(uint256 height) external systemActorOnly {
+        if (height <= s.subnetFinalHeight) {
+            return;
         }
-
-        // Find the checkpoint with the most signatures
-        bytes32 mostSignedPsbtHash;
-        uint256 maxSignatures = 0;
-
-        for (uint256 i = 0; i < hashes.length; i++) {
-            bytes32 currentHash = hashes[i];
-            BitcoinBootstrapHandover storage currentHandover = s.bitcoinBootstrapHandovers[currentHash];
-
-            uint256 signatureCount = currentHandover.signatories.length;
-
-            // When multiple PSBTs have the same number of signatures, keep the first
-            if (signatureCount > maxSignatures) {
-                maxSignatures = signatureCount;
-                mostSignedPsbtHash = currentHash;
-            }
-        }
-
-        // Get the handover with the most signatures
-        BitcoinBootstrapHandover storage btcHandover = s.bitcoinBootstrapHandovers[mostSignedPsbtHash];
-
-        // Return the PSBT
-        psbt = btcHandover.psbt;
-
-        // Return signatories
-        signatories = btcHandover.signatories;
-
-        // Map signatories to their signatures
-        signatures = new bytes[](signatories.length);
-        for (uint256 i = 0; i < signatories.length; i++) {
-            signatures[i] = btcHandover.signatures[signatories[i]];
-        }
-
-        return (psbt, signatories, signatures);
+        s.subnetFinalHeight = height;
+        emit SubnetFinalHeightSet(height);
     }
 
     /// @notice submit a batch of cross-net messages for execution.

@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 pub enum AppVote {
     /// The validator considers a certain block final on the parent chain.
     ParentFinality(IPCParentFinality),
+    Eots(ipc_eots::EotsVote),
 }
 
 /// Queries the LATEST COMMITTED parent finality from the storage

@@ -154,4 +154,10 @@ mod tests {
     fn prop_roundtrip(signed_record: SignedVoteRecord<String>) -> bool {
         crate::signed_record::tests::prop_roundtrip(signed_record)
     }
+
+    #[quickcheck]
+    fn prop_from_parts(signed_record: SignedVoteRecord<String>) -> bool {
+        let key = signed_record.record().public_key.clone().into();
+        crate::signed_record::tests::prop_from_parts(signed_record, &key)
+    }
 }

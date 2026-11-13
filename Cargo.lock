@@ -3106,6 +3106,7 @@ dependencies = [
  "fvm_shared",
  "hex",
  "ipc-api",
+ "ipc-eots",
  "ipc-observability",
  "ipc-provider",
  "ipc_ipld_resolver",
@@ -3124,6 +3125,7 @@ dependencies = [
  "prost",
  "quickcheck",
  "quickcheck_macros",
+ "rand",
  "rand_chacha",
  "serde",
  "serde_json",
@@ -3263,6 +3265,7 @@ dependencies = [
  "fvm_shared",
  "hex",
  "ipc-api",
+ "ipc-eots",
  "jsonrpc-v2",
  "lazy_static",
  "lru_time_cache",
@@ -3621,6 +3624,7 @@ dependencies = [
  "fvm_shared",
  "hex",
  "ipc-api",
+ "ipc-eots",
  "lazy_static",
  "num-traits",
  "quickcheck",
@@ -3703,6 +3707,7 @@ dependencies = [
  "hex",
  "im",
  "ipc-api",
+ "ipc-eots",
  "ipc-observability",
  "ipc-provider",
  "ipc_actors_abis",
@@ -5361,6 +5366,7 @@ dependencies = [
  "fvm_ipld_hamt",
  "fvm_shared",
  "integer-encoding",
+ "ipc-eots",
  "ipc-types",
  "ipc_actors_abis",
  "lazy_static",
@@ -5427,6 +5433,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ipc-eots"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "k256 0.13.4",
+ "postcard",
+ "serde",
+ "serde_json",
+ "sha2 0.10.8",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "ipc-observability"
 version = "0.1.0"
 dependencies = [
@@ -5463,6 +5482,7 @@ dependencies = [
  "http",
  "indoc",
  "ipc-api",
+ "ipc-eots",
  "ipc-observability",
  "ipc-types",
  "ipc-wallet",

@@ -10,6 +10,7 @@ pub mod convert;
 pub mod proxy;
 mod toggle;
 pub mod voting;
+pub mod eots;
 
 pub mod observe;
 

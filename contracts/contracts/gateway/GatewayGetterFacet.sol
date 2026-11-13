@@ -196,6 +196,11 @@ contract GatewayGetterFacet {
         return s.checkpointQuorumMap.quorumInfo[h].currentWeight;
     }
 
+    /// @notice 0 before the first `EotsFinality`.
+    function subnetFinalHeight() external view returns (uint256) {
+        return s.subnetFinalHeight;
+    }
+
     /// @notice Returns the incomplete checkpoint heights.
     function getIncompleteCheckpointHeights() external view returns (uint256[] memory) {
         return s.checkpointQuorumMap.incompleteQuorums.values();

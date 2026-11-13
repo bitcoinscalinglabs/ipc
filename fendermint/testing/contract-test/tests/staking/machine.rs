@@ -285,6 +285,7 @@ impl StateMachine for StakingMachine {
                     block_height: ethers::types::U256::from(*block_height),
                     block_hash: *block_hash,
                     next_configuration_number: *next_configuration_number,
+                    slash_pre_signature_count: 0,
                     msgs: Vec::new(),
                     activity: Default::default(),
                 };

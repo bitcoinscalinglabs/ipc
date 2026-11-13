@@ -384,6 +384,11 @@ async fn new_genesis_from_parent(
             .clone()
             .unwrap_or_else(|| args.subnet_id.clone()),
     };
+    // A Bitcoin parent fixes the power unit: one power per 10^p satoshis
+    let power_scale = match genesis_info.power_unit_exponent {
+        Some(p) => 8 - p as i8,
+        None => args.power_scale,
+    };
     let mut genesis = Genesis {
         // We set the genesis epoch as the genesis timestamp so it can be
         // generated deterministically by all participants
@@ -393,7 +398,7 @@ async fn new_genesis_from_parent(
         chain_name: args.subnet_id.to_string(),
         network_version: args.network_version,
         base_fee: args.base_fee.clone(),
-        power_scale: args.power_scale,
+        power_scale,
         validators: Vec::new(),
         accounts: Vec::new(),
         eam_permission_mode: PermissionMode::Unrestricted,

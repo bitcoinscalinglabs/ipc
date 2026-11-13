@@ -70,6 +70,13 @@ pub trait SubnetManager:
     /// and reduce their power in the subnet.
     async fn unstake(&self, params: JoinParams) -> Result<()>;
 
+    /// Submits the exit transaction of this validator's matured collaterals. Bitcoin parents only.
+    async fn unstake_ue(&self, subnet: SubnetID) -> Result<ExitTransaction> {
+        Err(anyhow::anyhow!(
+            "unstake-ue is not supported on this parent network (subnet {subnet})"
+        ))
+    }
+
     /// Sends a request to leave a subnet from a wallet address.
     async fn leave_subnet(&self, subnet: SubnetID, from: Address) -> Result<()>;
 
@@ -255,14 +262,8 @@ pub trait SubnetManager:
         &self,
         subnet_id: &SubnetID,
         checkpoint: BottomUpCheckpoint,
+        slash_signatures: Vec<ipc_api::eots::SlashPreSignature>,
     ) -> Result<ipc_api::checkpoint::BitcoinCheckpointSignature>;
-
-    /// This function asks the parent subnet (bitcoin) to generate the required transaction for the initial handover.
-    /// It is only required when the parent subnet is bitcoin.
-    async fn get_bootstrap_handover_transaction(
-        &self,
-        subnet_id: &SubnetID,
-    ) -> Result<ipc_api::checkpoint::BitcoinHandoverSignature>;
 
     /// Fetches rewarded collaterals for a snapshot. Only supported when the parent subnet is Bitcoin.
     async fn get_rewarded_collaterals(
@@ -282,9 +283,21 @@ pub struct GetRewardedCollateralsResponse {
     pub snapshot: u64,
 }
 
+/// The exit transaction `unstake_ue` submitted.
+#[derive(Debug, Clone)]
+pub struct ExitTransaction {
+    pub txid: String,
+    /// The collateral spent, in sats
+    pub amount: u64,
+    /// The backup address it pays, minus the fee
+    pub address: String,
+}
+
 #[derive(Debug)]
 pub struct SubnetGenesisInfo {
     pub bottom_up_checkpoint_period: u64,
+    /// `p` of a Bitcoin parent: one unit of power is `10^p` satoshis
+    pub power_unit_exponent: Option<u8>,
     pub majority_percentage: u8,
     pub active_validators_limit: u16,
     pub min_collateral: TokenAmount,
@@ -366,19 +379,10 @@ pub trait BottomUpCheckpointRelayer: Send + Sync {
     /// Get the current epoch in the current subnet
     async fn current_epoch(&self) -> Result<ChainEpoch>;
 
-    /// Submit a bootstrap handover signature for the given subnet.
-    /// Used only when the parent subnet is bitcoin.
-    async fn submit_bootstrap_handover(
-        &self,
-        subnet_id: &SubnetID,
-        handover_signatures: ipc_api::checkpoint::BitcoinHandoverSignatureQuorum,
-    ) -> Result<ChainEpoch>;
-
-    /// Get the bootstrap handover signatures.
-    async fn get_bootstrap_handover_signatures(
-        &self,
-        height: ChainEpoch,
-    ) -> Result<ipc_api::checkpoint::BitcoinHandoverSignatureQuorum>;
+    /// The child subnet's latest final height.
+    async fn finalized_epoch(&self) -> Result<ChainEpoch> {
+        self.current_epoch().await
+    }
 }
 
 /// The validator reward related functions, such as check reward and claim reward for mining blocks

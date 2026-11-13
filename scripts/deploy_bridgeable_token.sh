@@ -70,6 +70,70 @@ if ! command -v cast &>/dev/null; then
     exit 1
 fi
 
+# A validator can submit checkpoint signatures between nonce lookup and broadcast.
+send_with_nonce_retry() {
+    local tool="$1" action="$2"; shift 2
+    local nonce output error error_file attempt
+    error_file=$(mktemp) || return 1
+    for attempt in 1 2 3 4 5; do
+        if ! nonce=$(cast nonce "$DEPLOYER" --block pending --rpc-url "$RPC_URL" --rpc-timeout 5) \
+            || [[ ! "$nonce" =~ ^(0[xX][0-9a-fA-F]+|[0-9]+)$ ]]; then
+            echo "error: cannot read a valid pending nonce for $DEPLOYER" >&2
+            rm -f "$error_file"
+            return 1
+        fi
+        if output=$("$tool" "$action" --nonce "$nonce" "$@" 2>"$error_file"); then
+            cat "$error_file" >&2
+            rm -f "$error_file"
+            printf '%s\n' "$output"
+            return 0
+        fi
+        error=$(cat "$error_file")
+        if [[ "$error" =~ expected[[:space:]]sequence[[:space:]]([0-9]+),[[:space:]]got[[:space:]]([0-9]+) ]] \
+            && (( BASH_REMATCH[2] == nonce && BASH_REMATCH[1] != nonce && attempt < 5 )); then
+            echo "Nonce $nonce was rejected; refreshing the pending nonce (attempt $((attempt + 1))/5)." >&2
+            sleep 1
+            continue
+        fi
+        printf '%s\n' "$error" "$output" >&2
+        rm -f "$error_file"
+        return 1
+    done
+}
+
+# Wait for execution and for the nonce source used by the next transaction to catch up.
+wait_for_transaction() {
+    local tx_hash="$1"
+    local receipt_status tx_nonce observed_nonce block_tag deadline
+
+    receipt_status=$(cast receipt "$tx_hash" status --rpc-url "$RPC_URL" --confirmations 1) || return 1
+    if [[ ! "$receipt_status" =~ ^[[:space:]]*(true|1|0[xX]0*1)([[:space:]]+\(success\))?[[:space:]]*$ ]]; then
+        echo "error: transaction $tx_hash failed (status $receipt_status)" >&2
+        return 1
+    fi
+    tx_nonce=$(cast tx "$tx_hash" nonce --rpc-url "$RPC_URL") || return 1
+    if [[ ! "$tx_nonce" =~ ^(0[xX][0-9a-fA-F]+|[0-9]+)$ ]]; then
+        echo "error: invalid nonce for transaction $tx_hash: $tx_nonce" >&2
+        return 1
+    fi
+    deadline=$((SECONDS + 90))
+    for block_tag in latest pending; do
+        observed_nonce="unavailable"
+        while true; do
+            if observed_nonce=$(cast nonce "$DEPLOYER" --block "$block_tag" --rpc-url "$RPC_URL" --rpc-timeout 5 2>/dev/null) \
+                && [[ "$observed_nonce" =~ ^(0[xX][0-9a-fA-F]+|[0-9]+)$ ]] \
+                && (( observed_nonce > tx_nonce )); then
+                break
+            fi
+            if (( SECONDS >= deadline )); then
+                echo "error: $block_tag nonce after transaction $tx_hash did not advance past $tx_nonce (got $observed_nonce)" >&2
+                return 1
+            fi
+            sleep 1
+        done
+    done
+}
+
 # ── Derive deployer address and check balance ──
 
 DEPLOYER=$(cast wallet address --private-key "$PRIVATE_KEY" 2>/dev/null) || {
@@ -114,7 +178,12 @@ FORGE_CMD+=(
 )
 
 DEPLOY_OUTPUT=$(
-    cd "$CONTRACT_DIR" && "${FORGE_CMD[@]}"
+    cd "$CONTRACT_DIR" || exit 1
+    if [[ -n "$BROADCAST" ]]; then
+        send_with_nonce_retry "${FORGE_CMD[@]}"
+    else
+        "${FORGE_CMD[@]}"
+    fi
 ) || {
     echo "error: deployment failed"
     echo "$DEPLOY_OUTPUT"
@@ -139,28 +208,34 @@ fi
 
 # ── Register the token on the Gateway ──
 
-# Wait for the deploy transaction to be confirmed before registering,
-# otherwise cast send may fetch a stale nonce.
-DEPLOY_TX_HASH=$(echo "$DEPLOY_OUTPUT" | grep -i "Transaction hash:" | awk '{print $NF}')
-if [[ -n "$DEPLOY_TX_HASH" ]]; then
-    cast receipt "$DEPLOY_TX_HASH" --rpc-url "$RPC_URL" --confirmations 1 > /dev/null 2>&1 || true
+# Wait for the deploy transaction before fetching the registration nonce.
+DEPLOY_TX_HASH=$(echo "$DEPLOY_OUTPUT" | awk 'tolower($0) ~ /transaction hash:/ {print $NF}')
+if [[ ! "$DEPLOY_TX_HASH" =~ ^0x[0-9a-fA-F]{64}$ ]]; then
+    echo "error: could not parse deployment transaction hash" >&2
+    exit 1
 fi
+wait_for_transaction "$DEPLOY_TX_HASH"
 
 echo ""
 echo "Registering token on gateway $GATEWAY_ADDRESS ..."
 
-REGISTER_OUTPUT=$(
-    cast send "$GATEWAY_ADDRESS" \
+REGISTER_TX_HASH=$(
+    send_with_nonce_retry cast send "$GATEWAY_ADDRESS" \
         "registerBridgeableToken(address)" \
         "$TOKEN_ADDRESS" \
         --rpc-url "$RPC_URL" \
         --private-key "$PRIVATE_KEY" \
-        --confirmations 1
+        --async
 ) || {
     echo "error: registration failed"
-    echo "$REGISTER_OUTPUT"
+    echo "$REGISTER_TX_HASH"
     exit 1
 }
+if [[ ! "$REGISTER_TX_HASH" =~ ^0x[0-9a-fA-F]{64}$ ]]; then
+    echo "error: could not parse registration transaction hash" >&2
+    exit 1
+fi
+wait_for_transaction "$REGISTER_TX_HASH"
 
 echo "Token registered for cross-subnet bridging."
 echo ""

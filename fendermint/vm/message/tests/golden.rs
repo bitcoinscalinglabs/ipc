@@ -43,6 +43,28 @@ mod chain {
         }
       }
     }
+
+    golden_cbor! { "chain", ipc_eots_finality, |_g| {
+        let vote = |block_hash| ipc_eots::ValidatorVote {
+            validator: vec![2; 33],
+            vote: ipc_eots::EotsVote {
+                pk_eots: [1; 32],
+                height: 7,
+                block_hash,
+                signature: [[3; 32], [4; 32]],
+                start: 5,
+                proof: vec![[6; 32]],
+            },
+            timestamp: 8,
+            signature: vec![9; 65],
+        };
+        ChainMessage::Ipc(IpcMessage::EotsFinality(ipc_eots::EotsFinalityData {
+            bitcoin_height: 100,
+            votes: vec![vote([10; 32])],
+            evidence: vec![(vote([10; 32]), vote([11; 32]))],
+        }))
+      }
+    }
 }
 
 /// Examples of FVM messages, which is what the client needs to sign.
