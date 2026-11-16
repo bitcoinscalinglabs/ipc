@@ -323,6 +323,40 @@ fn a_forged_postcard_proof_length_fails_to_decode() {
 }
 
 #[test]
+fn from_bytes_accepts_only_the_exact_encoding_of_a_vote() {
+    let signer = reference_signer(7, 1, 3);
+    let vote = reference_vote(&signer, &[42; 20], 1, [9; 32]);
+    let encoded = vote.to_bytes();
+    assert_eq!(encoded, postcard::to_stdvec(&vote).unwrap());
+    assert_eq!(EotsVote::from_bytes(&encoded), Some(vote));
+    let mut longer = encoded.clone();
+    longer.push(0);
+    assert_eq!(EotsVote::from_bytes(&longer), None);
+    // The height 1 as a two-byte varint.
+    let mut padded = encoded;
+    padded.splice(32..33, [0x81, 0x00]);
+    assert_eq!(EotsVote::from_bytes(&padded), None);
+}
+
+#[test]
+fn a_validator_vote_carries_the_vote_as_its_encoding() {
+    let signer = reference_signer(7, 1, 3);
+    let vote = reference_vote(&signer, &[42; 20], 1, [9; 32]);
+    let record = ValidatorVote {
+        validator: vec![2; 33],
+        vote: vote.clone(),
+        timestamp: 5,
+        signature: vec![7; 64],
+    };
+    let json = serde_json::to_value(&record).unwrap();
+    assert_eq!(json["vote"], serde_json::json!(vote.to_bytes()));
+    assert_eq!(
+        serde_json::from_value::<ValidatorVote>(json).unwrap(),
+        record
+    );
+}
+
+#[test]
 fn json_vote_fields_with_a_wrong_width_fail_to_decode() {
     let vote = TestSigner::new(7, 1, 4).vote(&[42; 20], 1, [1; 32]);
     for field in [

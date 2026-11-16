@@ -18,6 +18,17 @@ pub struct RocksDbConfig {
     pub parallelism: i32,
     /// This is the `memtable` size in bytes.
     pub write_buffer_size: usize,
+    /// Number of write buffers of a column family, the one being written included.
+    pub max_write_buffer_number: i32,
+    /// Bytes of write history, flushed write buffers included, that a column family keeps in memory
+    /// for the conflict check of optimistic transactions; -1 means
+    /// `max_write_buffer_number * write_buffer_size`.
+    pub max_write_buffer_size_to_maintain: i64,
+    /// Cap in bytes on the write buffers of all column families together; 0 means no cap.
+    pub db_write_buffer_size: usize,
+    /// Size in bytes of the write-ahead log above which the column families holding its oldest part
+    /// are flushed; 0 means 4 times the write buffers of all column families.
+    pub max_total_wal_size: u64,
     pub max_open_files: i32,
     pub max_background_jobs: Option<i32>,
     pub compaction_style: String,
@@ -35,6 +46,10 @@ impl Default for RocksDbConfig {
             create_if_missing: true,
             parallelism: num_cpus::get() as i32,
             write_buffer_size: 2usize.pow(30), // 1 GiB
+            max_write_buffer_number: 2,
+            max_write_buffer_size_to_maintain: -1,
+            db_write_buffer_size: 0,
+            max_total_wal_size: 0,
             max_open_files: -1,
             max_background_jobs: None,
             compaction_style: "none".into(),
@@ -54,6 +69,10 @@ impl From<&RocksDbConfig> for Options {
         db_opts.create_if_missing(config.create_if_missing);
         db_opts.increase_parallelism(config.parallelism);
         db_opts.set_write_buffer_size(config.write_buffer_size);
+        db_opts.set_max_write_buffer_number(config.max_write_buffer_number);
+        db_opts.set_max_write_buffer_size_to_maintain(config.max_write_buffer_size_to_maintain);
+        db_opts.set_db_write_buffer_size(config.db_write_buffer_size);
+        db_opts.set_max_total_wal_size(config.max_total_wal_size);
         db_opts.set_max_open_files(config.max_open_files);
 
         if let Some(max_background_jobs) = config.max_background_jobs {
@@ -207,6 +226,73 @@ mod test {
             } else {
                 assert!(expected.is_err());
             }
+        }
+    }
+
+    /// The section of a RocksDB `OPTIONS` file that starts with `header`.
+    fn options_section<'a>(options: &'a str, header: &str) -> &'a str {
+        let rest = &options[options.find(header).expect("section present") + header.len()..];
+        &rest[..rest.find("\n[").unwrap_or(rest.len())]
+    }
+
+    #[test]
+    fn write_buffer_options_apply_to_every_column_family() {
+        // (configured write history, write history RocksDB applies)
+        for (maintain, applied) in [(-1, 64 << 20), (32 << 20, 32 << 20)] {
+            let dir = tempfile::tempdir().unwrap();
+            let config = RocksDbConfig {
+                write_buffer_size: 32 << 20,
+                max_write_buffer_size_to_maintain: maintain,
+                db_write_buffer_size: 256 << 20,
+                max_total_wal_size: 256 << 20,
+                ..Default::default()
+            };
+            // "a" is created after a first open, then opened by descriptor; "b" is created after a reopen.
+            drop(crate::RocksDb::open_cf(dir.path(), &config, ["a"].iter()).unwrap());
+            drop(crate::RocksDb::open_cf(dir.path(), &config, ["a", "b"].iter()).unwrap());
+
+            let latest = std::fs::read_dir(dir.path())
+                .unwrap()
+                .map(|e| e.unwrap().file_name().into_string().unwrap())
+                .filter(|n| n.starts_with("OPTIONS-"))
+                .max()
+                .unwrap();
+            let options = std::fs::read_to_string(dir.path().join(latest)).unwrap();
+            let has = |section: &str, line: String| {
+                options_section(&options, section)
+                    .lines()
+                    .any(|l| l.trim() == line)
+            };
+            assert!(has("[DBOptions]", "db_write_buffer_size=268435456".into()));
+            assert!(has("[DBOptions]", "max_total_wal_size=268435456".into()));
+            for cf in ["default", "a", "b"] {
+                let section = format!("[CFOptions \"{cf}\"]");
+                assert!(has(&section, "write_buffer_size=33554432".into()), "{cf}");
+                assert!(has(&section, "max_write_buffer_number=2".into()), "{cf}");
+                assert!(
+                    has(
+                        &section,
+                        format!("max_write_buffer_size_to_maintain={applied}")
+                    ),
+                    "{cf}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_write_history_below_one_write_buffer_is_refused() {
+        for maintain in [0, 16 << 20] {
+            let dir = tempfile::tempdir().unwrap();
+            let config = RocksDbConfig {
+                write_buffer_size: 32 << 20,
+                max_write_buffer_size_to_maintain: maintain,
+                ..Default::default()
+            };
+            assert!(
+                crate::RocksDb::open(dir.path(), &config).is_err(),
+                "{maintain}"
+            );
         }
     }
 }

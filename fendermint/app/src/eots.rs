@@ -7,8 +7,8 @@ use anyhow::Context;
 use fendermint_storage::{Codec, KVCollection, KVReadable, KVStore, KVWritable};
 use fendermint_vm_genesis::{Power, Validator};
 use fendermint_vm_topdown::eots::{
-    below_conflict, key_bytes_of, EnvelopeCheck, EotsStore, EotsTally, KeyBytes, StoredState,
-    VoteOutcome,
+    below_conflict, key_bytes_of, EnvelopeCheck, EotsStore, EotsTally, FinalEntries, KeyBytes,
+    StoredState, VoteOutcome,
 };
 use fendermint_vm_topdown::voting::Weight;
 use ipc_api::subnet_id::SubnetID;
@@ -23,11 +23,15 @@ pub const QUERY_PATH: &str = "/eots";
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum EotsKey {
-    Vote([u8; 32], u64, [u8; 32]),
+    Vote(
+        #[serde(with = "serde_bytes")] [u8; 32],
+        u64,
+        #[serde(with = "serde_bytes")] [u8; 32],
+    ),
     Block(u64),
     Final,
     Checkpointed,
-    EvidenceCarried([u8; 32]),
+    EvidenceCarried(#[serde(with = "serde_bytes")] [u8; 32]),
     PowerTable(u64),
     LastCast,
 }
@@ -35,14 +39,17 @@ pub enum EotsKey {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum EotsValue {
     Vote(ValidatorVote),
-    Block([u8; 32]),
+    Block(#[serde(with = "serde_bytes")] [u8; 32]),
     Final(u64),
     Checkpointed(u64),
     Carried,
-    /// Validator keys with their weights (serde has no array of 33 bytes)
-    PowerTable(Vec<(Vec<u8>, Weight)>),
+    PowerTable(Vec<PowerEntry>),
     LastCast(u64),
 }
+
+/// A validator key with its weight.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct PowerEntry(#[serde(with = "serde_bytes")] KeyBytes, Weight);
 
 pub struct AppEotsStore<DB, S: KVStore> {
     db: DB,
@@ -99,7 +106,7 @@ where
     }
 
     fn put_power_table(&self, height: u64, table: &[(KeyBytes, Weight)]) -> anyhow::Result<()> {
-        let table = table.iter().map(|(k, w)| (k.to_vec(), *w)).collect();
+        let table = table.iter().map(|&(k, w)| PowerEntry(k, w)).collect();
         self.put(&EotsKey::PowerTable(height), &EotsValue::PowerTable(table))
     }
 
@@ -107,24 +114,17 @@ where
         self.put(&EotsKey::LastCast, &EotsValue::LastCast(height))
     }
 
-    fn delete_up_to(&self, height: u64, power_tables_from: u64) -> anyhow::Result<()> {
+    fn delete(&self, entries: &FinalEntries) -> anyhow::Result<()> {
+        let keys: Vec<EotsKey> = entries
+            .votes
+            .iter()
+            .map(|&(pk_eots, h, b)| EotsKey::Vote(pk_eots, h, b))
+            .chain(entries.blocks.iter().map(|&h| EotsKey::Block(h)))
+            .chain(entries.power_tables.iter().map(|&h| EotsKey::PowerTable(h)))
+            .collect();
         self.db
             .with_write(|tx| {
-                let deleted = self
-                    .collection
-                    .iterate(&*tx)
-                    .filter_map(|item| match item {
-                        Ok((key, _)) => match key {
-                            EotsKey::Vote(_, h, _) | EotsKey::Block(h) if h <= height => {
-                                Some(Ok(key))
-                            }
-                            EotsKey::PowerTable(h) if h < power_tables_from => Some(Ok(key)),
-                            _ => None,
-                        },
-                        Err(e) => Some(Err(e)),
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                for key in &deleted {
+                for key in &keys {
                     self.collection.delete(tx, key)?;
                 }
                 Ok(())
@@ -145,10 +145,7 @@ where
                     state.evidence_carried.push(pk)
                 }
                 (EotsKey::PowerTable(height), EotsValue::PowerTable(table)) => {
-                    let table = table
-                        .into_iter()
-                        .filter_map(|(k, w)| Some((KeyBytes::try_from(k).ok()?, w)))
-                        .collect();
+                    let table = table.into_iter().map(|PowerEntry(k, w)| (k, w)).collect();
                     state.power_tables.push((height, table))
                 }
                 (_, EotsValue::LastCast(h)) => state.last_cast = h,

@@ -2164,6 +2164,69 @@ contract GatewayActorDiamondTest is Test, IntegrationTestBase, SubnetWithNativeT
         }
     }
 
+    function testGatewayDiamond_pruneBottomUpCheckpoints_DeletesBitcoinSignatures() public {
+        (, address[] memory addrs, uint256[] memory weights) = TestUtils.getFourValidators(vm);
+        (bytes32 membershipRoot, ) = MerkleTreeHelper.createMerkleProofsForValidators(addrs, weights);
+
+        uint256 height = gatewayDiamond.getter().bottomUpCheckPeriod();
+        BottomUpCheckpoint memory checkpoint = BottomUpCheckpoint({
+            subnetID: gatewayDiamond.getter().getNetworkName(),
+            blockHeight: height,
+            blockHash: keccak256("block"),
+            nextConfigurationNumber: 1,
+            slashPreSignatureCount: 0,
+            msgs: new IpcEnvelope[](0),
+            activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
+        });
+
+        vm.startPrank(FilAddress.SYSTEM_ACTOR);
+        gatewayDiamond.checkpointer().createBottomUpCheckpoint(
+            checkpoint,
+            membershipRoot,
+            weights[0] + weights[1],
+            ActivityHelper.dummyActivityRollup()
+        );
+        vm.stopPrank();
+
+        // Two signatories of the same psbt, recording the storage slots written
+        vm.record();
+        for (uint8 i = 0; i < 2; i++) {
+            vm.startPrank(addrs[i]);
+            gatewayDiamond.checkpointer().addBitcoinCheckpointSignature(
+                height,
+                abi.encodePacked("psbt"),
+                abi.encodePacked("sig", i),
+                abi.encodePacked("batchtx")
+            );
+            vm.stopPrank();
+        }
+        (, bytes32[] memory writes) = vm.accesses(address(gatewayDiamond));
+
+        // A short `bytes` value occupies one slot: its data, then its length times two in the last byte
+        bytes32[] memory signatureSlots = new bytes32[](2);
+        for (uint8 i = 0; i < 2; i++) {
+            bytes memory sig = abi.encodePacked("sig", i);
+            bytes32 stored = bytes32(sig) | bytes32(sig.length * 2);
+            for (uint256 k = 0; k < writes.length; k++) {
+                if (vm.load(address(gatewayDiamond), writes[k]) == stored) {
+                    signatureSlots[i] = writes[k];
+                }
+            }
+            require(signatureSlots[i] != bytes32(0), "signature slot not found");
+        }
+
+        vm.startPrank(FilAddress.SYSTEM_ACTOR);
+        gatewayDiamond.checkpointer().pruneBottomUpCheckpoints(height + 1);
+        vm.stopPrank();
+
+        for (uint8 i = 0; i < 2; i++) {
+            require(
+                vm.load(address(gatewayDiamond), signatureSlots[i]) == bytes32(0),
+                "signature left after pruning"
+            );
+        }
+    }
+
     function testGatewayDiamond_garbage_collect_bottomUpCheckpoints() public {
         (, address[] memory addrs, uint256[] memory weights) = TestUtils.getFourValidators(vm);
 

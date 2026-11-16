@@ -46,6 +46,15 @@ impl RocksDb {
         I: Iterator<Item = N>,
         N: AsRef<str>,
     {
+        // A transaction commit fails when the write history no longer reaches back to the start of
+        // the transaction; keeping at least one flushed write buffer covers a flush during it.
+        if config.max_write_buffer_size_to_maintain != -1
+            && config.max_write_buffer_size_to_maintain < config.write_buffer_size as i64
+        {
+            return Err(Error::Other(
+                "max_write_buffer_size_to_maintain must be -1 or at least write_buffer_size".into(),
+            ));
+        }
         let db_opts: rocksdb::Options = config.into();
         let ex_cfs = Self::list_cf(&path, config)?;
         let ex_cfs = ex_cfs
@@ -141,7 +150,7 @@ impl RocksDb {
         self.db.cf_handle(name).is_some()
     }
 
-    /// Create a new column family, using the default options.
+    /// Create a new column family, using the options the database was opened with.
     ///
     /// Returns error if it already exists.
     pub fn new_cf_handle<'a>(&self, name: &'a str) -> Result<&'a str, Error> {

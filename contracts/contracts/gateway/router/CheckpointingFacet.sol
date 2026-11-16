@@ -95,6 +95,11 @@ contract CheckpointingFacet is GatewayActorModifiers {
             // Delete each BitcoinCheckpoint using the tracked hashes
             bytes32[] storage hashes = s.bitcoinCheckpointPsbtHashes[h];
             for (uint i = 0; i < hashes.length; i++) {
+                // `delete` on the struct leaves the entries of its `signatures` mapping
+                BitcoinCheckpoint storage btcCheckpoint = s.bitcoinCheckpoints[h][hashes[i]];
+                for (uint256 j = 0; j < btcCheckpoint.signatories.length; j++) {
+                    delete btcCheckpoint.signatures[btcCheckpoint.signatories[j]];
+                }
                 delete s.bitcoinCheckpoints[h][hashes[i]];
             }
             delete s.bitcoinCheckpointPsbtHashes[h];

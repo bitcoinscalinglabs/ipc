@@ -4,13 +4,26 @@ use ipc_eots::EotsVote;
 use ipc_ipld_resolver::{SignedVoteRecord, Timestamp, VoteRecord};
 use libp2p::identity::Keypair;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+/// The stored state, and a gate that, when set, makes the next `put_vote` report that it started
+/// and wait to be released before it stores, and a flag that, when set, makes the next `delete`
+/// fail.
 #[derive(Default)]
-struct MemoryStore(Mutex<StoredState>);
+struct MemoryStore(
+    Mutex<StoredState>,
+    Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
+    AtomicBool,
+);
 
 impl EotsStore for MemoryStore {
     fn put_vote(&self, vote: &ValidatorVote) -> anyhow::Result<()> {
+        let gate = self.1.lock().unwrap().take();
+        if let Some((started, release)) = gate {
+            started.send(()).unwrap();
+            release.recv().unwrap();
+        }
         let mut state = self.0.lock().unwrap();
         if !state.votes.contains(vote) {
             state.votes.push(vote.clone());
@@ -48,11 +61,18 @@ impl EotsStore for MemoryStore {
         self.0.lock().unwrap().last_cast = height;
         Ok(())
     }
-    fn delete_up_to(&self, height: u64, power_tables_from: u64) -> anyhow::Result<()> {
+    fn delete(&self, entries: &FinalEntries) -> anyhow::Result<()> {
+        if self.2.swap(false, Ordering::SeqCst) {
+            anyhow::bail!("the store failed to delete");
+        }
         let mut state = self.0.lock().unwrap();
-        state.votes.retain(|v| v.vote.height > height);
-        state.blocks.retain(|(h, _)| *h > height);
-        state.power_tables.retain(|(h, _)| *h >= power_tables_from);
+        state
+            .votes
+            .retain(|v| !entries.votes.contains(&FinalEntries::vote_key(v)));
+        state.blocks.retain(|(h, _)| !entries.blocks.contains(h));
+        state
+            .power_tables
+            .retain(|(h, _)| !entries.power_tables.contains(h));
         Ok(())
     }
     fn load(&self) -> anyhow::Result<StoredState> {
@@ -240,6 +260,7 @@ fn power_tables_superseded_at_the_subnet_final_height_are_deleted() {
         t.lock().power_tables.keys().copied().collect::<Vec<_>>(),
         [5, 8]
     );
+    t.wait_for_deletions();
     let mut stored: Vec<u64> = t
         .store
         .load()
@@ -768,6 +789,7 @@ async fn a_restarted_node_executes_the_carried_votes_of_the_next_block() {
     // new subnet final height are deleted
     assert!(r.lock().pending.is_empty());
     assert!(r.lock().votes.is_empty());
+    r.wait_for_deletions();
     assert!(r.store.load().unwrap().votes.is_empty());
     // No height is signed again after the restart
     assert!(r.votes_to_cast(3).is_empty());
@@ -2523,6 +2545,7 @@ async fn committed_bad_vote(omit_commitment: bool) {
         .await
         .expect("committed delivery must finish")
         .expect("a rejected carried vote must not abort execution");
+        current.wait_for_deletions();
         assert_eq!(current.recorded_final_height(), 1);
         assert_eq!(current.final_height(), 1);
         assert!(!current.store.load().unwrap().votes.contains(&bad));
@@ -2553,6 +2576,7 @@ async fn committed_bad_vote(omit_commitment: bool) {
             .execute_proposal(&honest, clean.next_height())
             .await
             .unwrap();
+        clean.wait_for_deletions();
         assert_eq!(current.status(), clean.status());
         assert_eq!(
             current.store.load().unwrap().blocks,
@@ -2794,4 +2818,282 @@ fn after_a_snapshot_import_the_committed_height_bounds_the_kept_votes() {
     t.add_block(101, block(101)).unwrap();
     assert_eq!(t.lock().votes[&101][&s.pk_eots], [v101]);
     assert!(t.lock().pending.is_empty());
+}
+
+#[test]
+fn a_proposal_carries_the_fewest_votes_that_reach_the_threshold() {
+    let (k1, k2, k3) = (key(1), key(2), key(3));
+    // Total power 4, threshold 3.
+    let t = tally(&[(k1.clone(), 2), (k2.clone(), 1), (k3.clone(), 1)]);
+    let s = [
+        signer_for(&t, &k1, 11),
+        signer_for(&t, &k2, 12),
+        signer_for(&t, &k3, 13),
+    ];
+    t.add_block(1, [1; 32]).unwrap();
+    t.add_block(2, [2; 32]).unwrap();
+    for (k, s) in [&k1, &k2, &k3].into_iter().zip(&s) {
+        t.add_vote(vote_of(&t, k, s, 1, [1; 32]), None).unwrap();
+    }
+    let data = t.proposal(&agreed(), t.next_height()).unwrap();
+    // The greatest power, then the lower EOTS key of the two equal powers.
+    assert_eq!(
+        data.votes
+            .iter()
+            .map(|v| v.vote.pk_eots)
+            .collect::<Vec<_>>(),
+        vec![s[0].pk_eots, s[1].pk_eots.min(s[2].pk_eots)]
+    );
+    t.check_proposal(&data, &agreed(), t.next_height()).unwrap();
+}
+
+#[test]
+fn final_entries_leave_the_store_in_the_background_and_at_start() {
+    let f = Fixture::new();
+    let (node, store) = f.fresh_node();
+    for h in 1..=3 {
+        node.add_block(h, block(h)).unwrap();
+        for v in f.quorum(h) {
+            node.add_vote(v, None).unwrap();
+        }
+    }
+    node.set_recorded_final(1).unwrap();
+    node.wait_for_deletions();
+    let heights = |store: &MemoryStore| {
+        let s = store.0.lock().unwrap();
+        let votes: Vec<u64> = s.votes.iter().map(|v| v.vote.height).collect();
+        let blocks: Vec<u64> = s.blocks.iter().map(|(h, _)| *h).collect();
+        (votes, blocks)
+    };
+    assert_eq!(heights(&store), (vec![2, 2, 2, 3, 3, 3], vec![2, 3]));
+    // What a crash leaves in the store at or below its final height goes at the next start.
+    store.0.lock().unwrap().recorded_final = 2;
+    let restarted = f.node(store.clone(), "http://127.0.0.1:1/api");
+    assert_eq!(heights(&store), (vec![3, 3, 3], vec![3]));
+    // The votes loaded at the start go when the subnet final height reaches them.
+    restarted.set_recorded_final(3).unwrap();
+    restarted.wait_for_deletions();
+    assert_eq!(heights(&store), (vec![], vec![]));
+}
+
+#[test]
+fn final_entries_of_a_failed_deletion_leave_the_store_with_the_next_deletion() {
+    let f = Fixture::new();
+    let (node, store) = f.fresh_node();
+    for h in 1..=2 {
+        node.add_block(h, block(h)).unwrap();
+        for v in f.quorum(h) {
+            node.add_vote(v, None).unwrap();
+        }
+    }
+    node.wait_for_deletions();
+    store.2.store(true, Ordering::SeqCst);
+    node.set_recorded_final(1).unwrap();
+    node.wait_for_deletions();
+    assert_eq!(store.0.lock().unwrap().votes.len(), 6);
+    node.set_recorded_final(2).unwrap();
+    node.wait_for_deletions();
+    let s = store.0.lock().unwrap();
+    assert!(s.votes.is_empty());
+    assert!(s.blocks.is_empty());
+}
+
+/// A vote loaded at start that the first read drops (its height is checkpointed) or keeps (no
+/// recorded commitment holds its height) leaves the store once the subnet final height reaches it.
+#[tokio::test]
+async fn a_vote_loaded_at_start_and_not_accepted_at_the_first_read_leaves_the_store_once_final() {
+    for (committed, checkpoint, kept) in [(true, Some((1, block(1))), 0), (false, None, 1)] {
+        let k = key(1);
+        let t = tally(&[(k.clone(), 1)]);
+        let s = signer_for(&t, &k, 11);
+        let mut keys = recorded(&k, &s, 100);
+        if !committed {
+            keys.2 = None;
+        }
+        let (url, server) = serve(
+            FakeMonitor {
+                keys: vec![keys],
+                checkpoint,
+            },
+            100,
+        )
+        .await;
+        t.add_block(1, block(1)).unwrap();
+        t.add_vote(vote_of(&t, &k, &s, 1, block(1)), None).unwrap();
+        let r = restarted(&t, &url);
+        r.read_monitor().await.unwrap();
+        assert!(r.lock().votes.is_empty());
+        assert_eq!(r.lock().pending.len(), kept);
+        r.set_recorded_final(1).unwrap();
+        r.wait_for_deletions();
+        assert!(r.store.load().unwrap().votes.is_empty());
+        server.abort();
+    }
+}
+
+#[test]
+fn a_vote_stored_while_the_subnet_final_height_passes_it_leaves_the_store() {
+    let f = Fixture::new();
+    let (node, store) = f.fresh_node();
+    node.add_block(1, block(1)).unwrap();
+    let (started, on_started) = mpsc::channel();
+    let (release, on_release) = mpsc::channel();
+    *store.1.lock().unwrap() = Some((started, on_release));
+    let vote = f.quorum(1).remove(0);
+    std::thread::scope(|s| {
+        let adding = s.spawn(|| node.add_vote(vote, None));
+        // The vote is in memory; the subnet final height passes it before it is stored.
+        on_started.recv().unwrap();
+        node.set_recorded_final(1).unwrap();
+        node.wait_for_deletions();
+        release.send(()).unwrap();
+        adding.join().unwrap().unwrap();
+    });
+    node.wait_for_deletions();
+    assert!(store.0.lock().unwrap().votes.is_empty());
+}
+
+/// A tally whose envelope check counts its calls and fails while the tally's lock is held
+fn tally_counting_envelope_checks(
+    keys: &[(ValidatorKey, Weight)],
+) -> (EotsTally, Arc<std::sync::atomic::AtomicUsize>) {
+    let mut t = tally(keys);
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (counted, inner) = (calls.clone(), t.inner.clone());
+    t.envelope_check = Arc::new(move |_| {
+        counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        inner.try_lock().is_ok()
+    });
+    (t, calls)
+}
+
+fn envelope_checks(calls: &std::sync::atomic::AtomicUsize) -> usize {
+    calls.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+#[test]
+fn a_held_vote_is_not_verified_again_by_the_proposal_its_check_and_its_execution() {
+    let k = key(1);
+    let (t, calls) = tally_counting_envelope_checks(&[(k.clone(), 1)]);
+    let s = signer_for(&t, &k, 11);
+    for h in 1..=2 {
+        t.add_block(h, block(h)).unwrap();
+    }
+    let vote = vote_of(&t, &k, &s, 1, block(1));
+    assert_eq!(t.add_vote(vote.clone(), None), Ok(VoteOutcome::New));
+    assert_eq!(t.add_vote(vote.clone(), None), Ok(VoteOutcome::Known));
+    assert_eq!(envelope_checks(&calls), 1);
+    // The same vote in another envelope is checked
+    let mut resent = vote.clone();
+    resent.timestamp = 1;
+    assert_eq!(t.add_vote(resent, None), Ok(VoteOutcome::Known));
+    assert_eq!(envelope_checks(&calls), 2);
+    let data = t.proposal(&agreed(), 3).unwrap();
+    assert_eq!(data.votes, [vote]);
+    t.check_proposal(&data, &agreed(), 3).unwrap();
+    assert!(t.apply_proposal(&data, &agreed(), 3).unwrap().is_empty());
+    assert_eq!(t.lock().recorded_final, 1);
+    assert_eq!(envelope_checks(&calls), 2);
+}
+
+#[test]
+fn a_held_vote_is_verified_again_against_another_commitment() {
+    let k = key(1);
+    let t = tally(&[(k.clone(), 1)]);
+    let s = signer_for(&t, &k, 11);
+    for h in 1..=2 {
+        t.add_block(h, block(h)).unwrap();
+    }
+    let vote = vote_of(&t, &k, &s, 1, block(1));
+    assert_eq!(t.add_vote(vote, None), Ok(VoteOutcome::New));
+    let data = t.proposal(&agreed(), 3).unwrap();
+    // Another commitment of the same range is the one recorded at the agreed Bitcoin height
+    let other = EotsNonceCommitment {
+        root: [9; 32],
+        ..s.commitment
+    };
+    t.lock()
+        .commitments
+        .insert(s.pk_eots, vec![(other, BITCOIN_HEIGHT)]);
+    assert!(t.proposal(&agreed(), 3).is_none());
+    let rejected = t.check_proposal(&data, &agreed(), 3).unwrap_err();
+    assert!(rejected.contains("invalid vote"), "{rejected}");
+}
+
+#[test]
+fn a_kept_vote_is_not_checked_again_for_its_envelope() {
+    let k = key(1);
+    let (t, calls) = tally_counting_envelope_checks(&[(k.clone(), 1)]);
+    let s = signer_for(&t, &k, 11);
+    t.add_block(1, block(1)).unwrap();
+    let vote = vote_of(&t, &k, &s, 3, block(3));
+    assert_eq!(t.add_vote(vote.clone(), None), Ok(VoteOutcome::Pending));
+    for h in 2..=3 {
+        t.add_block(h, block(h)).unwrap();
+    }
+    assert_eq!(t.lock().votes[&3][&s.pk_eots], [vote]);
+    assert_eq!(envelope_checks(&calls), 1);
+}
+
+#[test]
+fn a_carried_vote_verified_by_the_proposal_check_is_not_verified_again_at_execution() {
+    let k = key(1);
+    let (t, calls) = tally_counting_envelope_checks(&[(k.clone(), 1)]);
+    let s = signer_for(&t, &k, 11);
+    for h in 1..=2 {
+        t.add_block(h, block(h)).unwrap();
+    }
+    let data = EotsFinalityData {
+        bitcoin_height: BITCOIN_HEIGHT,
+        votes: vec![vote_of(&t, &k, &s, 1, block(1))],
+        ..Default::default()
+    };
+    t.check_proposal(&data, &agreed(), 3).unwrap();
+    assert_eq!(envelope_checks(&calls), 1);
+    assert!(t.apply_proposal(&data, &agreed(), 3).unwrap().is_empty());
+    assert_eq!(t.lock().recorded_final, 1);
+    assert_eq!(envelope_checks(&calls), 1);
+    assert!(t.lock().checked_proposal.is_empty());
+}
+
+#[tokio::test]
+async fn the_answer_at_an_agreed_bitcoin_height_below_the_held_checkpoint_is_read_once() {
+    use std::sync::atomic::AtomicU64;
+    let k1 = key(1);
+    let s1 = TestSigner::new(11, 1, 20);
+    let requests = Requests::default();
+    // The checkpoint is recorded at Bitcoin height 100, the recorded state reaches 101
+    let (url, server) = serve_at(
+        FakeMonitor {
+            keys: vec![recorded(&k1, &s1, 100)],
+            checkpoint: Some((42, [7; 32])),
+        },
+        Arc::new(AtomicU64::new(101)),
+        requests.clone(),
+    )
+    .await;
+    let t = tally_with_provider(&url, &[(k1, 1)]);
+    t.read_monitor().await.unwrap();
+    requests.lock().unwrap().clear();
+    // Proposal preparation, proposal checking and execution at one parent finality
+    for _ in 0..3 {
+        assert_eq!(t.agreed_state(99).await.unwrap().checkpointed, 0);
+    }
+    assert_eq!(*requests.lock().unwrap(), [(Some(101), Some(99))]);
+    // Only the answer of the latest read is kept
+    for bitcoin_height in [98, 99] {
+        assert_eq!(
+            t.agreed_state(bitcoin_height).await.unwrap().checkpointed,
+            0
+        );
+    }
+    assert_eq!(
+        *requests.lock().unwrap(),
+        [
+            (Some(101), Some(99)),
+            (Some(101), Some(98)),
+            (Some(101), Some(99))
+        ]
+    );
+    server.abort();
 }

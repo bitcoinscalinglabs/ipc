@@ -506,8 +506,14 @@ fn open_db(settings: &Settings, ns: &Namespaces) -> anyhow::Result<RocksDb> {
         path = path.to_string_lossy().into_owned(),
         "opening database"
     );
+    let s = &settings.db;
     let config = RocksDbConfig {
-        compaction_style: settings.db.compaction_style.to_string(),
+        compaction_style: s.compaction_style.to_string(),
+        write_buffer_size: s.write_buffer_size,
+        max_write_buffer_number: s.max_write_buffer_number,
+        max_write_buffer_size_to_maintain: s.max_write_buffer_size_to_maintain,
+        db_write_buffer_size: s.db_write_buffer_size,
+        max_total_wal_size: s.max_total_wal_size,
         ..Default::default()
     };
     let db = RocksDb::open_cf(path, &config, ns.values().iter())?;
@@ -768,7 +774,7 @@ mod tests {
         fn put_last_cast(&self, _: u64) -> anyhow::Result<()> {
             Ok(())
         }
-        fn delete_up_to(&self, _: u64, _: u64) -> anyhow::Result<()> {
+        fn delete(&self, _: &fendermint_vm_topdown::eots::FinalEntries) -> anyhow::Result<()> {
             Ok(())
         }
         fn load(&self) -> anyhow::Result<StoredState> {
@@ -817,67 +823,48 @@ mod tests {
         }
     }
 
-    /// `AppVote::Eots` with fields of any width.
+    /// `AppVote::Eots` with any content.
     #[derive(Clone, serde::Serialize, serde::Deserialize)]
-    enum Content {
-        Eots(Fields),
-    }
-
-    #[derive(Clone, serde::Serialize, serde::Deserialize)]
-    struct Fields {
-        pk_eots: Vec<u8>,
-        height: i64,
-        block_hash: Vec<u8>,
-        signature: Vec<Vec<u8>>,
-        start: u64,
-        proof: Vec<Vec<u8>>,
+    enum Content<T> {
+        Eots(T),
     }
 
     #[test]
     fn signed_votes_with_malformed_content_fail_to_decode() {
         let key = Keypair::generate_secp256k1();
-        let wire = |fields: Fields| {
-            VoteRecord::signed(&key, subnet(), Content::Eots(fields))
+        let wire = |bytes: Vec<u8>| {
+            let content = Content::Eots(serde_bytes::ByteBuf::from(bytes));
+            VoteRecord::signed(&key, subnet(), content)
                 .unwrap()
                 .into_envelope()
                 .into_protobuf_encoding()
         };
+        let decodes =
+            |bytes: Vec<u8>| SignedVoteRecord::<AppVote>::from_bytes(&wire(bytes)).is_ok();
         let AppVote::Eots(vote) = eots_vote() else {
             unreachable!()
         };
-        let valid = Fields {
-            pk_eots: vote.pk_eots.to_vec(),
-            height: vote.height as i64,
-            block_hash: vote.block_hash.to_vec(),
-            signature: vote.signature.iter().map(|s| s.to_vec()).collect(),
-            start: vote.start,
-            proof: vote.proof.iter().map(|p| p.to_vec()).collect(),
-        };
+        let valid = vote.to_bytes();
         let received = SignedVoteRecord::<AppVote>::from_bytes(&wire(valid.clone())).unwrap();
         assert_eq!(received.record().content, eots_vote());
 
-        let changes: [(&str, fn(&mut Fields, usize)); 5] = [
-            ("EOTS key", |f, n| f.pk_eots = vec![0; n]),
-            ("block hash", |f, n| f.block_hash = vec![0; n]),
-            ("public nonce", |f, n| f.signature[0] = vec![0; n]),
-            ("signature scalar", |f, n| f.signature[1] = vec![0; n]),
-            ("proof node", |f, n| f.proof[0] = vec![0; n]),
-        ];
-        for (field, change) in changes {
-            for length in [0, 31, 33] {
-                let mut fields = valid.clone();
-                change(&mut fields, length);
-                assert!(
-                    SignedVoteRecord::<AppVote>::from_bytes(&wire(fields)).is_err(),
-                    "accepted a {field} of {length} bytes"
-                );
-            }
+        for end in 0..valid.len() {
+            assert!(
+                !decodes(valid[..end].to_vec()),
+                "accepted the vote cut at byte {end}"
+            );
         }
-        let negative = Fields {
-            height: -1,
-            ..valid
-        };
-        assert!(SignedVoteRecord::<AppVote>::from_bytes(&wire(negative)).is_err());
+        let left_over = [&valid[..], &[0u8][..]].concat();
+        assert!(!decodes(left_over), "accepted a byte left over");
+        // The height, 1, as a non-minimal varint
+        let padded = [&valid[..32], &[0x81u8, 0x00][..], &valid[33..]].concat();
+        assert!(!decodes(padded));
+        // The vote as a structure of its fields rather than its encoding
+        let fields = VoteRecord::signed(&key, subnet(), Content::Eots(vote))
+            .unwrap()
+            .into_envelope()
+            .into_protobuf_encoding();
+        assert!(SignedVoteRecord::<AppVote>::from_bytes(&fields).is_err());
     }
 
     #[test]

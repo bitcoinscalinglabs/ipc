@@ -340,9 +340,15 @@ pub fn newly_final_heights(prev_final: u64, final_height: u64) -> std::ops::Rang
     prev_final.max(1)..final_height
 }
 
-/// Heights `H` above `checkpointed` whose `H + 1` is at or below `final_height`.
-pub fn final_heights_above(checkpointed: u64, final_height: u64) -> std::ops::Range<u64> {
-    checkpointed + 1..final_height
+/// Checkpoint heights `H` (multiples of `period`) above `checkpointed` whose `H + 1` is at or
+/// below `final_height`.
+pub fn checkpoint_heights_above(
+    checkpointed: u64,
+    final_height: u64,
+    period: u64,
+) -> std::iter::StepBy<std::ops::Range<u64>> {
+    let first = (checkpointed / period + 1) * period;
+    (first..final_height).step_by(period as usize)
 }
 
 /// The checkpoints whose `H + 1` became final in this subnet block, with both signatures to submit.
@@ -375,6 +381,7 @@ pub fn checkpoints_to_resign<DB>(
     validator_key: PublicKey,
     final_height: u64,
     checkpointed: Option<u64>,
+    period: u64,
 ) -> anyhow::Result<Vec<CheckpointToSign>>
 where
     DB: Blockstore + Send + Sync + Clone + 'static,
@@ -384,7 +391,7 @@ where
 
     let mut bitcoin_missing = Vec::new();
     if let Some(checkpointed) = checkpointed {
-        for height in final_heights_above(checkpointed, final_height) {
+        for height in checkpoint_heights_above(checkpointed, final_height, period) {
             let Some(checkpoint) = gateway.bottom_up_checkpoint(state, height)? else {
                 continue;
             };
@@ -841,8 +848,8 @@ mod tests {
     use quickcheck_macros::quickcheck;
 
     use crate::fvm::checkpoint::{
-        final_heights_above, into_power_map, newly_final_heights, outputs_to_presign, power_diff,
-        resign_plan, should_post_slash_pre_signature,
+        checkpoint_heights_above, into_power_map, newly_final_heights, outputs_to_presign,
+        power_diff, resign_plan, should_post_slash_pre_signature,
     };
 
     use super::{checkpoint::GetSlashOutputReturn, getter, PowerTable, PowerUpdates};
@@ -1016,9 +1023,13 @@ mod tests {
 
     #[test]
     fn resigning_above_checkpointed() {
-        assert_eq!(final_heights_above(0, 301), 1..301);
-        assert_eq!(final_heights_above(100, 301), 101..301);
-        assert!(final_heights_above(300, 301).is_empty());
-        assert!(!final_heights_above(100, 300).contains(&300));
+        let heights = |checkpointed, final_height| {
+            checkpoint_heights_above(checkpointed, final_height, 100).collect::<Vec<_>>()
+        };
+        assert_eq!(heights(0, 301), vec![100, 200, 300]);
+        assert_eq!(heights(100, 301), vec![200, 300]);
+        assert_eq!(heights(150, 301), vec![200, 300]);
+        assert!(heights(300, 301).is_empty());
+        assert_eq!(heights(100, 300), vec![200]);
     }
 }

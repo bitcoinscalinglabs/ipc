@@ -31,6 +31,17 @@ pub struct EotsVote {
 }
 
 impl EotsVote {
+    /// The encoding of the EOTS vote: the postcard tuple of its fields.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        postcard::to_allocvec(self).expect("an EOTS vote encodes")
+    }
+
+    /// Decodes bytes that are exactly the encoding of an EOTS vote.
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        let vote: Self = postcard::from_bytes(bytes).ok()?;
+        (vote.to_bytes() == bytes).then_some(vote)
+    }
+
     pub fn signature_bytes(&self) -> [u8; 64] {
         let mut out = [0u8; 64];
         out[..32].copy_from_slice(&self.signature[0]);
@@ -180,10 +191,28 @@ pub fn is_double_vote(a: &EotsVote, b: &EotsVote) -> bool {
 /// timestamp and signature.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ValidatorVote {
+    #[serde(with = "serde_bytes")]
     pub validator: Vec<u8>,
+    #[serde(with = "vote_bytes")]
     pub vote: EotsVote,
     pub timestamp: u64,
+    #[serde(with = "serde_bytes")]
     pub signature: Vec<u8>,
+}
+
+/// Serializes an EOTS vote as a byte string holding its encoding ([`EotsVote::to_bytes`]).
+pub mod vote_bytes {
+    use super::EotsVote;
+    use serde::{de::Error, Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(vote: &EotsVote, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_bytes(&vote.to_bytes())
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<EotsVote, D::Error> {
+        let bytes = serde_bytes::ByteBuf::deserialize(deserializer)?;
+        EotsVote::from_bytes(&bytes).ok_or_else(|| D::Error::custom("not an encoded EOTS vote"))
+    }
 }
 
 /// The finality query's answer. `final_height` is the height the node serves: the recorded final

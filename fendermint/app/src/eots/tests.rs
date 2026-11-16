@@ -27,7 +27,7 @@ impl EotsStore for Store {
     fn put_last_cast(&self, _height: u64) -> anyhow::Result<()> {
         Ok(())
     }
-    fn delete_up_to(&self, _height: u64, _power_tables_from: u64) -> anyhow::Result<()> {
+    fn delete(&self, _entries: &FinalEntries) -> anyhow::Result<()> {
         Ok(())
     }
     fn load(&self) -> anyhow::Result<StoredState> {
@@ -151,4 +151,54 @@ fn seed_power_table_waits_for_the_ledger() {
     )
     .unwrap();
     assert!(seed_power_table(&restarted, &Ledger(None)).unwrap());
+}
+
+#[test]
+fn the_store_returns_its_entries_after_a_reopen_and_deletes_the_given_ones() {
+    use crate::AppStore;
+    use fendermint_rocksdb::{RocksDb, RocksDbConfig};
+
+    let dir = tempfile::tempdir().unwrap();
+    let open = || {
+        let db = RocksDb::open_cf(dir.path(), &RocksDbConfig::default(), ["eots"].iter()).unwrap();
+        AppEotsStore::<_, AppStore>::new(db, "eots".to_string())
+    };
+    let vote = |height: u64| ValidatorVote {
+        validator: vec![2; 33],
+        vote: ipc_eots::EotsVote {
+            pk_eots: [1; 32],
+            height,
+            block_hash: [height as u8; 32],
+            signature: [[3; 32], [4; 32]],
+            start: 1,
+            proof: vec![[5; 32]],
+        },
+        timestamp: 6,
+        signature: vec![7; 65],
+    };
+    let store = open();
+    for h in 1..=2 {
+        store.put_vote(&vote(h)).unwrap();
+        store.put_block(h, [h as u8; 32]).unwrap();
+        store.put_power_table(h, &[([2; 33], h)]).unwrap();
+    }
+    store.put_recorded_final(1).unwrap();
+    store.put_evidence_carried([1; 32]).unwrap();
+    store.put_last_cast(2).unwrap();
+    store
+        .delete(&FinalEntries {
+            votes: vec![([1; 32], 1, [1; 32])],
+            blocks: vec![1],
+            power_tables: vec![1],
+        })
+        .unwrap();
+    drop(store);
+
+    let stored = open().load().unwrap();
+    assert_eq!(stored.votes, vec![vote(2)]);
+    assert_eq!(stored.blocks, vec![(2, [2; 32])]);
+    assert_eq!(stored.power_tables, vec![(2, vec![([2; 33], 2)])]);
+    assert_eq!(stored.recorded_final, 1);
+    assert_eq!(stored.evidence_carried, vec![[1; 32]]);
+    assert_eq!(stored.last_cast, 2);
 }

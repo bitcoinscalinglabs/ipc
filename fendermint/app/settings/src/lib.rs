@@ -139,6 +139,19 @@ pub struct DbSettings {
     pub state_hist_size: u64,
     /// How to compact the datastore.
     pub compaction_style: DbCompaction,
+    /// Size of one write buffer of a column family in bytes.
+    pub write_buffer_size: usize,
+    /// Number of write buffers of a column family, the one being written included.
+    pub max_write_buffer_number: i32,
+    /// Bytes of write history, flushed write buffers included, that a column family keeps for the
+    /// conflict check of transactions; -1 means `max_write_buffer_number * write_buffer_size`,
+    /// otherwise at least `write_buffer_size`.
+    pub max_write_buffer_size_to_maintain: i64,
+    /// Cap in bytes on the write buffers of all column families together; 0 means no cap.
+    pub db_write_buffer_size: usize,
+    /// Size of the write-ahead log in bytes above which the column families holding its oldest
+    /// part are flushed; 0 means 4 times the write buffers of all column families.
+    pub max_total_wal_size: u64,
 }
 
 /// Settings affecting how we deal with failures in trying to send transactions to the local CometBFT node.
@@ -573,5 +586,33 @@ mod tests {
             || try_parse_config(""),
         );
         assert!(settings.is_ok());
+    }
+
+    #[test]
+    fn db_write_buffer_settings_default_and_env() {
+        let db = parse_config("").db;
+        assert_eq!(db.write_buffer_size, 1 << 30);
+        assert_eq!(db.max_write_buffer_number, 2);
+        assert_eq!(db.max_write_buffer_size_to_maintain, -1);
+        assert_eq!(db.db_write_buffer_size, 0);
+        assert_eq!(db.max_total_wal_size, 0);
+
+        let db = with_env_vars(
+            vec![
+                ("FM_DB__WRITE_BUFFER_SIZE", "33554432"),
+                ("FM_DB__MAX_WRITE_BUFFER_NUMBER", "3"),
+                ("FM_DB__MAX_WRITE_BUFFER_SIZE_TO_MAINTAIN", "33554432"),
+                ("FM_DB__DB_WRITE_BUFFER_SIZE", "268435456"),
+                ("FM_DB__MAX_TOTAL_WAL_SIZE", "268435456"),
+            ],
+            || try_parse_config(""),
+        )
+        .unwrap()
+        .db;
+        assert_eq!(db.write_buffer_size, 32 << 20);
+        assert_eq!(db.max_write_buffer_number, 3);
+        assert_eq!(db.max_write_buffer_size_to_maintain, 32 << 20);
+        assert_eq!(db.db_write_buffer_size, 256 << 20);
+        assert_eq!(db.max_total_wal_size, 256 << 20);
     }
 }

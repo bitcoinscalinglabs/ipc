@@ -1,7 +1,7 @@
 //! The tally of EOTS votes on subnet blocks and the votes a proposer carries in a block.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::Context;
@@ -58,10 +58,72 @@ pub trait EotsStore: Send + Sync {
     fn put_evidence_carried(&self, pk_eots: [u8; 32]) -> anyhow::Result<()>;
     fn put_power_table(&self, height: u64, table: &[(KeyBytes, Weight)]) -> anyhow::Result<()>;
     fn put_last_cast(&self, height: u64) -> anyhow::Result<()>;
-    /// Deletes the votes and block hashes at or below `height` and the power tables that apply
-    /// from a height below `power_tables_from`.
-    fn delete_up_to(&self, height: u64, power_tables_from: u64) -> anyhow::Result<()>;
+    fn delete(&self, entries: &FinalEntries) -> anyhow::Result<()>;
     fn load(&self) -> anyhow::Result<StoredState>;
+}
+
+/// The store entries of votes, block hashes and power tables at or below the subnet final height.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct FinalEntries {
+    /// `(pk_eots, height, block hash)` of each vote
+    pub votes: Vec<([u8; 32], u64, [u8; 32])>,
+    /// The heights of the block hashes
+    pub blocks: Vec<u64>,
+    /// The first heights the power tables apply to
+    pub power_tables: Vec<u64>,
+}
+
+impl FinalEntries {
+    pub fn vote_key(v: &ValidatorVote) -> ([u8; 32], u64, [u8; 32]) {
+        (v.vote.pk_eots, v.vote.height, v.vote.block_hash)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.votes.is_empty() && self.blocks.is_empty() && self.power_tables.is_empty()
+    }
+
+    fn extend(&mut self, other: Self) {
+        self.votes.extend(other.votes);
+        self.blocks.extend(other.blocks);
+        self.power_tables.extend(other.power_tables);
+    }
+}
+
+enum Deletion {
+    Entries(FinalEntries),
+    /// Answered once every earlier entry is deleted
+    #[cfg(test)]
+    Wait(mpsc::Sender<()>),
+}
+
+/// Deletes from the store, in the order received, the entries the tally drops from memory; what
+/// arrived meanwhile goes in one deletion, and the entries of a failed deletion go in the next.
+fn delete_in_background(store: Arc<dyn EotsStore>, deletions: mpsc::Receiver<Deletion>) {
+    let mut failed = FinalEntries::default();
+    while let Ok(first) = deletions.recv() {
+        let mut entries = FinalEntries::default();
+        #[cfg(test)]
+        let mut waiting = Vec::new();
+        for deletion in std::iter::once(first).chain(deletions.try_iter()) {
+            match deletion {
+                Deletion::Entries(e) => entries.extend(e),
+                #[cfg(test)]
+                Deletion::Wait(done) => waiting.push(done),
+            }
+        }
+        if !entries.is_empty() {
+            entries.extend(std::mem::take(&mut failed));
+            if let Err(e) = store.delete(&entries) {
+                // Retried with the next deletion, or at the next start.
+                tracing::error!(error = %e, "failed to delete final EOTS entries from the store");
+                failed = entries;
+            }
+        }
+        #[cfg(test)]
+        for done in waiting {
+            let _ = done.send(());
+        }
+    }
 }
 
 /// The recorded state at an agreed Bitcoin L1 height, against which carried votes are checked.
@@ -126,6 +188,23 @@ pub enum VoteOutcome {
     Pending,
 }
 
+/// A cryptographic check of a vote: its envelope signature (rule 1), or its audit path and
+/// signature against a commitment (rules 4 and 5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CryptoCheck {
+    Envelope,
+    Vote(EotsNonceCommitment),
+}
+
+/// The outcome of [`Inner::check`].
+enum Checked {
+    /// The vote passes, with the commitment its audit path was checked against
+    Passed(EotsNonceCommitment),
+    Failed(VoteError),
+    /// The vote has not passed this cryptographic check, which comes before the rules not checked
+    Unverified(CryptoCheck),
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FinalityStatus {
     /// The subnet final height the node serves: the recorded one, below the first height at
@@ -168,10 +247,12 @@ impl Pending {
         }
     }
 
-    fn take(&mut self) -> Vec<ValidatorVote> {
-        let mut votes = std::mem::take(&mut self.stored);
-        votes.extend(self.uncommitted.take());
-        votes
+    /// The votes loaded from the store at start, and those kept after failing rule 4 only.
+    fn take(&mut self) -> (Vec<ValidatorVote>, Vec<ValidatorVote>) {
+        (
+            std::mem::take(&mut self.stored),
+            self.uncommitted.take().collect(),
+        )
     }
 
     #[cfg(test)]
@@ -201,6 +282,9 @@ struct Inner {
     /// The Bitcoin height up to which the tally holds every recorded EOTS key and
     /// commitment
     monitor_read_for: u64,
+    /// The latest Bitcoin height read for an agreed state, with the checkpoint recorded at or
+    /// below it
+    agreed_read: Option<(u64, Option<(u64, [u8; 32], bool)>)>,
     /// Whether the power tables come from the store
     stored_power_tables: bool,
     /// The chain's block hashes
@@ -210,7 +294,15 @@ struct Inner {
     latest_height: u64,
     /// The accepted votes by height and EOTS key, at most two per key
     votes: BTreeMap<u64, HashMap<[u8; 32], Vec<ValidatorVote>>>,
+    /// The commitment each held vote was verified against, by height, EOTS key and block hash
+    verified: BTreeMap<u64, HashMap<([u8; 32], [u8; 32]), EotsNonceCommitment>>,
+    /// The cryptographic checks that the carried votes of the latest checked proposal passed, for
+    /// the votes not held
+    checked_proposal: Vec<(ValidatorVote, CryptoCheck)>,
     pending: Pending,
+    /// `(height, pk_eots, block hash)` of each vote loaded from the store at start, deleted from
+    /// the store once at or below the subnet final height, whether the vote was accepted or not
+    loaded: BTreeSet<(u64, [u8; 32], [u8; 32])>,
     /// The subnet final height: the greatest height whose votes a block of the chain carries
     recorded_final: u64,
     /// The checkpointed subnet height at the Bitcoin height of the last carried proposal
@@ -224,16 +316,18 @@ struct Inner {
     last_cast: u64,
     /// Set once the chain is seen to have left the checkpointed block behind
     on_dead_fork: bool,
-    envelope_check: EnvelopeCheck,
 }
 
 #[derive(Clone)]
 pub struct EotsTally {
     inner: Arc<Mutex<Inner>>,
+    /// The entries to delete from the store in the background
+    deletions: mpsc::Sender<Deletion>,
     store: Arc<dyn EotsStore>,
     provider: BtcSubnetManager,
     subnet_id: SubnetID,
     txid20: [u8; 20],
+    envelope_check: EnvelopeCheck,
     /// The latest committed height, for the voting loop
     committed: tokio::sync::watch::Sender<u64>,
     /// Held across a whole read of the recorded state, so that two reads never overlap
@@ -295,18 +389,61 @@ impl Inner {
         self.checkpoint.map_or(0, |(h, _, _)| h)
     }
 
-    /// Rules 2 to 5 of accepting a vote. A carried vote is checked against `agreed` and the
-    /// height of the subnet block that carries it, whose parent is the chain's latest block; a
-    /// gossiped one against the latest recorded state and the chain's latest block.
+    /// Rules 1 to 5 of accepting a vote, without running a cryptographic check: a check that the
+    /// vote passed (in `passed`, as a held vote, or in the latest checked proposal) counts, the
+    /// first other one is returned.
     fn check(
         &self,
         vote: &ValidatorVote,
         carried: Option<(&AgreedState, u64)>,
-        txid20: &[u8; 20],
-    ) -> Result<(), VoteError> {
-        if !(self.envelope_check)(vote) {
-            return Err(VoteError::BadEnvelope);
+        passed: &[CryptoCheck],
+    ) -> Checked {
+        let proven = |check| passed.contains(&check) || self.proven(vote, &check);
+        if !proven(CryptoCheck::Envelope) {
+            return Checked::Unverified(CryptoCheck::Envelope);
         }
+        match self.check_rules(vote, carried) {
+            Err(e) => Checked::Failed(e),
+            Ok(c) if proven(CryptoCheck::Vote(c)) => Checked::Passed(c),
+            Ok(c) => Checked::Unverified(CryptoCheck::Vote(c)),
+        }
+    }
+
+    /// Whether `vote` passed `check` as a held vote or as a carried vote of the latest checked
+    /// proposal.
+    fn proven(&self, vote: &ValidatorVote, check: &CryptoCheck) -> bool {
+        let v = &vote.vote;
+        let held = self
+            .votes
+            .get(&v.height)
+            .and_then(|by_key| by_key.get(&v.pk_eots))
+            .and_then(|vs| vs.iter().find(|held| held.vote.block_hash == v.block_hash))
+            .is_some_and(|held| match check {
+                CryptoCheck::Envelope => held == vote,
+                CryptoCheck::Vote(c) => {
+                    held.vote == *v
+                        && self
+                            .verified
+                            .get(&v.height)
+                            .and_then(|by_key| by_key.get(&(v.pk_eots, v.block_hash)))
+                            == Some(c)
+                }
+            });
+        held || self
+            .checked_proposal
+            .iter()
+            .any(|(p, c)| p == vote && c == check)
+    }
+
+    /// Rules 2 to 4 of accepting a vote, without the audit path: the commitment that must prove
+    /// its public nonce. A carried vote is checked against `agreed` and the height of the subnet
+    /// block that carries it, whose parent is the chain's latest block; a gossiped one against the
+    /// latest recorded state and the chain's latest block.
+    fn check_rules(
+        &self,
+        vote: &ValidatorVote,
+        carried: Option<(&AgreedState, u64)>,
+    ) -> Result<EotsNonceCommitment, VoteError> {
         // Fails rule 4 at every recorded state, so it is never kept for a later check.
         if vote.vote.proof.len() > ipc_eots::MAX_AUDIT_PATH {
             return Err(VoteError::Invalid(ipc_eots::EotsError::InvalidProof));
@@ -342,20 +479,23 @@ impl Inner {
         if self.power_at(&key, h) == 0 {
             return Err(VoteError::UnpoweredValidator(h));
         }
-        let commitment = self
-            .commitments
+        self.commitments
             .get(&vote.vote.pk_eots)
             .into_iter()
             .flatten()
             .filter(|(_, bitcoin_height)| max_bitcoin.is_none_or(|m| *bitcoin_height <= m))
-            .map(|(c, _)| c)
+            .map(|(c, _)| *c)
             .find(|c| c.covers(h) && c.start == vote.vote.start)
-            .ok_or(VoteError::NotCommitted(h))?;
-        ipc_eots::verify_vote(txid20, &vote.vote, commitment).map_err(VoteError::Invalid)
+            .ok_or(VoteError::NotCommitted(h))
     }
 
-    /// Stores an accepted vote: the first for its key and height, or the first for another block.
-    fn store(&mut self, vote: ValidatorVote) -> (VoteOutcome, Option<ValidatorVote>) {
+    /// Stores an accepted vote, verified against `commitment`: the first for its key and height,
+    /// or the first for another block.
+    fn store(
+        &mut self,
+        vote: ValidatorVote,
+        commitment: EotsNonceCommitment,
+    ) -> (VoteOutcome, Option<ValidatorVote>) {
         let held = self
             .votes
             .entry(vote.vote.height)
@@ -365,17 +505,17 @@ impl Inner {
         if held.iter().any(|v| v.vote == vote.vote) {
             return (VoteOutcome::Known, None);
         }
-        match held.len() {
-            0 => {
-                held.push(vote.clone());
-                (VoteOutcome::New, Some(vote))
-            }
-            1 if held[0].vote.block_hash != vote.vote.block_hash => {
-                held.push(vote.clone());
-                (VoteOutcome::Evidence, Some(vote))
-            }
-            _ => (VoteOutcome::Excess, None),
-        }
+        let outcome = match held.len() {
+            0 => VoteOutcome::New,
+            1 if held[0].vote.block_hash != vote.vote.block_hash => VoteOutcome::Evidence,
+            _ => return (VoteOutcome::Excess, None),
+        };
+        held.push(vote.clone());
+        self.verified
+            .entry(vote.vote.height)
+            .or_default()
+            .insert((vote.vote.pk_eots, vote.vote.block_hash), commitment);
+        (outcome, Some(vote))
     }
 
     fn weight_for(&self, height: u64, hash: &[u8; 32]) -> Weight {
@@ -522,12 +662,17 @@ impl Inner {
     }
 
     /// Deletes the votes, block hashes and pending votes at or below the subnet final height and
-    /// the power tables before the one in force above it, whose first height it returns.
-    fn delete_final(&mut self) -> u64 {
+    /// the power tables before the one in force above it, and returns their store entries.
+    fn delete_final(&mut self) -> FinalEntries {
         let above = self.recorded_final + 1;
-        self.votes = self.votes.split_off(&above);
-        self.chain = self.chain.split_off(&above);
+        let kept = self.votes.split_off(&above);
+        let votes = std::mem::replace(&mut self.votes, kept);
+        self.verified = self.verified.split_off(&above);
+        let kept = self.chain.split_off(&above);
+        let blocks = std::mem::replace(&mut self.chain, kept);
         self.pending.stored.retain(|v| v.vote.height >= above);
+        let kept = self.loaded.split_off(&(above, [0; 32], [0; 32]));
+        let loaded = std::mem::replace(&mut self.loaded, kept);
         self.pending.uncommitted.delete_up_to(self.recorded_final);
         self.pending.wrong_key.delete_up_to(self.recorded_final);
         self.pending.above_latest.delete_up_to(self.recorded_final);
@@ -536,8 +681,19 @@ impl Inner {
             .range(..=above)
             .next_back()
             .map_or(0, |(h, _)| *h);
-        self.power_tables = self.power_tables.split_off(&in_force);
-        in_force
+        let kept = self.power_tables.split_off(&in_force);
+        let power_tables = std::mem::replace(&mut self.power_tables, kept);
+        FinalEntries {
+            votes: votes
+                .into_values()
+                .flat_map(HashMap::into_values)
+                .flatten()
+                .map(|v| FinalEntries::vote_key(&v))
+                .chain(loaded.into_iter().map(|(h, pk, b)| (pk, h, b)))
+                .collect(),
+            blocks: blocks.into_keys().collect(),
+            power_tables: power_tables.into_keys().collect(),
+        }
     }
 }
 
@@ -568,6 +724,11 @@ impl EotsTally {
                 .map(|(h, t)| (h, t.into_iter().collect()))
                 .collect()
         };
+        let loaded = stored
+            .votes
+            .iter()
+            .map(|v| (v.vote.height, v.vote.pk_eots, v.vote.block_hash))
+            .collect();
         let mut inner = Inner {
             power_tables,
             eots_keys: HashMap::new(),
@@ -576,28 +737,39 @@ impl EotsTally {
             checkpoint_bitcoin_height: 0,
             monitor_read: false,
             monitor_read_for: 0,
+            agreed_read: None,
             stored_power_tables,
             chain: stored.blocks.into_iter().collect(),
             latest_height: 0,
             votes: BTreeMap::new(),
+            verified: BTreeMap::new(),
+            checked_proposal: Vec::new(),
             pending: Pending::new(stored.votes),
+            loaded,
             recorded_final: stored.recorded_final,
             agreed_checkpointed: stored.checkpointed,
             conflicts: BTreeSet::new(),
             evidence_carried: stored.evidence_carried.into_iter().collect(),
             last_cast: stored.last_cast,
             on_dead_fork: false,
-            envelope_check,
         };
         inner.latest_height = inner.chain.keys().next_back().copied().unwrap_or(0);
-        let power_tables_from = inner.delete_final();
-        store.delete_up_to(inner.recorded_final, power_tables_from)?;
+        // Also what a crash left behind: entries dropped from memory but not yet from the store.
+        store.delete(&inner.delete_final())?;
+        let (deletions, received) = mpsc::channel();
+        let deleting = store.clone();
+        std::thread::Builder::new()
+            .name("eots-store-deletion".into())
+            .spawn(move || delete_in_background(deleting, received))
+            .context("failed to start the EOTS store deletion")?;
         Ok(Self {
             inner: Arc::new(Mutex::new(inner)),
+            deletions,
             store,
             provider,
             subnet_id,
             txid20,
+            envelope_check,
             committed: tokio::sync::watch::channel(0).0,
             monitor_reading: Arc::new(tokio::sync::Mutex::new(())),
         })
@@ -617,6 +789,17 @@ impl EotsTally {
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
         self.inner.lock().expect("EOTS tally lock")
+    }
+
+    /// Runs the cryptographic check `check` of `vote`.
+    fn verify(&self, vote: &ValidatorVote, check: &CryptoCheck) -> Result<(), VoteError> {
+        match check {
+            CryptoCheck::Envelope if (self.envelope_check)(vote) => Ok(()),
+            CryptoCheck::Envelope => Err(VoteError::BadEnvelope),
+            CryptoCheck::Vote(c) => {
+                ipc_eots::verify_vote(&self.txid20, &vote.vote, c).map_err(VoteError::Invalid)
+            }
+        }
     }
 
     /// Reads the latest recorded state: see [`Self::read_monitor_at`].
@@ -644,7 +827,7 @@ impl EotsTally {
         )
         .await
         .map_err(|_| anyhow::anyhow!("no answer within {MONITOR_TIMEOUT:?}"))??;
-        let (pending, wrong_key) = {
+        let (stored, uncommitted, wrong_key) = {
             let mut inner = self.lock();
             if inner.monitor_read && records.bitcoin_height <= inner.monitor_read_for {
                 return Ok(records.checkpoint);
@@ -666,19 +849,24 @@ impl EotsTally {
             inner.monitor_read_for = records.bitcoin_height;
             inner.monitor_read = true;
             let wrong_key: Vec<_> = inner.pending.wrong_key.take().collect();
-            (inner.pending.take(), wrong_key)
+            let (stored, uncommitted) = inner.pending.take();
+            (stored, uncommitted, wrong_key)
         };
-        for vote in pending {
+        for vote in stored {
             let _ = self.add_vote(vote, None);
+        }
+        for vote in uncommitted {
+            let _ = self.add_vote_passing(vote, None, vec![CryptoCheck::Envelope]);
         }
         self.check_again(wrong_key);
         Ok(records.checkpoint)
     }
 
-    /// Checks kept votes again; a vote that fails is dropped and logged.
+    /// Checks kept votes again, which passed rule 1 when kept; a vote that fails is dropped and
+    /// logged.
     fn check_again(&self, votes: Vec<ValidatorVote>) {
         for vote in votes {
-            match self.add_vote(vote, None) {
+            match self.add_vote_passing(vote, None, vec![CryptoCheck::Envelope]) {
                 Err(e) if e.never_valid() => tracing::error!(error = %e, "EOTS vote dropped"),
                 Err(e) => tracing::debug!(error = %e, "EOTS vote dropped"),
                 Ok(_) => {}
@@ -767,14 +955,31 @@ impl EotsTally {
         vote: ValidatorVote,
         carried: Option<(&AgreedState, u64)>,
     ) -> Result<VoteOutcome, VoteError> {
-        let stored = {
+        self.add_vote_passing(vote, carried, Vec::new())
+    }
+
+    /// [`Self::add_vote`] for a vote that passed the cryptographic checks in `passed`. The checks
+    /// it has not passed run outside the lock.
+    fn add_vote_passing(
+        &self,
+        vote: ValidatorVote,
+        carried: Option<(&AgreedState, u64)>,
+        mut passed: Vec<CryptoCheck>,
+    ) -> Result<VoteOutcome, VoteError> {
+        let stored = loop {
             let mut inner = self.lock();
             if vote.vote.height <= inner.recorded_final {
                 return Err(VoteError::Final(vote.vote.height, inner.recorded_final));
             }
-            match inner.check(&vote, carried, &self.txid20) {
-                Ok(()) => {}
-                Err(e @ VoteError::AboveLatest(..)) if carried.is_none() => {
+            let commitment = match inner.check(&vote, carried, &passed) {
+                Checked::Passed(commitment) => commitment,
+                Checked::Unverified(check) => {
+                    drop(inner);
+                    self.verify(&vote, &check)?;
+                    passed.push(check);
+                    continue;
+                }
+                Checked::Failed(e @ VoteError::AboveLatest(..)) if carried.is_none() => {
                     let Some(validator) = inner.awaits_block(&vote) else {
                         return Err(e);
                     };
@@ -784,7 +989,7 @@ impl EotsTally {
                     }
                     return Ok(VoteOutcome::Pending);
                 }
-                Err(e @ VoteError::NotCommitted(_)) if carried.is_none() => {
+                Checked::Failed(e @ VoteError::NotCommitted(_)) if carried.is_none() => {
                     let Some(validator) = inner.awaits_commitment(&vote) else {
                         return Err(e);
                     };
@@ -794,7 +999,7 @@ impl EotsTally {
                     }
                     return Ok(VoteOutcome::Pending);
                 }
-                Err(e @ VoteError::WrongEotsKey) if carried.is_none() => {
+                Checked::Failed(e @ VoteError::WrongEotsKey) if carried.is_none() => {
                     let Some(validator) = inner.awaits_eots_key(&vote) else {
                         return Err(e);
                     };
@@ -804,19 +1009,26 @@ impl EotsTally {
                     }
                     return Ok(VoteOutcome::Pending);
                 }
-                Err(e) => return Err(e),
-            }
-            let (outcome, stored) = inner.store(vote);
+                Checked::Failed(e) => return Err(e),
+            };
+            let (outcome, stored) = inner.store(vote, commitment);
             if let Some(v) = &stored {
                 if inner.chain.get(&v.vote.height) != Some(&v.vote.block_hash) {
                     inner.check_conflict(v.vote.height);
                 }
             }
-            (outcome, stored)
+            break (outcome, stored);
         };
         if let (outcome, Some(v)) = stored {
             if let Err(e) = self.store.put_vote(&v) {
                 tracing::error!(error = %e, "failed to persist an EOTS vote");
+            } else if v.vote.height <= self.lock().recorded_final {
+                // The subnet final height passed the vote, and dropped it from memory, while the
+                // vote was being stored.
+                self.delete(FinalEntries {
+                    votes: vec![FinalEntries::vote_key(&v)],
+                    ..Default::default()
+                });
             }
             if outcome == VoteOutcome::Evidence {
                 tracing::warn!(
@@ -862,20 +1074,31 @@ impl EotsTally {
 
     /// The recorded state at `bitcoin_height`; an error until it reaches that Bitcoin height.
     pub async fn agreed_state(&self, bitcoin_height: u64) -> anyhow::Result<AgreedState> {
-        // No checkpoint was recorded between the held one and `monitor_read_for`
+        // No checkpoint was recorded between the held one and `monitor_read_for`; otherwise the
+        // answer of the latest read for an agreed state, if at this Bitcoin height
         let held = {
             let inner = self.lock();
             (inner.monitor_read
                 && inner.monitor_read_for >= bitcoin_height
                 && inner.checkpoint_bitcoin_height <= bitcoin_height)
                 .then_some(inner.checkpoint)
+                .or_else(|| {
+                    inner
+                        .agreed_read
+                        .filter(|(b, _)| *b == bitcoin_height)
+                        .map(|(_, c)| c)
+                })
         };
         let checkpoint = match held {
             Some(checkpoint) => checkpoint,
-            None => self
-                .read_monitor_at(Some(bitcoin_height))
-                .await?
-                .map(|c| (c.height, c.block_hash, c.killed)),
+            None => {
+                let checkpoint = self
+                    .read_monitor_at(Some(bitcoin_height))
+                    .await?
+                    .map(|c| (c.height, c.block_hash, c.killed));
+                self.lock().agreed_read = Some((bitcoin_height, checkpoint));
+                checkpoint
+            }
         };
         Ok(AgreedState {
             checkpointed: checkpoint.map_or(0, |(h, _, _)| h),
@@ -919,6 +1142,9 @@ impl EotsTally {
     pub fn proposal(&self, agreed: &AgreedState, carrying: u64) -> Option<EotsFinalityData> {
         let inner = self.lock();
         let carried = Some((agreed, carrying));
+        // A held vote passed its cryptographic checks; one whose audit path was verified against
+        // another commitment than the one checked here fails against it.
+        let passes = |v: &ValidatorVote| matches!(inner.check(v, carried, &[]), Checked::Passed(_));
         let mut data = EotsFinalityData {
             bitcoin_height: agreed.bitcoin_height,
             ..Default::default()
@@ -933,21 +1159,33 @@ impl EotsTally {
             let Some(table) = inner.power_table_at(next) else {
                 break;
             };
-            let votes: Vec<ValidatorVote> = inner
+            let mut held: Vec<(Weight, &ValidatorVote)> = inner
                 .votes
                 .get(&next)
                 .into_iter()
                 .flatten()
                 .flat_map(|(_, vs)| vs.iter().filter(|v| v.vote.block_hash == *hash))
-                .filter(|v| inner.check(v, carried, &self.txid20).is_ok())
-                .cloned()
+                .map(|v| {
+                    let power = to_key_bytes(&v.validator).map_or(0, |k| inner.power_at(&k, next));
+                    (power, v)
+                })
                 .collect();
-            let weight: Weight = votes
-                .iter()
-                .filter_map(|v| to_key_bytes(&v.validator))
-                .map(|k| inner.power_at(&k, next))
-                .sum();
-            if weight < threshold(table) {
+            // The fewest votes that pass the checks and reach the threshold: the greatest powers
+            // first, equal powers by EOTS key.
+            held.sort_by(|(pa, a), (pb, b)| pb.cmp(pa).then(a.vote.pk_eots.cmp(&b.vote.pk_eots)));
+            let needed = threshold(table);
+            let mut weight: Weight = 0;
+            let mut votes = Vec::new();
+            for (power, v) in held {
+                if weight >= needed {
+                    break;
+                }
+                if passes(v) {
+                    weight += power;
+                    votes.push(v.clone());
+                }
+            }
+            if weight < needed {
                 break;
             }
             let bytes: usize = votes.iter().map(vote_size).sum();
@@ -962,7 +1200,6 @@ impl EotsTally {
         // `carrying`, one per key.
         let mut taken = HashSet::new();
         for (a, b) in inner.evidence() {
-            let passes = |v| inner.check(v, carried, &self.txid20).is_ok();
             if !inner.evidence_carried.contains(&a.vote.pk_eots)
                 && passes(a)
                 && passes(b)
@@ -982,13 +1219,44 @@ impl EotsTally {
         agreed: &AgreedState,
         carrying: u64,
     ) -> Result<(), String> {
-        let inner = self.lock();
         let carried = Some((agreed, carrying));
+        let all: Vec<(&str, &ValidatorVote)> = data
+            .votes
+            .iter()
+            .map(|v| ("vote", v))
+            .chain(
+                data.evidence
+                    .iter()
+                    .flat_map(|(a, b)| [("evidence", a), ("evidence", b)]),
+            )
+            .collect();
+        let failed = |kind: &str, v: &ValidatorVote, e: VoteError| {
+            format!("carried {kind} at height {}: {e}", v.vote.height)
+        };
+        self.lock().checked_proposal.clear();
+        // Every carried vote is checked again after the cryptographic checks it has not passed
+        // run outside the lock.
+        let inner = loop {
+            let inner = self.lock();
+            let mut unverified = Vec::new();
+            for (kind, v) in &all {
+                match inner.check(v, carried, &[]) {
+                    Checked::Passed(_) => {}
+                    Checked::Failed(e) => return Err(failed(kind, v, e)),
+                    Checked::Unverified(check) => unverified.push((*kind, *v, check)),
+                }
+            }
+            if unverified.is_empty() {
+                break inner;
+            }
+            drop(inner);
+            for (kind, v, check) in unverified {
+                self.verify(v, &check).map_err(|e| failed(kind, v, e))?;
+                self.lock().checked_proposal.push((v.clone(), check));
+            }
+        };
         let mut by_height: BTreeMap<u64, Vec<&ValidatorVote>> = BTreeMap::new();
         for v in &data.votes {
-            inner
-                .check(v, carried, &self.txid20)
-                .map_err(|e| format!("carried vote at height {}: {e}", v.vote.height))?;
             by_height.entry(v.vote.height).or_default().push(v);
         }
         let mut expected = inner.recorded_final.max(agreed.checkpointed) + 1;
@@ -1023,11 +1291,6 @@ impl EotsTally {
         }
         let mut evidence_keys = HashSet::new();
         for (a, b) in &data.evidence {
-            for v in [a, b] {
-                inner
-                    .check(v, carried, &self.txid20)
-                    .map_err(|e| format!("carried evidence at height {}: {e}", v.vote.height))?;
-            }
             if !ipc_eots::is_double_vote(&a.vote, &b.vote) || a.validator != b.validator {
                 return Err("carried evidence is not a double vote of one key".to_string());
             }
@@ -1065,6 +1328,7 @@ impl EotsTally {
             self.set_recorded_final(last)?;
         }
         let mut inner = self.lock();
+        inner.checked_proposal.clear();
         if agreed.checkpointed > inner.agreed_checkpointed {
             inner.agreed_checkpointed = agreed.checkpointed;
             self.store.put_checkpointed(agreed.checkpointed)?;
@@ -1128,16 +1392,33 @@ impl EotsTally {
     }
 
     /// Takes the subnet final height from the gateway: raises the recorded one to `height` and
-    /// deletes what the tally holds at or below it.
+    /// deletes what the tally holds at or below it, in memory here and in the store in the
+    /// background.
     pub fn set_recorded_final(&self, height: u64) -> anyhow::Result<()> {
         let mut inner = self.lock();
         if height > inner.recorded_final {
-            inner.recorded_final = height;
             self.store.put_recorded_final(height)?;
-            let power_tables_from = inner.delete_final();
-            self.store.delete_up_to(height, power_tables_from)?;
+            inner.recorded_final = height;
+            self.delete(inner.delete_final());
         }
         Ok(())
+    }
+
+    /// Hands entries dropped from memory to the background deletion from the store.
+    fn delete(&self, entries: FinalEntries) {
+        if !entries.is_empty() {
+            // Fails only if the deletion thread has stopped; the next start deletes the entries.
+            let _ = self.deletions.send(Deletion::Entries(entries));
+        }
+    }
+
+    /// Waits until the store has deleted every entry handed to the background deletion so far.
+    #[cfg(test)]
+    pub fn wait_for_deletions(&self) {
+        let (done, deleted) = mpsc::channel();
+        if self.deletions.send(Deletion::Wait(done)).is_ok() {
+            let _ = deleted.recv();
+        }
     }
 
     /// The height of the block that would carry votes now: one above the chain's latest block.
