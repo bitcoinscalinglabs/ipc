@@ -519,12 +519,6 @@ impl SubnetManager for BtcSubnetManager {
             body["params"]["eots_nonce_start"] = json!(start);
             body["params"]["eots_nonce_count"] = json!(count);
         }
-        if let Some(initial_balance) = params.initial_balance {
-            body["params"]["initial_balance"] = json!({
-                "amount": token_amount_to_satoshi(initial_balance.amount)?,
-                "address": payload_to_evm_address(initial_balance.address.payload())?,
-            });
-        }
         tracing::trace!("Request body: {body:?}");
 
         let resp = self
@@ -576,59 +570,8 @@ impl SubnetManager for BtcSubnetManager {
         Ok(current_height)
     }
 
-    async fn pre_fund(&self, params: PreFundParams) -> Result<()> {
-        tracing::info!("pre-fund subnet on btc with params: {params:?}");
-
-        let body = json!({
-            "jsonrpc": "2.0",
-            "method": "prefundsubnet",
-            "id": 1,
-            "params": {
-                "subnet_id":        params.subnet_id.to_string(),
-                "amount":           token_amount_to_satoshi(params.amount)?,
-                "address":          payload_to_evm_address(params.dst_address.payload())?,
-            }
-        });
-        tracing::trace!("Request body: {body:?}");
-
-        let resp = self
-            .client
-            .post(self.rpc_url.clone())
-            .json(&body)
-            .send()
-            .await?;
-
-        if !resp.status().is_success() {
-            return Err(anyhow!(
-                "Pre-fund request failed with status: {}",
-                resp.status()
-            ));
-        }
-
-        let data = resp.json::<Value>().await?;
-
-        if let Some(err_obj) = data.get("error") {
-            let code = err_obj
-                .get("code")
-                .and_then(Value::as_i64)
-                .unwrap_or_default();
-            let message = err_obj
-                .get("message")
-                .and_then(Value::as_str)
-                .unwrap_or("Unknown error");
-            let error_data = err_obj
-                .get("data")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            return Err(anyhow!(
-                "JSON-RPC error: code={}, message={}, details={}",
-                code,
-                message,
-                error_data
-            ));
-        }
-
-        Ok(())
+    async fn pre_fund(&self, _params: PreFundParams) -> Result<()> {
+        anyhow::bail!("pre-fund on bitcoin is not supported")
     }
 
     async fn pre_release(

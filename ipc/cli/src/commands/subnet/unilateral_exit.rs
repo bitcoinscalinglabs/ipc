@@ -5,7 +5,6 @@
 use async_trait::async_trait;
 use clap::Args;
 use ipc_api::{subnet_id::SubnetID, token_amount_from_satoshi};
-use num_traits::Zero;
 use std::{fmt::Debug, str::FromStr};
 
 use crate::{get_ipc_provider, require_fil_addr_from_str, CommandLineHandler, GlobalArguments};
@@ -22,18 +21,12 @@ impl CommandLineHandler for JoinUe {
 
         let mut provider = get_ipc_provider(global)?;
         let subnet = SubnetID::from_str(&arguments.subnet)?;
-        // Before any key is selected or any pre-funding is sent
+        // Before any key is selected
         provider.require_bitcoin_parent(&subnet)?;
         let from = match &arguments.from {
             Some(address) => Some(require_fil_addr_from_str(address)?),
             None => None,
         };
-
-        // The provider sends the prefund transaction after the join's checks, before the join
-        let initial_balance = arguments.initial_balance.filter(|x| !x.is_zero());
-        if let Some(initial_balance) = initial_balance {
-            log::info!("pre-funding address with {initial_balance}");
-        }
 
         let epoch = provider
             .join_subnet(
@@ -44,7 +37,6 @@ impl CommandLineHandler for JoinUe {
                 Some(arguments.backup_address.clone()),
                 Some(arguments.epochs),
                 Some((arguments.eots_nonce_start, arguments.eots_nonce_count)),
-                initial_balance.map(token_amount_from_satoshi),
             )
             .await?;
         println!("join-ue transaction submitted at height: {epoch}");
@@ -64,11 +56,6 @@ pub struct JoinUeArgs {
     pub subnet: String,
     #[arg(long, help = "The collateral to lock (in sats)")]
     pub collateral: u64,
-    #[arg(
-        long,
-        help = "Optionally add an initial balance to the validator in genesis in the subnet (in sats)"
-    )]
-    pub initial_balance: Option<u64>,
     #[arg(long, help = "The IP address of the validator")]
     pub ip: String,
     #[arg(long, help = "The backup address of the validator, paid by unstake-ue")]

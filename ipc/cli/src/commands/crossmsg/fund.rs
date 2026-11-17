@@ -145,19 +145,6 @@ impl CommandLineHandler for PreFund {
                     )
                     .await?;
             }
-            SubnetPreFundArgs::Btc(btc_fund_args) => {
-                let dest_address = match &btc_fund_args.to {
-                    Some(address) => Some(require_fil_addr_from_str(address)?),
-                    None => None,
-                };
-                provider
-                    .pre_fund(
-                        subnet.clone(),
-                        dest_address,
-                        token_amount_from_satoshi(btc_fund_args.amount),
-                    )
-                    .await?;
-            }
         };
         log::info!("address pre-funded successfully");
 
@@ -181,8 +168,6 @@ pub struct PreFundArgs {
 pub enum SubnetPreFundArgs {
     #[command(name = "fevm")]
     Fevm(FevmPreFundArgs),
-    #[command(name = "btc")]
-    Btc(BtcPreFundArgs),
 }
 
 #[derive(Debug, Args)]
@@ -194,14 +179,6 @@ pub struct FevmPreFundArgs {
     pub from: Option<String>,
     #[arg(help = "The amount to fund (in whole FIL)")]
     pub amount: f64,
-}
-
-#[derive(Debug, Args)]
-pub struct BtcPreFundArgs {
-    #[arg(long, help = "The address to send funds to")]
-    pub to: Option<String>,
-    #[arg(help = "The amount to fund (in sats)")]
-    pub amount: u64,
 }
 
 /// The command to send ERC20 tokens to a subnet from parent

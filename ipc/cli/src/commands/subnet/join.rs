@@ -83,7 +83,6 @@ impl JoinSubnet {
                 None,
                 None,
                 None,
-                None,
             )
             .await?;
         println!("joined at epoch: {epoch}");
@@ -102,17 +101,6 @@ impl JoinSubnet {
             None => None,
         };
 
-        if let Some(initial_balance) = btc_args.initial_balance.filter(|x| !x.is_zero()) {
-            log::info!("pre-funding address with {initial_balance}");
-            provider
-                .pre_fund(
-                    subnet_id.clone(),
-                    from,
-                    token_amount_from_satoshi(initial_balance),
-                )
-                .await?;
-        };
-
         let epoch = provider
             .join_subnet(
                 subnet_id,
@@ -120,7 +108,6 @@ impl JoinSubnet {
                 token_amount_from_satoshi(btc_args.collateral),
                 Some(btc_args.ip.clone()),
                 Some(btc_args.backup_address.clone()),
-                None,
                 None,
                 None,
             )
@@ -179,11 +166,6 @@ pub struct FevmJoinArgs {
 pub struct BtcJoinArgs {
     #[arg(long, help = "The collateral to stake in the subnet (in sats)")]
     pub collateral: u64,
-    #[arg(
-        long,
-        help = "Optionally add an initial balance to the validator in genesis in the subnet (in sats)"
-    )]
-    pub initial_balance: Option<u64>,
     #[arg(long, help = "The IP address of the validator")]
     pub ip: String,
     #[arg(long, help = "The backup address of the validator")]
