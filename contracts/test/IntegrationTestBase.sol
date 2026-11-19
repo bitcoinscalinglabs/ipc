@@ -356,22 +356,11 @@ contract IntegrationTestBase is Test, TestParams, TestRegistry, TestSubnetActor,
     }
 
     function createGatewayDiamond(GatewayDiamond.ConstructorParams memory params) public returns (GatewayDiamond) {
-        CheckpointingFacet checkpointingFacet = new CheckpointingFacet();
-        XnetMessagingFacet xnetMessagingFacet = new XnetMessagingFacet();
-        TopDownFinalityFacet topDownFinalityFacet = new TopDownFinalityFacet();
-        GatewayManagerFacet manager = new GatewayManagerFacet();
-        GatewayGetterFacet getter = new GatewayGetterFacet();
-        GatewayMessengerFacet messenger = new GatewayMessengerFacet();
-        GatewayErcFacet ercFacet = new GatewayErcFacet();
-        DiamondCutFacet cutter = new DiamondCutFacet();
-        DiamondLoupeFacet louper = new DiamondLoupeFacet();
-        OwnershipFacet ownership = new OwnershipFacet();
-
         IDiamond.FacetCut[] memory gwDiamondCut = new IDiamond.FacetCut[](10);
 
         gwDiamondCut[0] = (
             IDiamond.FacetCut({
-                facetAddress: address(checkpointingFacet),
+                facetAddress: address(new CheckpointingFacet()),
                 action: IDiamond.FacetCutAction.Add,
                 functionSelectors: gwCheckpointingFacetSelectors
             })
@@ -379,7 +368,7 @@ contract IntegrationTestBase is Test, TestParams, TestRegistry, TestSubnetActor,
 
         gwDiamondCut[6] = (
             IDiamond.FacetCut({
-                facetAddress: address(xnetMessagingFacet),
+                facetAddress: address(new XnetMessagingFacet()),
                 action: IDiamond.FacetCutAction.Add,
                 functionSelectors: gwXnetMessagingFacetSelectors
             })
@@ -387,7 +376,7 @@ contract IntegrationTestBase is Test, TestParams, TestRegistry, TestSubnetActor,
 
         gwDiamondCut[7] = (
             IDiamond.FacetCut({
-                facetAddress: address(topDownFinalityFacet),
+                facetAddress: address(new TopDownFinalityFacet()),
                 action: IDiamond.FacetCutAction.Add,
                 functionSelectors: gwTopDownFinalityFacetSelectors
             })
@@ -395,7 +384,7 @@ contract IntegrationTestBase is Test, TestParams, TestRegistry, TestSubnetActor,
 
         gwDiamondCut[1] = (
             IDiamond.FacetCut({
-                facetAddress: address(manager),
+                facetAddress: address(new GatewayManagerFacet()),
                 action: IDiamond.FacetCutAction.Add,
                 functionSelectors: gwManagerSelectors
             })
@@ -403,7 +392,7 @@ contract IntegrationTestBase is Test, TestParams, TestRegistry, TestSubnetActor,
 
         gwDiamondCut[2] = (
             IDiamond.FacetCut({
-                facetAddress: address(getter),
+                facetAddress: address(new GatewayGetterFacet()),
                 action: IDiamond.FacetCutAction.Add,
                 functionSelectors: gwGetterSelectors
             })
@@ -411,7 +400,7 @@ contract IntegrationTestBase is Test, TestParams, TestRegistry, TestSubnetActor,
 
         gwDiamondCut[3] = (
             IDiamond.FacetCut({
-                facetAddress: address(messenger),
+                facetAddress: address(new GatewayMessengerFacet()),
                 action: IDiamond.FacetCutAction.Add,
                 functionSelectors: gwMessengerSelectors
             })
@@ -419,7 +408,7 @@ contract IntegrationTestBase is Test, TestParams, TestRegistry, TestSubnetActor,
 
         gwDiamondCut[4] = (
             IDiamond.FacetCut({
-                facetAddress: address(louper),
+                facetAddress: address(new DiamondLoupeFacet()),
                 action: IDiamond.FacetCutAction.Add,
                 functionSelectors: gwLoupeSelectors
             })
@@ -427,7 +416,7 @@ contract IntegrationTestBase is Test, TestParams, TestRegistry, TestSubnetActor,
 
         gwDiamondCut[5] = (
             IDiamond.FacetCut({
-                facetAddress: address(cutter),
+                facetAddress: address(new DiamondCutFacet()),
                 action: IDiamond.FacetCutAction.Add,
                 functionSelectors: gwCutterSelectors
             })
@@ -435,7 +424,7 @@ contract IntegrationTestBase is Test, TestParams, TestRegistry, TestSubnetActor,
 
         gwDiamondCut[8] = (
             IDiamond.FacetCut({
-                facetAddress: address(ownership),
+                facetAddress: address(new OwnershipFacet()),
                 action: IDiamond.FacetCutAction.Add,
                 functionSelectors: gwOwnershipSelectors
             })
@@ -443,7 +432,7 @@ contract IntegrationTestBase is Test, TestParams, TestRegistry, TestSubnetActor,
 
         gwDiamondCut[9] = (
             IDiamond.FacetCut({
-                facetAddress: address(ercFacet),
+                facetAddress: address(new GatewayErcFacet()),
                 action: IDiamond.FacetCutAction.Add,
                 functionSelectors: gwErcFacetSelectors
             })
@@ -518,21 +507,11 @@ contract IntegrationTestBase is Test, TestParams, TestRegistry, TestSubnetActor,
     }
 
     function createSubnetActor(SubnetActorDiamond.ConstructorParams memory params) public returns (SubnetActorDiamond) {
-        SubnetActorManagerFacet manager = new SubnetActorManagerFacet();
-        SubnetActorGetterFacet getter = new SubnetActorGetterFacet();
-        SubnetActorPauseFacet pauser = new SubnetActorPauseFacet();
-        SubnetActorRewardFacet rewarder = new SubnetActorRewardFacet();
-        SubnetActorCheckpointingFacet checkpointer = new SubnetActorCheckpointingFacet();
-        DiamondLoupeFacet louper = new DiamondLoupeFacet();
-        DiamondCutFacet cutter = new DiamondCutFacet();
-        OwnershipFacet ownership = new OwnershipFacet();
-        SubnetActorActivityFacet activity = new SubnetActorActivityFacet();
-
         IDiamond.FacetCut[] memory diamondCut = new IDiamond.FacetCut[](9);
 
         diamondCut[0] = (
             IDiamond.FacetCut({
-                facetAddress: address(manager),
+                facetAddress: address(new SubnetActorManagerFacet()),
                 action: IDiamond.FacetCutAction.Add,
                 functionSelectors: saManagerSelectors
             })
@@ -540,7 +519,7 @@ contract IntegrationTestBase is Test, TestParams, TestRegistry, TestSubnetActor,
 
         diamondCut[1] = (
             IDiamond.FacetCut({
-                facetAddress: address(getter),
+                facetAddress: address(new SubnetActorGetterFacet()),
                 action: IDiamond.FacetCutAction.Add,
                 functionSelectors: saGetterSelectors
             })
@@ -548,7 +527,7 @@ contract IntegrationTestBase is Test, TestParams, TestRegistry, TestSubnetActor,
 
         diamondCut[2] = (
             IDiamond.FacetCut({
-                facetAddress: address(pauser),
+                facetAddress: address(new SubnetActorPauseFacet()),
                 action: IDiamond.FacetCutAction.Add,
                 functionSelectors: saPauserSelectors
             })
@@ -556,7 +535,7 @@ contract IntegrationTestBase is Test, TestParams, TestRegistry, TestSubnetActor,
 
         diamondCut[3] = (
             IDiamond.FacetCut({
-                facetAddress: address(rewarder),
+                facetAddress: address(new SubnetActorRewardFacet()),
                 action: IDiamond.FacetCutAction.Add,
                 functionSelectors: saRewarderSelectors
             })
@@ -564,7 +543,7 @@ contract IntegrationTestBase is Test, TestParams, TestRegistry, TestSubnetActor,
 
         diamondCut[4] = (
             IDiamond.FacetCut({
-                facetAddress: address(checkpointer),
+                facetAddress: address(new SubnetActorCheckpointingFacet()),
                 action: IDiamond.FacetCutAction.Add,
                 functionSelectors: saCheckpointerSelectors
             })
@@ -572,7 +551,7 @@ contract IntegrationTestBase is Test, TestParams, TestRegistry, TestSubnetActor,
 
         diamondCut[5] = (
             IDiamond.FacetCut({
-                facetAddress: address(cutter),
+                facetAddress: address(new DiamondCutFacet()),
                 action: IDiamond.FacetCutAction.Add,
                 functionSelectors: saCutterSelectors
             })
@@ -580,7 +559,7 @@ contract IntegrationTestBase is Test, TestParams, TestRegistry, TestSubnetActor,
 
         diamondCut[6] = (
             IDiamond.FacetCut({
-                facetAddress: address(louper),
+                facetAddress: address(new DiamondLoupeFacet()),
                 action: IDiamond.FacetCutAction.Add,
                 functionSelectors: saLouperSelectors
             })
@@ -588,7 +567,7 @@ contract IntegrationTestBase is Test, TestParams, TestRegistry, TestSubnetActor,
 
         diamondCut[7] = (
             IDiamond.FacetCut({
-                facetAddress: address(ownership),
+                facetAddress: address(new OwnershipFacet()),
                 action: IDiamond.FacetCutAction.Add,
                 functionSelectors: saOwnershipSelectors
             })
@@ -596,7 +575,7 @@ contract IntegrationTestBase is Test, TestParams, TestRegistry, TestSubnetActor,
 
         diamondCut[8] = (
             IDiamond.FacetCut({
-                facetAddress: address(activity),
+                facetAddress: address(new SubnetActorActivityFacet()),
                 action: IDiamond.FacetCutAction.Add,
                 functionSelectors: saActivitySelectors
             })
@@ -960,6 +939,7 @@ contract IntegrationTestBase is Test, TestParams, TestRegistry, TestSubnetActor,
             blockHeight: h,
             blockHash: keccak256(abi.encode(h)),
             nextConfigurationNumber: nextConfigNum - 1,
+            slashPreSignatureCount: 0,
             msgs: new IpcEnvelope[](0),
             activity: CompressedActivityRollup({
                 consensus: Consensus.CompressedSummary({
@@ -1003,6 +983,7 @@ contract IntegrationTestBase is Test, TestParams, TestRegistry, TestSubnetActor,
             blockHeight: h,
             blockHash: keccak256(abi.encode(h)),
             nextConfigurationNumber: nextConfigNum - 1,
+            slashPreSignatureCount: 0,
             msgs: new IpcEnvelope[](0),
             activity: activities
         });

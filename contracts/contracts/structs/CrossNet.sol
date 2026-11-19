@@ -28,6 +28,8 @@ struct BottomUpCheckpoint {
     /// This one expected to be signed by the validators from the membership reported in the previous checkpoint.
     /// 0 could mean "no change".
     uint64 nextConfigurationNumber;
+    /// @dev The number of slash pre-signatures that the checkpoint carries (`getSlashPreSignatures(blockHeight)`).
+    uint64 slashPreSignatureCount;
     /// @dev Batch of messages to execute.
     IpcEnvelope[] msgs;
     /// @dev The activity rollup from child subnet to parent subnet.

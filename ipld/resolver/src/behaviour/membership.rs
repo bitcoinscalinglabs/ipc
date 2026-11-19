@@ -10,7 +10,7 @@ use crate::hash::blake2b_256;
 use crate::observe;
 use crate::provider_cache::{ProviderDelta, SubnetProviderCache};
 use crate::provider_record::{ProviderRecord, SignedProviderRecord};
-use crate::vote_record::{SignedVoteRecord, VoteRecord};
+use crate::vote_record::SignedVoteRecord;
 use crate::Timestamp;
 use anyhow::anyhow;
 use ipc_api::subnet_id::SubnetID;
@@ -54,7 +54,7 @@ pub enum Event<V> {
     Skipped(PeerId),
 
     /// We received a [`VoteRecord`] in one of the subnets we are providing data for.
-    ReceivedVote(Box<VoteRecord<V>>),
+    ReceivedVote(Box<SignedVoteRecord<V>>),
 
     /// We received preemptive data published in a subnet we were interested in.
     ReceivedPreemptive(SubnetID, Vec<u8>),
@@ -421,7 +421,7 @@ where
                 ),
             }
         } else if self.voting_topics.contains(&msg.topic) {
-            match SignedVoteRecord::from_bytes(&msg.data).map(|r| r.into_record()) {
+            match SignedVoteRecord::from_bytes(&msg.data) {
                 Ok(record) => self.handle_vote_record(record),
                 Err(e) => emit(observe::MembershipFailureEvent::GossipInvalidVoteRecord(
                     msg.source,
@@ -466,7 +466,7 @@ where
     }
 
     /// Raise an event to tell we received a new vote.
-    fn handle_vote_record(&mut self, record: VoteRecord<V>) {
+    fn handle_vote_record(&mut self, record: SignedVoteRecord<V>) {
         self.outbox.push_back(Event::ReceivedVote(Box::new(record)))
     }
 

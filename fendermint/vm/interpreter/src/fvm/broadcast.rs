@@ -101,6 +101,41 @@ where
         self.retry_delay
     }
 
+    /// Run a read-only call of a contract on the committed state and return its return data.
+    pub async fn fevm_view(
+        &self,
+        contract: Address,
+        calldata: et::Bytes,
+        chain_id: ChainID,
+    ) -> anyhow::Result<Vec<u8>> {
+        // Sequence zero makes the call use the sender's sequence in the committed state, which is
+        // behind the pending one while a transaction of this validator waits in the mempool.
+        let factory = SignedMessageFactory::new(self.secret_key.clone(), self.addr, 0, chain_id);
+        let mut client = self.client.clone().bind(factory);
+        let gas_params = GasParams {
+            gas_limit: BLOCK_GAS_LIMIT,
+            gas_fee_cap: self.gas_fee_cap.clone(),
+            gas_premium: self.gas_premium.clone(),
+        };
+        let res = client
+            .fevm_call(
+                contract,
+                calldata.0,
+                TokenAmount::zero(),
+                gas_params,
+                FvmQueryHeight::Committed,
+            )
+            .await
+            .context("failed to call the contract")?;
+        res.return_data.ok_or_else(|| {
+            anyhow!(
+                "contract call failed: {:?} - {}",
+                res.response.value.code,
+                res.response.value.info
+            )
+        })
+    }
+
     /// Send a transaction to the chain and return is hash.
     ///
     /// It currently doesn't wait for the execution, only that it has successfully been added to the mempool,
@@ -229,5 +264,95 @@ fn can_retry(code: tendermint::abci::Code) -> bool {
         ExitCode::SYS_OUT_OF_GAS => false,
         // Unknown errors should not be retried.
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use async_trait::async_trait;
+    use cid::Cid;
+    use ethers::types as et;
+    use fendermint_crypto::SecretKey;
+    use fendermint_vm_message::query::{ActorState, FvmQuery};
+    use fvm_ipld_encoding::to_vec;
+    use fvm_shared::{address::Address, econ::TokenAmount};
+    use num_traits::Zero;
+    use tendermint::abci::Code;
+    use tendermint_rpc::endpoint::abci_query::{self, AbciQuery};
+    use tendermint_rpc::{Client, Error, Response, SimpleRequest};
+
+    use super::Broadcaster;
+
+    /// The sender's sequence in the committed state; one of its transactions is pending.
+    const COMMITTED_SEQUENCE: u64 = 33;
+
+    #[derive(Clone)]
+    struct Node;
+
+    #[async_trait]
+    impl Client for Node {
+        async fn perform<R>(&self, request: R) -> Result<R::Output, Error>
+        where
+            R: SimpleRequest,
+        {
+            let request: serde_json::Value = serde_json::from_str(&request.into_json()).unwrap();
+            let params = &request["params"];
+            let height: u64 = params["height"].as_str().unwrap().parse().unwrap();
+            let data = hex::decode(params["data"].as_str().unwrap()).unwrap();
+            let response = match fvm_ipld_encoding::from_slice(&data).unwrap() {
+                FvmQuery::ActorState(_) => {
+                    let pending = height == i64::MAX as u64;
+                    let state = ActorState {
+                        code: Cid::default(),
+                        state: Cid::default(),
+                        sequence: COMMITTED_SEQUENCE + u64::from(pending),
+                        balance: TokenAmount::zero(),
+                        delegated_address: None,
+                    };
+                    AbciQuery {
+                        key: to_vec(&100u64).unwrap(),
+                        value: to_vec(&state).unwrap(),
+                        ..Default::default()
+                    }
+                }
+                // Zero stands for the sequence in the state. The value is an empty
+                // `ResponseDeliverTx`: exit code 0 and no return data.
+                FvmQuery::Call(msg) if msg.sequence == 0 || msg.sequence == COMMITTED_SEQUENCE => {
+                    AbciQuery {
+                        value: to_vec(&Vec::<u8>::new()).unwrap(),
+                        ..Default::default()
+                    }
+                }
+                FvmQuery::Call(msg) => AbciQuery {
+                    code: Code::from(2),
+                    info: format!(
+                        "pre-validation failed: Actor sequence invalid: {} != {COMMITTED_SEQUENCE}",
+                        msg.sequence
+                    ),
+                    ..Default::default()
+                },
+                query => panic!("unexpected query {query:?}"),
+            };
+            let result = serde_json::to_value(abci_query::Response { response }).unwrap();
+            let response = serde_json::json!({ "jsonrpc": "2.0", "id": "", "result": result });
+            Ok(R::Response::from_string(response.to_string())?.into())
+        }
+    }
+
+    #[tokio::test]
+    async fn a_view_runs_on_the_committed_state_while_a_transaction_is_pending() {
+        let broadcaster = Broadcaster::new(
+            Node,
+            Address::new_id(100),
+            SecretKey::try_from(vec![1u8; 32]).unwrap(),
+            TokenAmount::zero(),
+            TokenAmount::zero(),
+            1.0,
+        );
+        let data = broadcaster
+            .fevm_view(Address::new_id(1), et::Bytes::default(), 1.into())
+            .await
+            .unwrap();
+        assert!(data.is_empty());
     }
 }

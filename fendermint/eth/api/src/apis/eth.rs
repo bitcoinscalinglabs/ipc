@@ -213,6 +213,11 @@ where
             .await
             .context("failed to get block")?;
 
+        // The genesis block has no fee history.
+        if from_tm::is_block_zero(&block) {
+            break;
+        }
+
         let height = block.header().height;
 
         // Apparently the base fees have to include the next fee after the newest block.

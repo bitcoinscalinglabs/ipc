@@ -36,6 +36,12 @@ impl SnapshotClient {
             state,
         }
     }
+
+    /// The heights of snapshots are multiples of this interval.
+    pub fn snapshot_interval(&self) -> BlockHeight {
+        self.snapshot_interval
+    }
+
     /// Set the latest block state parameters and notify the manager.
     ///
     /// Call this with the block height where the `app_hash` in the block reflects the

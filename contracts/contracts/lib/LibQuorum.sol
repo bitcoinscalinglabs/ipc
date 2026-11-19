@@ -57,6 +57,7 @@ library LibQuorum {
             revert FailedAddSignatory();
         }
         self.quorumSignatures[height][recoveredSignatory] = signature;
+        self.quorumSignerWeights[height][recoveredSignatory] = weight;
         info.currentWeight += weight;
 
         if (info.currentWeight >= info.threshold) {
@@ -143,6 +144,7 @@ library LibQuorum {
 
             for (uint256 i; i < n; ) {
                 delete self.quorumSignatures[h][oldValidators[i]];
+                delete self.quorumSignerWeights[h][oldValidators[i]];
                 self.quorumSignatureSenders[h].remove(oldValidators[i]);
                 unchecked {
                     ++i;

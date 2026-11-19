@@ -41,6 +41,7 @@ fendermint_vm_actor_interface = { path = "../../vm/actor_interface" }
 fendermint_vm_message = { path = "../../vm/message" }
 
 ipc-api = { workspace = true }
+ipc-eots = { workspace = true }
 
 [dev-dependencies]
 async-trait = { workspace = true }

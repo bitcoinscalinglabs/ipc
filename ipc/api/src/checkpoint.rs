@@ -72,10 +72,7 @@ pub struct BottomUpCheckpointBundle {
 pub struct BitcoinCheckpointSignatureQuorum {
     /// The unsigned PSBT
     pub unsigned_psbt: UnsignedPsbt,
-    /// The 32-byte x-only Taproot pubkey of each signatory.
-    pub signatories: Vec<[u8; 32]>,
-    /// The signatures of each signatory.
-    /// `signatures[i]` contains the signature of `signatories[i]`.
+    /// The signatures of each signatory, one per input of the checkpoint transaction, concatenated.
     pub signatures: Vec<BitcoinSignature>,
     /// The transfer transaction
     pub transfer_tx: BitcoinTx,
@@ -90,27 +87,6 @@ pub struct BitcoinCheckpointSignature {
     pub signature: BitcoinSignature,
     /// The corresponding transfer transaction
     pub transfer_tx: BitcoinTx,
-}
-
-/// A set of signatures on a bitcoin transaction that encodes a bootstrap handover.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct BitcoinHandoverSignatureQuorum {
-    /// The unsigned PSBT
-    pub unsigned_psbt: UnsignedPsbt,
-    /// The 32-byte x-only Taproot pubkey of each signatory.
-    pub signatories: Vec<[u8; 32]>,
-    /// The signatures of each signatory.
-    /// `signatures[i]` contains the signature of `signatories[i]`.
-    pub signatures: Vec<BitcoinSignature>,
-}
-
-/// A signature from a single signatory on the bitcoin transaction that encodes a bootstrap handover.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct BitcoinHandoverSignature {
-    /// The unsigned PSBT of the bootstrap handover transaction
-    pub unsigned_psbt: UnsignedPsbt,
-    /// The signature of a single signatory.
-    pub signature: BitcoinSignature,
 }
 
 /// A base64-encoded unsigned PSBT
@@ -226,6 +202,8 @@ pub struct BottomUpCheckpoint {
     /// This one expected to be signed by the validators from the membership reported in the previous checkpoint.
     /// 0 could mean "no change".
     pub next_configuration_number: u64,
+    /// Length of the gateway's slash pre-signature list at the end of `block_height`.
+    pub slash_pre_signature_count: u64,
     /// The list of messages for execution
     pub msgs: Vec<IpcEnvelope>,
     /// The activity commitment from child subnet to parent subnet

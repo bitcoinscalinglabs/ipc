@@ -1,0 +1,21 @@
+[package]
+name = "ipc-eots"
+version = "0.1.0"
+edition = "2021"
+license-file = "../../LICENSE"
+publish = false
+
+[dependencies]
+k256 = { version = "0.13", features = ["schnorr", "arithmetic"] }
+postcard = { version = "1.0.10", default-features = false, features = ["use-std"] }
+serde = { workspace = true }
+serde_bytes = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+hex = { workspace = true }
+serde_json = { workspace = true }
+
+[features]
+testing = []

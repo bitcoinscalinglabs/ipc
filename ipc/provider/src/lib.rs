@@ -264,6 +264,16 @@ impl IpcProvider {
         }
     }
 
+    /// Fails unless the subnet's parent is a Bitcoin network, where join-ue and unstake-ue exist
+    pub fn require_bitcoin_parent(&self, subnet: &SubnetID) -> anyhow::Result<()> {
+        let parent_id = subnet.parent().ok_or_else(|| anyhow!("no parent found"))?;
+        let parent_conn = self.get_connection(&parent_id)?;
+        match parent_conn.subnet().config {
+            config::subnet::SubnetConfig::Btc(_) => Ok(()),
+            _ => Err(anyhow!("join-ue is only supported on a Bitcoin parent")),
+        }
+    }
+
     pub async fn join_subnet(
         &mut self,
         subnet: SubnetID,
@@ -271,7 +281,12 @@ impl IpcProvider {
         collateral: TokenAmount,
         validator_ip: Option<String>,
         backup_address: Option<String>,
+        epochs: Option<u32>,
+        eots_nonces: Option<(u64, u32)>,
     ) -> anyhow::Result<ChainEpoch> {
+        if epochs.is_some() {
+            self.require_bitcoin_parent(&subnet)?;
+        }
         let parent_id = subnet.parent().ok_or_else(|| anyhow!("no parent found"))?;
         let parent_conn = self.get_connection(&parent_id)?;
 
@@ -316,6 +331,8 @@ impl IpcProvider {
                     collateral,
                     ip,
                     backup_address,
+                    epochs,
+                    eots_nonces,
                 })
             }
         };
@@ -396,6 +413,8 @@ impl IpcProvider {
                     collateral,
                     ip: String::new(),
                     backup_address: String::new(),
+                    epochs: None,
+                    eots_nonces: None,
                 })
             }
         };
@@ -453,11 +472,23 @@ impl IpcProvider {
                     collateral,
                     ip: String::new(),
                     backup_address: String::new(),
+                    epochs: None,
+                    eots_nonces: None,
                 })
             }
         };
 
         parent_conn.manager().unstake(params).await
+    }
+
+    /// Submits the exit transaction of this validator's matured collaterals. Bitcoin parents only.
+    pub async fn unstake_ue(
+        &mut self,
+        subnet: SubnetID,
+    ) -> anyhow::Result<crate::manager::ExitTransaction> {
+        let parent = subnet.parent().ok_or_else(|| anyhow!("no parent found"))?;
+        let parent_conn = self.get_connection(&parent)?;
+        parent_conn.manager().unstake_ue(subnet).await
     }
 
     pub async fn leave_subnet(

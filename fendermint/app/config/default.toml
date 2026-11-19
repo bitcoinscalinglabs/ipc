@@ -52,6 +52,19 @@ port = 26658
 state_hist_size = 0
 # RocksDB compaction style - 'level' is supposed to be good when most keys don't get updated.
 compaction_style = "level"
+# Size of one write buffer of a column family in bytes (1 GiB).
+write_buffer_size = 1073741824
+# Number of write buffers of a column family, the one being written included.
+max_write_buffer_number = 2
+# Bytes of write history, flushed write buffers included, that a column family keeps for the
+# conflict check of transactions: -1 for max_write_buffer_number * write_buffer_size,
+# otherwise at least write_buffer_size.
+max_write_buffer_size_to_maintain = -1
+# Cap in bytes on the write buffers of all column families together; 0 means no cap.
+db_write_buffer_size = 0
+# Size of the write-ahead log in bytes above which the column families holding its oldest part
+# are flushed; 0 means 4 times the write buffers of all column families.
+max_total_wal_size = 0
 
 [metrics]
 # Enable the export of metrics over HTTP.

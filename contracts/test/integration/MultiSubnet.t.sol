@@ -1351,6 +1351,7 @@ contract MultiSubnetTest is Test, IntegrationTestBase {
             blockHeight: batch.blockHeight,
             blockHash: keccak256("block1"),
             nextConfigurationNumber: 0,
+            slashPreSignatureCount: 0,
             msgs: batch.msgs,
             activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
         });
@@ -1386,6 +1387,7 @@ contract MultiSubnetTest is Test, IntegrationTestBase {
             blockHeight: e,
             blockHash: keccak256("block1"),
             nextConfigurationNumber: 0,
+            slashPreSignatureCount: 0,
             msgs: msgs,
             activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
         });

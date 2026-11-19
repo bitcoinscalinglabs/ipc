@@ -166,6 +166,7 @@ contract GatewayDiamondTokenTest is Test, IntegrationTestBase {
             blockHash: blockhash(block.number),
             blockHeight: gatewayDiamond.getter().bottomUpCheckPeriod(),
             nextConfigurationNumber: 0,
+            slashPreSignatureCount: 0,
             msgs: msgs,
             activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
         });
@@ -225,6 +226,7 @@ contract GatewayDiamondTokenTest is Test, IntegrationTestBase {
             blockHash: blockhash(block.number),
             blockHeight: gatewayDiamond.getter().bottomUpCheckPeriod(),
             nextConfigurationNumber: 0,
+            slashPreSignatureCount: 0,
             msgs: msgs,
             activity: ActivityHelper.newCompressedActivityRollup(1, 3, bytes32(uint256(0)))
         });

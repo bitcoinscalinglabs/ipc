@@ -9,7 +9,7 @@ use crate::behaviour::{
 };
 use crate::client::Client;
 use crate::observe;
-use crate::vote_record::{SignedVoteRecord, VoteRecord};
+use crate::vote_record::SignedVoteRecord;
 use anyhow::anyhow;
 use bloom::{BloomFilter, ASMS};
 use ipc_api::subnet_id::SubnetID;
@@ -104,8 +104,8 @@ pub(crate) enum Request<V> {
 /// not part of a request-response action.
 #[derive(Clone, Debug)]
 pub enum Event<V> {
-    /// Received a vote about in a subnet about a CID.
-    ReceivedVote(Box<VoteRecord<V>>),
+    /// Received a vote about in a subnet about a CID, with its signed envelope.
+    ReceivedVote(Box<SignedVoteRecord<V>>),
     /// Received raw pre-emptive data published to a pinned subnet.
     ReceivedPreemptive(SubnetID, Vec<u8>),
 }

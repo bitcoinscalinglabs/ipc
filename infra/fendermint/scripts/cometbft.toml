@@ -198,6 +198,14 @@ sed -i'' -e 's|^seeds = ""$|seeds = "{{PLACEHOLDER}}"|g' ${CMT_DIR}/config/confi
 sed -i'' -e "s/{{PLACEHOLDER}}/$BOOTSTRAPS/g" ${CMT_DIR}/config/config.toml
 """
 
+# Connect to PERSISTENT_PEERS only, without peer exchange.
+[tasks.set-persistent-peers]
+condition = { env_set = ["PERSISTENT_PEERS"] }
+script = """
+sed -i'' -e "s|^persistent_peers = .*|persistent_peers = \\"$PERSISTENT_PEERS\\"|" ${CMT_DIR}/config/config.toml
+sed -i'' -e "s|^pex = true|pex = false|" ${CMT_DIR}/config/config.toml
+"""
+
 [tasks.set-external-addr]
 script = """
 sed -i'' -e 's|^external_address = ""$|external_address = "{{PLACEHOLDER}}"|g' ${CMT_DIR}/config/config.toml
@@ -220,6 +228,7 @@ sed -i'' -e "s|^prometheus = false|prometheus = true|" ${CMT_DIR}/config/config.
 run_task = { name = [
     "cometbft-init",
     "set-seeds",
+    "set-persistent-peers",
     "addr-book-enable",
     "set-external-addr",
     "duplicate-ip-enable",
